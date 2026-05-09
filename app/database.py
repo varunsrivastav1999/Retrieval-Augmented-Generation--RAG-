@@ -1,30 +1,155 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Text, JSON, text
+from datetime import datetime
+
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    text,
+)
 from sqlalchemy.orm import declarative_base, sessionmaker
 from pgvector.sqlalchemy import Vector
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://rag_user:rag_password@postgres:5432/rag_db")
+EMBEDDING_DIM = int(os.getenv("RAG_EMBEDDING_DIM", "384"))
+LEGACY_EMBEDDING_MODEL = os.getenv(
+    "RAG_LEGACY_EMBEDDING_MODEL",
+    "sentence-transformers/all-MiniLM-L6-v2",
+)
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+
+def utcnow():
+    return datetime.utcnow()
+
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "doc_id",
+            "chunk_hash",
+            "embedding_model",
+            name="uq_document_chunk_scope",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(String, default="default", nullable=False, index=True)
     doc_id = Column(String, index=True)
-    chunk_hash = Column(String, unique=True, index=True)
+    chunk_hash = Column(String, index=True)
     text_content = Column(Text)
     section = Column(Integer)
     doc_metadata = Column(JSON)
-    embedding = Column(Vector(384)) # 384 dimensions for all-MiniLM-L6-v2
+    embedding_model = Column(String, default=LEGACY_EMBEDDING_MODEL, nullable=False, index=True)
+    embedding = Column(Vector(EMBEDDING_DIM))
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+
+
+class IngestionJob(Base):
+    __tablename__ = "ingestion_jobs"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, default="default", nullable=False, index=True)
+    source_path = Column(Text, nullable=False)
+    source_name = Column(String, nullable=False)
+    status = Column(String, default="queued", nullable=False, index=True)
+    attempts = Column(Integer, default=0, nullable=False)
+    chunks_total = Column(Integer, default=0, nullable=False)
+    chunks_inserted = Column(Integer, default=0, nullable=False)
+    error = Column(Text)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    completed_at = Column(DateTime)
 
 def init_db():
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         conn.commit()
     Base.metadata.create_all(bind=engine)
+    _run_schema_migrations()
+
+
+def _execute_best_effort(conn, statement: str):
+    try:
+        conn.execute(text(statement))
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        print(f"[DB] Skipped migration/index statement: {exc}")
+
+
+def _run_schema_migrations():
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS tenant_id varchar"))
+        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding_model varchar"))
+        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS created_at timestamp"))
+        conn.execute(text("UPDATE document_chunks SET tenant_id = 'default' WHERE tenant_id IS NULL"))
+        conn.execute(
+            text(
+                "UPDATE document_chunks "
+                "SET embedding_model = :model "
+                "WHERE embedding_model IS NULL"
+            ),
+            {"model": LEGACY_EMBEDDING_MODEL},
+        )
+        conn.execute(text("UPDATE document_chunks SET created_at = now() WHERE created_at IS NULL"))
+        conn.execute(text("ALTER TABLE document_chunks ALTER COLUMN tenant_id SET NOT NULL"))
+        conn.execute(text("ALTER TABLE document_chunks ALTER COLUMN embedding_model SET NOT NULL"))
+        conn.execute(text("ALTER TABLE document_chunks ALTER COLUMN created_at SET NOT NULL"))
+        conn.execute(text("ALTER TABLE document_chunks DROP CONSTRAINT IF EXISTS document_chunks_chunk_hash_key"))
+        conn.execute(text("DROP INDEX IF EXISTS ix_document_chunks_chunk_hash"))
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_document_chunks_chunk_hash "
+                "ON document_chunks (chunk_hash)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_document_chunk_scope "
+                "ON document_chunks (tenant_id, doc_id, chunk_hash, embedding_model)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_document_chunks_tenant_model "
+                "ON document_chunks (tenant_id, embedding_model)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_ingestion_jobs_status_created_at "
+                "ON ingestion_jobs (status, created_at)"
+            )
+        )
+        conn.commit()
+
+        _execute_best_effort(
+            conn,
+            "CREATE INDEX IF NOT EXISTS ix_document_chunks_text_search "
+            "ON document_chunks USING gin "
+            "(to_tsvector('simple', coalesce(text_content, '')))",
+        )
+        _execute_best_effort(
+            conn,
+            "CREATE INDEX IF NOT EXISTS ix_document_chunks_text_trgm "
+            "ON document_chunks USING gin (text_content gin_trgm_ops)",
+        )
+        _execute_best_effort(
+            conn,
+            "CREATE INDEX IF NOT EXISTS ix_document_chunks_embedding_ivfflat "
+            "ON document_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)",
+        )
 
 def get_db():
     db = SessionLocal()

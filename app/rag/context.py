@@ -1,6 +1,4 @@
-from sentence_transformers import SentenceTransformer, util
-
-mmr_embedder = SentenceTransformer('all-MiniLM-L6-v2')
+from app.rag.model_loader import cosine_similarity, encode_text, encode_texts
 
 def apply_mmr(query: str, chunks: list, diversity: float = 0.5) -> list:
     """
@@ -9,10 +7,10 @@ def apply_mmr(query: str, chunks: list, diversity: float = 0.5) -> list:
     """
     if not chunks: return []
     
-    query_emb = mmr_embedder.encode(query)
-    chunk_embs = mmr_embedder.encode([c["text"] for c in chunks])
+    query_emb = encode_text(query)
+    chunk_embs = encode_texts([c["text"] for c in chunks])
     
-    query_sim = util.cos_sim(query_emb, chunk_embs)[0].tolist()
+    query_sim = [cosine_similarity(query_emb, chunk_emb) for chunk_emb in chunk_embs]
     
     selected = [query_sim.index(max(query_sim))]
     unselected = [i for i in range(len(chunks)) if i not in selected]
@@ -20,7 +18,7 @@ def apply_mmr(query: str, chunks: list, diversity: float = 0.5) -> list:
     while unselected:
         mmr_scores = []
         for i in unselected:
-            sim_to_selected = max([util.cos_sim(chunk_embs[i], chunk_embs[j]).item() for j in selected])
+            sim_to_selected = max([cosine_similarity(chunk_embs[i], chunk_embs[j]) for j in selected])
             mmr_score = (1 - diversity) * query_sim[i] - diversity * sim_to_selected
             mmr_scores.append((mmr_score, i))
             

@@ -1,7 +1,4 @@
-from sentence_transformers import CrossEncoder
-
-# Load model (downloads if not cached) - runs on CPU and is extremely fast for reranking
-reranker_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+from app.rag.model_loader import get_reranker_model
 
 def rerank_results(query: str, retrieved_chunks: list, top_n: int = 5) -> list:
     """
@@ -15,7 +12,7 @@ def rerank_results(query: str, retrieved_chunks: list, top_n: int = 5) -> list:
         return []
         
     pairs = [[query, chunk["text"]] for chunk in retrieved_chunks]
-    scores = reranker_model.predict(pairs)
+    scores = get_reranker_model().predict(pairs)
     
     for i, chunk in enumerate(retrieved_chunks):
         chunk["rerank_score"] = float(scores[i])

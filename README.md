@@ -36,6 +36,15 @@ Runs Postgres with `pgvector`, Redis cache, and Ollama sidecars locally via Dock
 docker-compose -f local.yml up --build
 ```
 
+Local mode is safe to start without internet access. Hugging Face models are loaded
+from the persistent Docker cache at `/models/huggingface`; if they are not present,
+the API falls back to deterministic local embeddings and lexical reranking. This
+fallback is for local development only. Re-ingest PDFs after switching to the real
+sentence-transformer models because vectors are filtered by embedding model ID.
+
+Set `RAG_HF_OFFLINE=false` and disable the fallback flags in `.envs/.local/.rag`
+when you want Docker to download and use the real models.
+
 ## Production Deployment (GPU)
 Designed to reserve GPU capabilities for both the API embedding model and the Ollama sidecar instance.
 
@@ -46,8 +55,21 @@ docker-compose -f production.yml up --build -d
 ## APIs
 The APIs follow strict production standards, validating incoming requests using robust Pydantic JSON schemas.
 
-*   `POST /api/v1/ingest`: Scans the `/media` mount for PDFs, strictly chunks them by sentence structure, hashes for deduplication, and embeds them offline into Postgres.
-*   `POST /api/v1/query`: Performs the full 6-Layer Architecture pipeline (Cache Check -> Hybrid Search -> Reranking -> MMR Context Assembly -> Ollama LLM Generation).
+*   `POST /api/v1/ingest?tenant_id=default`: Scans the `/media` mount for PDFs and queues durable ingestion jobs.
+*   `POST /api/v1/upload?tenant_id=default`: Saves a PDF and queues an ingestion job.
+*   `GET /api/v1/ingest/jobs`: Lists recent ingestion jobs for a tenant.
+*   `GET /api/v1/ingest/jobs/{job_id}`: Returns job status, attempts, chunk totals, and errors.
+*   `POST /api/v1/query`: Performs cache lookup, tenant/model-scoped hybrid search, reranking, MMR context assembly, and Ollama generation.
+*   `GET /health/live`: Liveness probe.
+*   `GET /health/ready`: Readiness probe for database, Redis, Ollama, and model mode.
+
+## Production Safety Notes
+
+Production config sets `RAG_REQUIRE_REAL_MODELS=true`, `RAG_PRELOAD_MODELS_ON_STARTUP=true`, and disables fallback model modes. The service will refuse readiness if the embedding or reranker model cannot be loaded.
+
+Hybrid retrieval combines pgvector cosine search with PostgreSQL full-text search and filters every query by `tenant_id` and `embedding_model`, preventing cross-tenant leakage and mixed-vector retrieval.
+
+The bundled ingestion worker is DB-backed and uses row locking to avoid duplicate job claims across multiple Uvicorn workers. For very large deployments, move this worker loop into a separate process/container using the same `ingestion_jobs` table.
 
 ## Changing the PDF Media Path
 
