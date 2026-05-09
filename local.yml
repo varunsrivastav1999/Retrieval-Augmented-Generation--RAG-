@@ -18,7 +18,7 @@ services:
       - ollama
     volumes:
       - .:/app:z
-      - /Users/tei-1358/Documents/i-Tips Projects/TM-2000_TVS/Dev/external_media:/media:ro
+      - /Users/tei-1358/Documents/i-Tips Projects/TM-2000_TVS/Dev/external_media:/media
     ports:
       - "1000:1000"
     environment:
@@ -65,4 +65,6 @@ services:
     entrypoint: /bin/sh
     environment:
       - OLLAMA_HOST=http://ollama:11434
-    command: -c "sleep 10 && ollama pull llama3"
+    volumes:
+      - .:/app:ro
+    command: -c "sleep 10 && ollama pull llama3 && ollama create itips-brain -f /app/Modelfile"

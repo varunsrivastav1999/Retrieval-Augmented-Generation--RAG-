@@ -29,6 +29,13 @@ This system strictly follows the modern 6-layer blueprint for scaling RAG to 1M+
 *   **Media Path Integration**: Automagically mounts the global `external_media` volume across microservices, granting the ingestion pipeline immediate access to all PDFs uploaded.
 *   **Fully Independent & Self-Contained**: This repository is 100% independent. It does not rely on any other microservice or dashboard backend. It spins up its own dedicated PostgreSQL (pgvector), Redis, and Ollama (LLM) containers to run entirely isolated.
 
+## Hybrid Strategy: 30% Trained Brain + 70% Matching RAG
+
+This system natively implements a highly advanced Hybrid AI pattern. Instead of relying solely on generic models, it compiles a domain-adapted brain on the fly:
+
+*   **30% Trained Brain:** An automated `ollama-pull` sidecar container uses our `Modelfile` to natively compile a custom Llama-3 model (`itips-brain`) immediately upon deployment. This guarantees the AI inherently understands your company's core vocabulary (e.g., "Taikisha", "DC Sensor") without needing to search the database.
+*   **70% Matching:** The 6-Layer RAG pipeline supplements the AI's internal training with live, highly specific chunks retrieved from the PDF manuals, seamlessly merging native intuition with dynamic, live facts.
+
 ## Local Deployment (CPU)
 Runs Postgres with `pgvector`, Redis cache, and Ollama sidecars locally via Docker.
 
