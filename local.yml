@@ -1,0 +1,68 @@
+version: '3.8'
+
+volumes:
+  local_pgvector_data: {}
+  local_redis_data: {}
+  local_ollama_data: {}
+
+services:
+  rag_api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: itips_rag_local
+    container_name: itips_rag_local
+    depends_on:
+      - postgres
+      - redis
+      - ollama
+    volumes:
+      - .:/app:z
+      - /your/new/absolute/path/to/external_media:/media:ro
+    ports:
+      - "1000:1000"
+    environment:
+      - DATABASE_URL=postgresql://rag_user:rag_password@postgres:5432/rag_db
+      - REDIS_URL=redis://redis:6379/0
+      - MEDIA_PATH=/media
+      - USE_GPU=false
+      - OLLAMA_URL=http://ollama:11434/api/generate
+    command: uvicorn app.main:app --host 0.0.0.0 --port 1000 --reload
+
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: postgres_pgvector_local
+    volumes:
+      - local_pgvector_data:/var/lib/postgresql/data:z
+    environment:
+      - POSTGRES_USER=rag_user
+      - POSTGRES_PASSWORD=rag_password
+      - POSTGRES_DB=rag_db
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:6-alpine
+    container_name: redis_rag_local
+    volumes:
+      - local_redis_data:/data:z
+    ports:
+      - "6379:6379"
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama_rag_local
+    volumes:
+      - local_ollama_data:/root/.ollama
+    ports:
+      - "11435:11434" # Host port 11435 to not conflict with your other dashboard backend
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: ollama_rag_local_pull
+    depends_on:
+      - ollama
+    entrypoint: /bin/sh
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    command: -c "sleep 10 && ollama pull llama3"
