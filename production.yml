@@ -63,6 +63,4 @@ services:
     entrypoint: /bin/sh
     environment:
       - OLLAMA_HOST=http://ollama:11434
-    volumes:
-      - .:/app:ro
-    command: -c "sleep 10 && ollama pull llama3 && ollama create itips-brain -f /app/Modelfile"
+    command: -c "sleep 10 && ollama pull llama3"
