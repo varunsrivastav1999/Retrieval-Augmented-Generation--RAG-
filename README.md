@@ -1,4 +1,4 @@
-# i-Tips RAG Production System
+# RAG Production System
 
 This repository contains the production-ready Retrieval-Augmented Generation (RAG) backend for the i-Tips project. It is designed to scale and process 1M+ PDFs using modern vector databases and GPU-accelerated endpoints.
 
