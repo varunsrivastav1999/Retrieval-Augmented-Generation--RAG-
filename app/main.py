@@ -1,7 +1,9 @@
 import os
 import glob
 import requests
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends
+import shutil
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, File, UploadFile
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -92,6 +94,132 @@ def ingest_media(background_tasks: BackgroundTasks, db: Session = Depends(get_db
         background_tasks.add_task(ingest_pdf, pdf_path)
         
     return {"status": "processing", "message": f"Started ingestion for {len(pdf_files)} PDFs.", "files_processed": len(pdf_files)}
+
+@app.post("/api/v1/upload")
+async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+    
+    file_path = os.path.join(MEDIA_PATH, file.filename)
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    background_tasks.add_task(ingest_pdf, file_path)
+    return {"message": f"Saved {file.filename} and triggered background ingestion."}
+
+@app.get("/", response_class=HTMLResponse)
+def root_ui():
+    html = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>RAG</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+        <style>
+            :root { --bg: #0f172a; --panel: rgba(30, 41, 59, 0.7); --primary: #3b82f6; --text: #f8fafc; --text-muted: #94a3b8; }
+            body { margin: 0; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; align-items: center; padding: 2rem; min-height: 100vh;}
+            .container { max-width: 800px; width: 100%; display: flex; flex-direction: column; gap: 2rem; margin-top: 2rem;}
+            .card { background: var(--panel); backdrop-filter: blur(12px); border-radius: 16px; padding: 2rem; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+            h1, h2 { margin-top: 0; font-weight: 600; }
+            input[type="text"], input[type="file"] { width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.2); color: white; box-sizing: border-box; }
+            input[type="text"]:focus { outline: none; border-color: var(--primary); }
+            button { background: var(--primary); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; cursor: pointer; font-weight: 600; transition: all 0.2s; white-space: nowrap;}
+            button:hover { background: #2563eb; transform: translateY(-1px); }
+            .answer-box { background: rgba(0,0,0,0.3); padding: 1.5rem; border-radius: 8px; min-height: 100px; white-space: pre-wrap; font-size: 0.95rem; line-height: 1.6; margin-top: 1rem; border: 1px solid rgba(255,255,255,0.05);}
+            .context-box { font-size: 0.8rem; color: var(--text-muted); margin-top: 1rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.1); }
+            .spinner { display: none; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: #fff; animation: spin 1s ease-in-out infinite; margin-left: 1rem; flex-shrink: 0;}
+            @keyframes spin { to { transform: rotate(360deg); } }
+            .flex-row { display: flex; gap: 1rem; align-items: center; width: 100%; }
+        </style>
+    </head>
+    <body>
+        <h1 style="background: -webkit-linear-gradient(#3b82f6, #60a5fa); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Welcome to Q&A </h1>
+        <div class="container">
+            <div class="card">
+                <h2> Upload Knowledge Base (PDF)</h2>
+                <div class="flex-row">
+                    <input type="file" id="pdfFile" accept="application/pdf">
+                    <button onclick="uploadPdf()">Upload & Ingest</button>
+                    <div id="uploadSpinner" class="spinner"></div>
+                </div>
+                <p id="uploadStatus" style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0;"></p>
+            </div>
+            
+            <div class="card">
+                <h2> Ask Me Anything</h2>
+                <div class="flex-row">
+                    <input type="text" id="queryInput" placeholder="E.g. What is the RAG?" onkeypress="if(event.key === 'Enter') askQuery()">
+                    <button onclick="askQuery()">Ask Query</button>
+                    <div id="askSpinner" class="spinner"></div>
+                </div>
+                
+                <div class="answer-box" id="answerBox">Awaiting your question...</div>
+                <div class="context-box" id="contextBox"></div>
+            </div>
+        </div>
+
+        <script>
+            async function uploadPdf() {
+                const fileInput = document.getElementById('pdfFile');
+                if (!fileInput.files[0]) return alert("Please select a PDF file first.");
+                
+                const formData = new FormData();
+                formData.append("file", fileInput.files[0]);
+                
+                document.getElementById('uploadSpinner').style.display = 'block';
+                document.getElementById('uploadStatus').innerText = "Uploading and embedding PDF chunks... This may take a moment.";
+                
+                try {
+                    const res = await fetch('/api/v1/upload', { method: 'POST', body: formData });
+                    const data = await res.json();
+                    document.getElementById('uploadStatus').innerText = "Success! " + data.message;
+                } catch (e) {
+                    document.getElementById('uploadStatus').innerText = "Error uploading file. Check console.";
+                } finally {
+                    document.getElementById('uploadSpinner').style.display = 'none';
+                    fileInput.value = '';
+                }
+            }
+            
+            async function askQuery() {
+                const query = document.getElementById('queryInput').value;
+                if (!query) return;
+                
+                document.getElementById('askSpinner').style.display = 'block';
+                document.getElementById('answerBox').innerText = "Retrieving context and running Ollama inference...";
+                document.getElementById('contextBox').innerHTML = "";
+                
+                try {
+                    const res = await fetch('/api/v1/query', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ query: query })
+                    });
+                    const data = await res.json();
+                    
+                    document.getElementById('answerBox').innerText = data.answer || "No answer generated.";
+                    
+                    if (data.context && data.context.length > 0) {
+                        let ctxHtml = "<strong>Sources retrieved (Top 5):</strong><ul style='margin-bottom:0;'>";
+                        data.context.forEach(c => {
+                            ctxHtml += `<li>${c.citation} (Relevance Score: ${c.rerank_score.toFixed(3)})</li>`;
+                        });
+                        ctxHtml += "</ul><br><small>Response Time: " + data.latency_ms + "ms</small>";
+                        document.getElementById('contextBox').innerHTML = ctxHtml;
+                    }
+                } catch (e) {
+                    document.getElementById('answerBox').innerText = "Error connecting to backend.";
+                } finally {
+                    document.getElementById('askSpinner').style.display = 'none';
+                }
+            }
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
 
 @app.post("/api/v1/query", response_model=QueryResponse)
 def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
