@@ -18,7 +18,7 @@ services:
       - ollama
     volumes:
       - .:/app:z
-      - /your/new/absolute/path/to/external_media:/media:ro
+      - /Users/tei-1358/Documents/i-Tips Projects/TM-2000_TVS/Dev/external_media:/media:ro
     ports:
       - "1000:1000"
     environment:
