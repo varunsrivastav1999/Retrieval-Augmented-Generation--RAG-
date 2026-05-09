@@ -1,0 +1,7 @@
+# PostgreSQL (Native System - No Docker)
+# ------------------------------------------------------------------------------
+POSTGRES_HOST=172.17.0.1
+POSTGRES_PORT=5432
+POSTGRES_DB=rag_db
+POSTGRES_USER=tvs_ds_admin
+POSTGRES_PASSWORD=tvsnuke2025

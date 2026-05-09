@@ -1,7 +1,6 @@
 version: '3.8'
 
 volumes:
-  prod_redis_data: {}
   prod_ollama_data: {}
 
 services:
@@ -12,7 +11,6 @@ services:
     image: itips_rag_prod
     container_name: itips_rag_prod
     depends_on:
-      - redis
       - ollama
     deploy:
       resources:
@@ -26,21 +24,11 @@ services:
       - /your/new/absolute/path/to/external_media:/media
     ports:
       - "1000:1000"
-    environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql://prod_user:prod_pass@external_db_host:5432/prod_db}
-      - REDIS_URL=redis://redis:6379/0
-      - MEDIA_PATH=/media
-      - USE_GPU=true
-      - OLLAMA_URL=http://ollama:11434/api/generate
+    env_file:
+      - ./.envs/.production/.rag
+      - ./.envs/.production/.postgres
+      - ./.envs/.production/.redis
     command: uvicorn app.main:app --host 0.0.0.0 --port 1000 --workers 4
-
-  redis:
-    image: redis:6-alpine
-    container_name: redis_rag_prod
-    volumes:
-      - prod_redis_data:/data:z
-    ports:
-      - "6379:6379"
 
   ollama:
     image: ollama/ollama:latest
