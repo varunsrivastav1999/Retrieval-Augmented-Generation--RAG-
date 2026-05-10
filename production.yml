@@ -49,4 +49,4 @@ services:
       - OLLAMA_HOST=http://ollama:11434
     volumes:
       - .:/app:ro
-    command: -c "sleep 10 && (ollama pull llama3 || echo 'Pull skipped - using cached model') && ollama create itips-brain -f /app/Modelfile && echo ' itips-brain ready'"
+    command: -c "sleep 10 && (ollama pull llama3 || echo 'Pull skipped') && ollama create itips-brain -f /app/Modelfile && echo 'itips-brain ready'"

@@ -128,11 +128,22 @@ def _model_kwargs() -> dict:
     device = get_optimal_device()
     kwargs["device"] = device
     
-    # Prominent status banner for Docker logs
-    print("\n" + "="*50)
+    # Enhanced diagnostics for Mac/Docker users
+    is_docker = os.path.exists("/.dockerenv")
+    
+    print("\n" + "="*60)
     print(f"  RAG HARDWARE STATUS: {device.upper()}")
-    print(f"  MODE: {'🚀 GPU ACCELERATED' if device in ['mps', 'cuda'] else '🐢 CPU ONLY'}")
-    print("="*50 + "\n")
+    
+    if device == "cpu" and is_docker:
+        print("  MODE: 🐢 CPU ONLY (Docker limitation on Mac)")
+        print("  NOTE: Docker on Mac cannot access your GPU (MPS).")
+        print("        To use your M5 GPU, run: 'python app/main.py' natively.")
+    elif device in ["mps", "cuda"]:
+        print(f"  MODE: 🚀 GPU ACCELERATED ({device.upper()})")
+    else:
+        print("  MODE: 🐢 CPU ONLY")
+        
+    print("="*60 + "\n")
     
     return kwargs
 
