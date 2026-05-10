@@ -174,8 +174,14 @@ def on_startup():
         raise
 
     if PRELOAD_MODELS_ON_STARTUP:
-        validate_runtime_models()
-        print(f"RAG models ready: {runtime_model_info()}")
+        print("[Plug&Play] Ensuring AI models are ready...")
+        try:
+            from app.rag.model_loader import get_embedding_model, get_reranker_model
+            get_embedding_model()
+            get_reranker_model()
+            print(f"RAG models ready: {runtime_model_info()}")
+        except Exception as e:
+            print(f"[Plug&Play] Warning: Could not pre-load/download models: {e}")
 
     if ENABLE_INGESTION_WORKER:
         ingestion_worker_thread = start_ingestion_worker(
