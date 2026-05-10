@@ -5,7 +5,7 @@ import shutil
 import re
 import threading
 import time
-from fastapi import HTTPException, Depends, File, Query, UploadFile
+from fastapi import Body, HTTPException, Depends, File, Query, UploadFile
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,8 +17,8 @@ import redis
 import json
 import hashlib
 
-from app.database import IngestionJob, init_db, get_db
-from app.rag.jobs import create_ingestion_job, create_ingestion_jobs, get_ingestion_job, start_ingestion_worker
+from app.database import DocumentChunk, IngestionJob, init_db, get_db
+from app.rag.jobs import create_ingestion_job, get_ingestion_job, start_ingestion_worker
 from app.rag.model_loader import get_embedding_model_id, runtime_model_info, validate_runtime_models
 from app.rag.retrieval import perform_hybrid_search
 from app.rag.reranker import rerank_results
@@ -64,6 +64,10 @@ ENABLE_INGESTION_WORKER = os.getenv("RAG_ENABLE_INGESTION_WORKER", "true").lower
 }
 INGESTION_WORKER_POLL_SECONDS = float(os.getenv("RAG_INGESTION_WORKER_POLL_SECONDS", "5"))
 INGESTION_STALE_TIMEOUT_SECONDS = int(os.getenv("RAG_INGESTION_STALE_TIMEOUT_SECONDS", "1800"))
+DEFAULT_TOP_K = int(os.getenv("RAG_DEFAULT_TOP_K", "8"))
+MAX_TOP_K = int(os.getenv("RAG_MAX_TOP_K", "50"))
+BROAD_QUERY_TOP_K = int(os.getenv("RAG_BROAD_QUERY_TOP_K", "16"))
+SOURCE_LIMIT = int(os.getenv("RAG_SOURCE_LIMIT", "12"))
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 try:
@@ -88,6 +92,7 @@ def _cache_key(
     top_k: int,
     embedding_model: str,
     corpus_version: str,
+    scope: Optional[Dict[str, Any]] = None,
 ) -> str:
     payload = {
         "tenant_id": tenant_id,
@@ -95,6 +100,7 @@ def _cache_key(
         "top_k": top_k,
         "embedding_model": embedding_model,
         "corpus_version": corpus_version,
+        "scope": scope or {},
     }
     query_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     return f"rag_cache:{query_hash}"
@@ -106,11 +112,12 @@ def get_cached_response(
     top_k: int,
     embedding_model: str,
     corpus_version: str,
+    scope: Optional[Dict[str, Any]] = None,
 ):
     if not redis_client: return None
     try:
         cached = redis_client.get(
-            _cache_key(query, tenant_id, top_k, embedding_model, corpus_version)
+            _cache_key(query, tenant_id, top_k, embedding_model, corpus_version, scope)
         )
         if cached: return json.loads(cached)
     except Exception as e: print(f"Redis get error: {e}")
@@ -123,11 +130,12 @@ def set_cached_response(
     embedding_model: str,
     corpus_version: str,
     response: dict,
+    scope: Optional[Dict[str, Any]] = None,
 ):
     if not redis_client: return
     try:
         redis_client.setex(
-            _cache_key(query, tenant_id, top_k, embedding_model, corpus_version),
+            _cache_key(query, tenant_id, top_k, embedding_model, corpus_version, scope),
             86400,
             json.dumps(response),
         )
@@ -178,7 +186,17 @@ def on_shutdown():
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4000)
     tenant_id: str = Field("default", pattern=TENANT_PATTERN)
-    top_k: int = Field(5, ge=1, le=20)
+    top_k: int = Field(DEFAULT_TOP_K, ge=1, le=MAX_TOP_K)
+    parent: Optional[str] = None
+    child: Optional[str] = None
+    sync_documents: bool = False
+    include_scan: bool = True
+    force_reindex: bool = False
+
+
+class IngestRequest(BaseModel):
+    tenant_id: Optional[str] = Field(None, pattern=TENANT_PATTERN)
+    force_reindex: bool = False
 
 
 class IngestionJobResponse(BaseModel):
@@ -195,12 +213,16 @@ class IngestResponse(BaseModel):
     status: str
     message: str
     files_processed: int
-    jobs: List[IngestionJobResponse] = []
+    files_queued: int = 0
+    files_skipped: int = 0
+    jobs: List[IngestionJobResponse] = Field(default_factory=list)
 
 class QueryResponse(BaseModel):
     answer: str
     context: List[Dict[str, Any]]
+    sources: List[Dict[str, Any]] = Field(default_factory=list)
     latency_ms: int
+    ingest: Optional[Dict[str, Any]] = None
 
 
 def _job_response(job: IngestionJob) -> IngestionJobResponse:
@@ -215,26 +237,195 @@ def _job_response(job: IngestionJob) -> IngestionJobResponse:
         error=job.error,
     )
 
+
+def _find_pdf_files(include_scan: bool = True) -> List[str]:
+    if not include_scan:
+        return []
+    return sorted(set(glob.glob(os.path.join(MEDIA_PATH, "**/*.pdf"), recursive=True)))
+
+
+def _queue_pdf_ingestion(
+    tenant_id: str,
+    pdf_files: List[str],
+    db: Session,
+    force_reindex: bool = False,
+) -> Dict[str, Any]:
+    embedding_model = get_embedding_model_id()
+    unique_pdf_files = sorted(set(pdf_files))
+
+    if force_reindex and unique_pdf_files:
+        db.query(DocumentChunk).filter(
+            DocumentChunk.tenant_id == tenant_id,
+            DocumentChunk.embedding_model == embedding_model,
+            DocumentChunk.doc_id.in_(unique_pdf_files),
+        ).delete(synchronize_session=False)
+        db.commit()
+
+    indexed_sources = {
+        row[0]
+        for row in (
+            db.query(DocumentChunk.doc_id)
+            .filter(
+                DocumentChunk.tenant_id == tenant_id,
+                DocumentChunk.embedding_model == embedding_model,
+                DocumentChunk.doc_id.in_(unique_pdf_files),
+            )
+            .distinct()
+            .all()
+        )
+    }
+    active_job_sources = {
+        row[0]
+        for row in (
+            db.query(IngestionJob.source_path)
+            .filter(
+                IngestionJob.tenant_id == tenant_id,
+                IngestionJob.source_path.in_(unique_pdf_files),
+                IngestionJob.status.in_(["queued", "running", "retry"]),
+            )
+            .distinct()
+            .all()
+        )
+    }
+
+    jobs = []
+    skipped = 0
+    for pdf_file in unique_pdf_files:
+        if not force_reindex and (pdf_file in indexed_sources or pdf_file in active_job_sources):
+            skipped += 1
+            continue
+        jobs.append(create_ingestion_job(tenant_id, pdf_file))
+
+    return {
+        "total_candidates": len(unique_pdf_files),
+        "queued": len(jobs),
+        "skipped": skipped,
+        "jobs": jobs,
+    }
+
+
+def _is_broad_query(query: str) -> bool:
+    normalized = f" {query.lower()} "
+    broad_phrases = [
+        " all ",
+        " every ",
+        " each ",
+        " topics",
+        " topic ",
+        " complete",
+        " full ",
+        " final ",
+        " summarize",
+        " summary",
+        " overview",
+        " response",
+    ]
+    return any(phrase in normalized for phrase in broad_phrases)
+
+
+def _retrieval_query(request: QueryRequest) -> str:
+    topic_bits = [value.strip() for value in [request.parent, request.child] if value and value.strip()]
+    if not topic_bits:
+        return request.query
+
+    topic_hint = " ".join(topic_bits)
+    if _is_broad_query(request.query) or len(request.query.split()) <= 5:
+        return f"{request.query} {topic_hint}"
+    return request.query
+
+
+def _context_sources(final_context: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    sources = []
+    seen = set()
+    for item in final_context:
+        metadata = item.get("metadata") or {}
+        source_path = metadata.get("source") or "unknown_source"
+        source_name = os.path.basename(str(source_path)) or str(source_path)
+        page_num = metadata.get("page_num")
+        key = (source_name, page_num)
+        if key in seen:
+            continue
+        seen.add(key)
+        sources.append(
+            {
+                "source": source_name,
+                "page": page_num,
+                "citation": item.get("citation"),
+                "metadata": metadata,
+            }
+        )
+        if len(sources) >= SOURCE_LIMIT:
+            break
+    return sources
+
+
+def _build_generation_prompt(
+    question: str,
+    context_text: str,
+    broad_query: bool,
+    parent: Optional[str] = None,
+    child: Optional[str] = None,
+) -> str:
+    topic_hint = " / ".join([value for value in [parent, child] if value])
+    topic_line = f"The user is currently looking at this topic area: {topic_hint}.\n" if topic_hint else ""
+    broad_instruction = (
+        "The user appears to want a complete or every-topic response. "
+        "Cover every relevant topic present in the context, group the answer by topic, "
+        "and do not stop after the first matching paragraph.\n"
+        if broad_query
+        else ""
+    )
+    return (
+        "You are an expert technical document assistant for i-Tips.\n"
+        "Use only the provided Context to answer the user's Query.\n"
+        f"{topic_line}"
+        f"{broad_instruction}"
+        "If the context is insufficient, say that the knowledge base does not contain enough information.\n"
+        "Write a final, direct answer. Include citations from the source tags when useful.\n\n"
+        f"Context:\n{context_text}\n\nQuery: {question}\nAnswer:"
+    )
+
 @app.post("/api/v1/ingest", response_model=IngestResponse)
-def ingest_media(tenant_id: str = Query("default", pattern=TENANT_PATTERN)):
+def ingest_media(
+    payload: Optional[IngestRequest] = Body(None),
+    tenant_id: str = Query("default", pattern=TENANT_PATTERN),
+    db: Session = Depends(get_db),
+):
     """
     Scans the external media path for PDFs and ingests them into PostgreSQL (pgvector).
     """
+    if payload and payload.tenant_id:
+        tenant_id = payload.tenant_id
     tenant_id = validate_tenant_id(tenant_id)
-    pdf_files = glob.glob(os.path.join(MEDIA_PATH, "**/*.pdf"), recursive=True)
+    force_reindex = bool(payload.force_reindex) if payload else False
+    pdf_files = _find_pdf_files(include_scan=True)
     if not pdf_files:
         return {
             "status": "success",
             "message": f"No PDFs found to ingest in {MEDIA_PATH}.",
             "files_processed": 0,
+            "files_queued": 0,
+            "files_skipped": 0,
             "jobs": [],
         }
 
-    jobs = create_ingestion_jobs(tenant_id, pdf_files)
+    queue_result = _queue_pdf_ingestion(
+        tenant_id,
+        pdf_files,
+        db,
+        force_reindex=force_reindex,
+    )
+    jobs = queue_result["jobs"]
     return {
-        "status": "queued",
-        "message": f"Queued ingestion for {len(pdf_files)} PDFs.",
+        "status": "queued" if jobs else "success",
+        "message": (
+            f"Queued ingestion for {len(jobs)} of {len(pdf_files)} PDFs."
+            if jobs
+            else f"All {len(pdf_files)} PDFs are already indexed or queued."
+        ),
         "files_processed": len(pdf_files),
+        "files_queued": len(jobs),
+        "files_skipped": queue_result["skipped"],
         "jobs": [_job_response(job) for job in jobs],
     }
 
@@ -458,54 +649,93 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     start_time = time.time()
     tenant_id = validate_tenant_id(request.tenant_id)
     embedding_model = get_embedding_model_id()
+    broad_query = _is_broad_query(request.query)
+    effective_top_k = request.top_k
+    if broad_query:
+        effective_top_k = min(MAX_TOP_K, max(effective_top_k, BROAD_QUERY_TOP_K))
+
+    ingest_summary = None
+    if request.sync_documents:
+        pdf_files = _find_pdf_files(include_scan=request.include_scan)
+        queue_result = _queue_pdf_ingestion(
+            tenant_id,
+            pdf_files,
+            db,
+            force_reindex=request.force_reindex,
+        )
+        ingest_summary = {
+            "total_candidates": queue_result["total_candidates"],
+            "queued": queue_result["queued"],
+            "skipped": queue_result["skipped"],
+        }
     corpus_version = get_corpus_version(db, tenant_id, embedding_model)
+    search_query = _retrieval_query(request)
+    cache_scope = {
+        "parent": request.parent,
+        "child": request.child,
+        "search_query": search_query,
+    }
     
     # Layer 6: Semantic Query Cache
     cached = get_cached_response(
         request.query,
         tenant_id,
-        request.top_k,
+        effective_top_k,
         embedding_model,
         corpus_version,
+        scope=cache_scope,
     )
     if cached:
         print(f"[Cache] HIT for tenant={tenant_id!r}, query={request.query!r}")
         cached["latency_ms"] = int((time.time() - start_time) * 1000)
+        cached.setdefault("sources", _context_sources(cached.get("context", [])))
+        cached["ingest"] = ingest_summary
         return cached
     
     # Layer 3: Hybrid Retrieval (ANN with pgvector + BM25)
-    retrieved_chunks = perform_hybrid_search(db, request.query, tenant_id, top_k=max(20, request.top_k * 4))
+    retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=max(20, effective_top_k * 4))
     
     # Layer 4: Reranking (Top 20 -> Top 5 using Cross-Encoder)
-    reranked_chunks = rerank_results(request.query, retrieved_chunks, top_n=request.top_k)
+    reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
     
     # Layer 5: Context Assembly
-    final_context = assemble_context(request.query, reranked_chunks)
+    final_context = assemble_context(search_query, reranked_chunks)
+    sources = _context_sources(final_context)
     
     # Formulate Prompt for Ollama
     context_text = "\n\n".join([f"Source: {c['citation']}\n{c['text']}" for c in final_context])
-    prompt = (
-        "Use only the following context to answer the user's query. "
-        "If the context is insufficient, say that the knowledge base does not contain enough information.\n\n"
-        f"Context:\n{context_text}\n\nQuery: {request.query}\nAnswer:"
+    prompt = _build_generation_prompt(
+        request.query,
+        context_text,
+        broad_query=broad_query,
+        parent=request.parent,
+        child=request.child,
     )
     
     # Call Ollama API
     answer = "The knowledge base does not contain enough information to answer this question."
     if not final_context:
+        if ingest_summary and ingest_summary.get("queued"):
+            answer = (
+                f"I queued {ingest_summary['queued']} PDF(s) for ingestion. "
+                "The knowledge base is still processing them, so please ask again once ingestion finishes."
+            )
         latency = int((time.time() - start_time) * 1000)
         response_data = {
             "answer": answer,
             "context": final_context,
-            "latency_ms": latency
+            "sources": sources,
+            "latency_ms": latency,
+            "ingest": ingest_summary,
         }
         set_cached_response(
             request.query,
             tenant_id,
-            request.top_k,
+            effective_top_k,
             embedding_model,
             corpus_version,
-            response_data,
+            {key: value for key, value in response_data.items() if key != "ingest"},
+            scope=cache_scope,
         )
         return response_data
 
@@ -528,17 +758,20 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     response_data = {
         "answer": answer,
         "context": final_context,
-        "latency_ms": latency
+        "sources": sources,
+        "latency_ms": latency,
+        "ingest": ingest_summary,
     }
     
     # Layer 6: Save to Cache
     set_cached_response(
         request.query,
         tenant_id,
-        request.top_k,
+        effective_top_k,
         embedding_model,
         corpus_version,
-        response_data,
+        {key: value for key, value in response_data.items() if key != "ingest"},
+        scope=cache_scope,
     )
     
     return response_data
