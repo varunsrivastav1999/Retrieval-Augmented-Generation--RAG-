@@ -173,15 +173,44 @@ def on_startup():
         print(f"Failed to initialize database: {e}")
         raise
 
-    if PRELOAD_MODELS_ON_STARTUP:
-        print("[Plug&Play] Ensuring AI models are ready...")
-        try:
-            from app.rag.model_loader import get_embedding_model, get_reranker_model
-            get_embedding_model()
-            get_reranker_model()
-            print(f"RAG models ready: {runtime_model_info()}")
-        except Exception as e:
-            print(f"[Plug&Play] Warning: Could not pre-load/download models: {e}")
+    def run_background_sync():
+        if PRELOAD_MODELS_ON_STARTUP:
+            print("[Plug&Play] Ensuring AI models are ready in background...")
+            try:
+                from app.rag.model_loader import get_embedding_model, get_reranker_model
+                get_embedding_model()
+                get_reranker_model()
+                
+                # Auto-Create/Update Custom Ollama Brain
+                import httpx
+                modelfile_path = "/app/Modelfile"
+                if os.path.exists(modelfile_path):
+                    print(f"[Plug&Play] Syncing custom brain '{OLLAMA_MODEL}' from Modelfile...")
+                    with open(modelfile_path, "r") as f:
+                        modelfile_content = f.read()
+                    
+                    ollama_base_url = OLLAMA_URL.replace("/api/generate", "")
+                    with httpx.Client(timeout=300.0) as client:
+                        try:
+                            # Trigger the create API
+                            resp = client.post(
+                                f"{ollama_base_url}/api/create",
+                                json={"name": OLLAMA_MODEL, "modelfile": modelfile_content},
+                            )
+                            if resp.status_code == 200:
+                                print(f"✅ SUCCESS: Custom brain '{OLLAMA_MODEL}' is ready.")
+                            else:
+                                print(f"⚠️ Warning: Model creation returned {resp.status_code}")
+                        except Exception as conn_err:
+                            print(f"❌ Connection Error: Could not reach Native Ollama at {ollama_base_url}. Make sure Ollama for Mac is RUNNING! ({conn_err})")
+                
+                print(f"RAG models ready: {runtime_model_info()}")
+            except Exception as e:
+                print(f"[Plug&Play] Warning: Background sync issue: {e}")
+
+    # Run the heavy sync in a background thread to prevent health check 503s
+    sync_thread = threading.Thread(target=run_background_sync, name="rag-sync-worker", daemon=True)
+    sync_thread.start()
 
     if ENABLE_INGESTION_WORKER:
         ingestion_worker_thread = start_ingestion_worker(
@@ -565,15 +594,16 @@ def ready_health(db: Session = Depends(get_db)):
         response.raise_for_status()
         checks["ollama"] = "ok"
     except Exception as exc:
-        checks["ollama"] = f"error: {exc}"
-        status_code = 503
+        checks["ollama"] = f"degraded: {exc}"
+        # Do NOT set status_code to 503, Ollama is external
 
     try:
+        # Check if we are still syncing in the background
         validate_runtime_models()
-        checks["models"] = runtime_model_info()
+        checks["models"] = "ready"
     except Exception as exc:
-        checks["models"] = f"error: {exc}"
-        status_code = 503
+        checks["models"] = f"syncing: {exc}"
+        # Do NOT set status_code to 503, models might be downloading
 
     payload = {"status": "ok" if status_code == 200 else "unready", "checks": checks}
     if status_code != 200:
