@@ -23,6 +23,7 @@ def _candidate_from_chunk(chunk: DocumentChunk) -> dict:
             "tenant_id": chunk.tenant_id,
             "source": chunk.doc_id,
             "section": chunk.section,
+            "type": metadata.get("type", "text"),
             "page_num": metadata.get("page_num"),
             "embedding_model": chunk.embedding_model,
         }

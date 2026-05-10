@@ -8,6 +8,7 @@ import time
 from fastapi import Body, HTTPException, Depends, File, Query, UploadFile
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -25,6 +26,11 @@ from app.rag.reranker import rerank_results
 from app.rag.context import assemble_context
 
 app = FastAPI(title="i-Tips RAG Production API", version="1.1.0")
+
+# Serve local JS libraries (Chart.js, marked.js) for offline use
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 TENANT_PATTERN = r"^[a-zA-Z0-9_.:-]{1,80}$"
 TENANT_RE = re.compile(TENANT_PATTERN)
@@ -383,8 +389,14 @@ def _build_generation_prompt(
         "Use only the provided Context to answer the user's Query.\n"
         f"{topic_line}"
         f"{broad_instruction}"
+        "STRICT FORMATTING RULES:\n"
+        "1. If the context contains tables, render them as beautiful Markdown Pipe Tables.\n"
+        "2. Use bold text for key terms and technical parameters.\n"
+        "3. Use bullet points for maintenance steps or list-based information.\n"
+        "4. If the context contains a graph or numeric trend, describe it clearly.\n"
+        "5. Include citations like [source, Page N] from the provided context tags.\n"
         "If the context is insufficient, say that the knowledge base does not contain enough information.\n"
-        "Write a final, direct answer. Include citations from the source tags when useful.\n\n"
+        "Write a final, direct answer.\n\n"
         f"Context:\n{context_text}\n\nQuery: {question}\nAnswer:"
     )
 
@@ -516,6 +528,15 @@ def ready_health(db: Session = Depends(get_db)):
     try:
         db.execute(text("SELECT 1"))
         checks["database"] = "ok"
+        
+        # Add basic stats for the dashboard
+        stats_query = db.execute(text(
+            "SELECT COUNT(*) as chunks, COUNT(DISTINCT doc_id) as docs FROM document_chunks"
+        )).mappings().first()
+        checks["stats"] = {
+            "chunks": stats_query["chunks"] if stats_query else 0,
+            "docs": stats_query["docs"] if stats_query else 0
+        }
     except Exception as exc:
         checks["database"] = f"error: {exc}"
         status_code = 503
@@ -557,82 +578,386 @@ def root_ui():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>RAG</title>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+        <title>i-Tips RAG Production Hub</title>
+        <script src="/static/js/marked.min.js"></script>
+        <script src="/static/js/chart.umd.min.js"></script>
         <style>
-            :root { --bg: #0f172a; --panel: rgba(30, 41, 59, 0.7); --primary: #3b82f6; --text: #f8fafc; --text-muted: #94a3b8; }
-            body { margin: 0; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; align-items: center; padding: 2rem; min-height: 100vh;}
-            .container { max-width: 800px; width: 100%; display: flex; flex-direction: column; gap: 2rem; margin-top: 2rem;}
-            .card { background: var(--panel); backdrop-filter: blur(12px); border-radius: 16px; padding: 2rem; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-            h1, h2 { margin-top: 0; font-weight: 600; }
-            input[type="text"], input[type="file"] { width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.2); color: white; box-sizing: border-box; }
-            input[type="text"]:focus { outline: none; border-color: var(--primary); }
-            button { background: var(--primary); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; cursor: pointer; font-weight: 600; transition: all 0.2s; white-space: nowrap;}
-            button:hover { background: #2563eb; transform: translateY(-1px); }
-            .answer-box { background: rgba(0,0,0,0.3); padding: 1.5rem; border-radius: 8px; min-height: 100px; white-space: pre-wrap; font-size: 0.95rem; line-height: 1.6; margin-top: 1rem; border: 1px solid rgba(255,255,255,0.05);}
-            .context-box { font-size: 0.8rem; color: var(--text-muted); margin-top: 1rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.1); }
-            .spinner { display: none; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: #fff; animation: spin 1s ease-in-out infinite; margin-left: 1rem; flex-shrink: 0;}
+            :root {
+                --bg: #0a0f1e;
+                --surface: rgba(15, 23, 42, 0.85);
+                --card: rgba(30, 41, 59, 0.6);
+                --border: rgba(255,255,255,0.08);
+                --primary: #3b82f6;
+                --primary-glow: rgba(59,130,246,0.15);
+                --success: #10b981;
+                --warning: #f59e0b;
+                --text: #f1f5f9;
+                --text-muted: #94a3b8;
+                --text-dim: #64748b;
+            }
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                background: var(--bg);
+                background-image: radial-gradient(ellipse at 20% 50%, rgba(59,130,246,0.08) 0%, transparent 50%),
+                                  radial-gradient(ellipse at 80% 20%, rgba(139,92,246,0.06) 0%, transparent 50%);
+                color: var(--text);
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                padding: 1.5rem;
+            }
+            .header { text-align: center; margin: 1rem 0 2rem; }
+            .header h1 {
+                font-size: 2rem;
+                font-weight: 700;
+                background: linear-gradient(135deg, #3b82f6, #8b5cf6, #06b6d4);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                letter-spacing: -0.5px;
+            }
+            .header p { color: var(--text-dim); font-size: 0.85rem; margin-top: 0.25rem; }
+            .stats-bar {
+                display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center;
+                margin-bottom: 1.5rem;
+            }
+            .stat {
+                background: var(--card);
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                padding: 0.6rem 1.2rem;
+                font-size: 0.75rem;
+                color: var(--text-muted);
+                backdrop-filter: blur(10px);
+            }
+            .stat strong { color: var(--text); font-weight: 600; }
+            .container { max-width: 900px; width: 100%; display: flex; flex-direction: column; gap: 1.5rem; }
+            .card {
+                background: var(--card);
+                backdrop-filter: blur(16px);
+                border-radius: 16px;
+                padding: 1.5rem 2rem;
+                border: 1px solid var(--border);
+                box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+                transition: border-color 0.3s;
+            }
+            .card:hover { border-color: rgba(59,130,246,0.2); }
+            .card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; }
+            .card h2 .icon { font-size: 1.2rem; }
+            input[type="text"] {
+                flex: 1; padding: 0.75rem 1rem; border-radius: 10px;
+                border: 1px solid var(--border);
+                background: rgba(0,0,0,0.3); color: white;
+                font-size: 0.9rem; font-family: inherit;
+                transition: border-color 0.2s, box-shadow 0.2s;
+            }
+            input[type="text"]:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
+            input[type="file"] {
+                flex: 1; padding: 0.5rem; color: var(--text-muted);
+                font-size: 0.85rem; font-family: inherit;
+            }
+            .btn {
+                background: linear-gradient(135deg, #3b82f6, #2563eb);
+                color: white; border: none;
+                padding: 0.7rem 1.5rem; border-radius: 10px;
+                cursor: pointer; font-weight: 600; font-size: 0.85rem;
+                font-family: inherit;
+                transition: all 0.2s; white-space: nowrap;
+                box-shadow: 0 2px 8px rgba(59,130,246,0.3);
+            }
+            .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(59,130,246,0.4); }
+            .btn:active { transform: translateY(0); }
+            .btn-sm { padding: 0.4rem 0.8rem; font-size: 0.75rem; }
+            .flex-row { display: flex; gap: 0.75rem; align-items: center; width: 100%; }
+
+            /* Answer Box with Markdown Rendering */
+            .answer-box {
+                background: rgba(0,0,0,0.35);
+                padding: 1.5rem;
+                border-radius: 12px;
+                min-height: 80px;
+                font-size: 0.9rem;
+                line-height: 1.7;
+                margin-top: 1rem;
+                border: 1px solid var(--border);
+                overflow-x: auto;
+            }
+            .answer-box h1,.answer-box h2,.answer-box h3,.answer-box h4 { color: #93c5fd; margin: 1rem 0 0.5rem; font-size: 1rem; }
+            .answer-box p { margin: 0.4rem 0; }
+            .answer-box ul, .answer-box ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+            .answer-box li { margin: 0.3rem 0; }
+            .answer-box strong { color: #93c5fd; }
+            .answer-box code { background: rgba(59,130,246,0.15); padding: 2px 6px; border-radius: 4px; font-size: 0.85em; color: #7dd3fc; }
+            .answer-box pre { background: rgba(0,0,0,0.4); padding: 1rem; border-radius: 8px; overflow-x: auto; margin: 0.5rem 0; }
+            .answer-box pre code { background: none; padding: 0; }
+            .answer-box blockquote { border-left: 3px solid var(--primary); padding-left: 1rem; color: var(--text-muted); margin: 0.5rem 0; }
+
+            /* Beautiful Tables */
+            .answer-box table {
+                width: 100%; border-collapse: collapse; margin: 1rem 0;
+                font-size: 0.85rem; border-radius: 8px; overflow: hidden;
+            }
+            .answer-box table th {
+                background: rgba(59,130,246,0.2);
+                color: #93c5fd; font-weight: 600;
+                padding: 0.6rem 0.8rem; text-align: left;
+                border-bottom: 2px solid rgba(59,130,246,0.3);
+            }
+            .answer-box table td {
+                padding: 0.5rem 0.8rem;
+                border-bottom: 1px solid var(--border);
+            }
+            .answer-box table tr:hover td { background: rgba(59,130,246,0.05); }
+
+            /* Source Cards */
+            .sources-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 0.75rem; margin-top: 1rem; }
+            .source-card {
+                background: rgba(0,0,0,0.25);
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                padding: 0.75rem 1rem;
+                transition: border-color 0.2s;
+            }
+            .source-card:hover { border-color: rgba(59,130,246,0.3); }
+            .source-card .name { font-weight: 600; font-size: 0.8rem; color: #93c5fd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .source-card .meta { font-size: 0.7rem; color: var(--text-dim); margin-top: 0.25rem; }
+            .badge {
+                display: inline-block; padding: 2px 8px; border-radius: 20px;
+                font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
+            }
+            .badge-text { background: rgba(16,185,129,0.15); color: #10b981; }
+            .badge-table { background: rgba(245,158,11,0.15); color: #f59e0b; }
+            .badge-image { background: rgba(139,92,246,0.15); color: #8b5cf6; }
+
+            /* Chart Container */
+            .chart-container { background: rgba(0,0,0,0.25); border-radius: 12px; padding: 1rem; margin-top: 1rem; border: 1px solid var(--border); }
+            .chart-container canvas { max-height: 250px; }
+
+            /* Latency Bar */
+            .latency-bar {
+                display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem;
+                padding: 0.5rem 1rem; background: rgba(0,0,0,0.2); border-radius: 8px;
+                font-size: 0.75rem; color: var(--text-dim);
+            }
+            .latency-dot { width: 8px; height: 8px; border-radius: 50%; }
+            .latency-fast { background: #10b981; }
+            .latency-medium { background: #f59e0b; }
+            .latency-slow { background: #ef4444; }
+
+            .spinner { display: none; width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.2); border-radius: 50%; border-top-color: var(--primary); animation: spin 0.8s linear infinite; margin-left: 0.5rem; flex-shrink: 0; }
             @keyframes spin { to { transform: rotate(360deg); } }
-            .flex-row { display: flex; gap: 1rem; align-items: center; width: 100%; }
+            .status-msg { color: var(--text-muted); font-size: 0.8rem; margin-top: 0.5rem; }
+            .placeholder { color: var(--text-dim); font-style: italic; }
         </style>
     </head>
     <body>
-        <h1 style="background: -webkit-linear-gradient(#3b82f6, #60a5fa); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Welcome to Q&A </h1>
+        <div class="header">
+            <h1>i-Tips Production RAG Hub</h1>
+            <p>6-Layer Architecture | Hybrid Search | Cross-Encoder Reranking</p>
+        </div>
+
+        <div class="stats-bar" id="statsBar">
+            <div class="stat"><strong id="statChunks">--</strong> Chunks Indexed</div>
+            <div class="stat"><strong id="statPdfs">--</strong> PDFs Loaded</div>
+            <div class="stat"><strong id="statModel">--</strong> LLM Model</div>
+        </div>
+
         <div class="container">
             <div class="card">
-                <h2> Upload Knowledge Base (PDF)</h2>
+                <h2><span class="icon">&#128196;</span> Upload Knowledge Base</h2>
                 <div class="flex-row">
                     <input type="file" id="pdfFile" accept="application/pdf">
-                    <button onclick="uploadPdf()">Upload & Ingest</button>
+                    <button class="btn" onclick="uploadPdf()">Upload &amp; Ingest</button>
                     <div id="uploadSpinner" class="spinner"></div>
                 </div>
-                <p id="uploadStatus" style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0;"></p>
+                <p id="uploadStatus" class="status-msg"></p>
             </div>
-            
+
             <div class="card">
-                <h2> Ask Me Anything</h2>
+                <h2><span class="icon">&#128269;</span> Ask Your Knowledge Base</h2>
                 <div class="flex-row">
-                    <input type="text" id="queryInput" placeholder="E.g. What is the RAG?" onkeypress="if(event.key === 'Enter') askQuery()">
-                    <button onclick="askQuery()">Ask Query</button>
+                    <input type="text" id="queryInput" placeholder="E.g. What is a DC Sensor? Show me the maintenance schedule..." onkeypress="if(event.key === 'Enter') askQuery()">
+                    <button class="btn" onclick="askQuery()">Ask</button>
                     <div id="askSpinner" class="spinner"></div>
                 </div>
-                
-                <div class="answer-box" id="answerBox">Awaiting your question...</div>
-                <div class="context-box" id="contextBox"></div>
+
+                <div class="answer-box" id="answerBox"><span class="placeholder">Your answer will appear here with tables, charts, and formatted text...</span></div>
+
+                <div id="chartArea"></div>
+
+                <div id="sourcesArea"></div>
+
+                <div id="latencyBar" style="display:none" class="latency-bar">
+                    <span class="latency-dot" id="latencyDot"></span>
+                    <span id="latencyText"></span>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: -0.5rem; padding: 1rem 2rem;">
+                <h2 style="margin-bottom: 0.5rem; cursor: pointer; user-select: none;" onclick="document.getElementById('rawApiBox').style.display = document.getElementById('rawApiBox').style.display === 'none' ? 'block' : 'none'">
+                    <span class="icon">&#123;&#125;</span> View Raw API Response <small style="font-weight:400; color:var(--text-dim); margin-left:auto;">(Click to toggle)</small>
+                </h2>
+                <pre id="rawApiBox" style="display:none; font-size: 0.7rem; color: var(--text-muted); background: rgba(0,0,0,0.4); padding: 1rem; border-radius: 8px; margin-top: 0.5rem; max-height: 300px; overflow: auto; border: 1px solid var(--border);"></pre>
             </div>
         </div>
 
         <script>
+            // Configure marked for safe markdown rendering
+            marked.setOptions({ breaks: true, gfm: true });
+
+            // Load stats on page load
+            (async function loadStats() {
+                try {
+                    const res = await fetch('/health/ready');
+                    const data = await res.json();
+                    const stats = data.checks?.stats || {};
+                    document.getElementById('statChunks').textContent = stats.chunks?.toLocaleString() || '0';
+                    document.getElementById('statPdfs').textContent = stats.docs?.toLocaleString() || '0';
+                    document.getElementById('statModel').textContent = data.checks?.models?.embedding_model?.split('/').pop() || '--';
+                } catch(e) {}
+            })();
+
             async function uploadPdf() {
                 const fileInput = document.getElementById('pdfFile');
                 if (!fileInput.files[0]) return alert("Please select a PDF file first.");
-                
+
                 const formData = new FormData();
                 formData.append("file", fileInput.files[0]);
-                
+
                 document.getElementById('uploadSpinner').style.display = 'block';
-                document.getElementById('uploadStatus').innerText = "Uploading and embedding PDF chunks... This may take a moment.";
-                
+                document.getElementById('uploadStatus').innerText = "Uploading and embedding PDF chunks...";
+
                 try {
                     const res = await fetch('/api/v1/upload', { method: 'POST', body: formData });
                     const data = await res.json();
-                    document.getElementById('uploadStatus').innerText = "Success! " + data.message;
+                    if (res.ok) {
+                        document.getElementById('uploadStatus').innerHTML = '<span style="color:#10b981">&#10003; ' + data.message + '</span>';
+                    } else {
+                        document.getElementById('uploadStatus').innerHTML = '<span style="color:#ef4444">&#10007; ' + (data.detail || 'Upload failed') + '</span>';
+                    }
                 } catch (e) {
-                    document.getElementById('uploadStatus').innerText = "Error uploading file. Check console.";
+                    document.getElementById('uploadStatus').innerHTML = '<span style="color:#ef4444">&#10007; Network error</span>';
                 } finally {
                     document.getElementById('uploadSpinner').style.display = 'none';
                     fileInput.value = '';
                 }
             }
-            
+
+            function renderAnswer(text) {
+                // Convert plain text tables (pipe-separated) to markdown tables if needed
+                let processed = text.replace(/\\n/g, '\\n');
+                return marked.parse(processed);
+            }
+
+            function tryBuildChart(answer, context) {
+                const chartArea = document.getElementById('chartArea');
+                chartArea.innerHTML = '';
+
+                // Detect table data in context for visualization
+                let tableChunks = (context || []).filter(c => {
+                    const meta = c.metadata || {};
+                    return meta.type === 'table' || (c.text && c.text.includes('|') && c.text.split('|').length > 4);
+                });
+
+                if (tableChunks.length === 0) return;
+
+                // Try to extract numeric data from first table chunk
+                const lines = tableChunks[0].text.split('\\n').filter(l => l.trim() && !l.match(/^[\\-|\\s]+$/));
+                if (lines.length < 2) return;
+
+                const headers = lines[0].split('|').map(h => h.trim()).filter(Boolean);
+                const rows = lines.slice(1).map(l => l.split('|').map(c => c.trim()).filter(Boolean));
+
+                // Find numeric columns
+                let numericCol = -1;
+                let labelCol = 0;
+                for (let i = 1; i < headers.length; i++) {
+                    if (rows.length > 0 && !isNaN(parseFloat(rows[0][i]))) {
+                        numericCol = i;
+                        break;
+                    }
+                }
+                if (numericCol === -1 || rows.length < 2 || rows.length > 20) return;
+
+                const labels = rows.map(r => r[labelCol] || '').slice(0, 15);
+                const values = rows.map(r => parseFloat(r[numericCol]) || 0).slice(0, 15);
+
+                chartArea.innerHTML = '<div class="chart-container"><canvas id="dataChart"></canvas></div>';
+                const ctx = document.getElementById('dataChart').getContext('2d');
+                new Chart(ctx, {
+                    type: values.length > 8 ? 'line' : 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: headers[numericCol] || 'Value',
+                            data: values,
+                            backgroundColor: 'rgba(59,130,246,0.4)',
+                            borderColor: '#3b82f6',
+                            borderWidth: 2,
+                            borderRadius: 6,
+                            tension: 0.3,
+                            fill: true,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: { labels: { color: '#94a3b8', font: { family: 'Inter' } } },
+                        },
+                        scales: {
+                            x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                            y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+                        }
+                    }
+                });
+            }
+
+            function renderSources(context) {
+                const area = document.getElementById('sourcesArea');
+                if (!context || context.length === 0) { area.innerHTML = ''; return; }
+
+                let html = '<div class="sources-grid">';
+                context.forEach(c => {
+                    const meta = c.metadata || {};
+                    const type = meta.type || 'text';
+                    const badgeClass = type === 'table' ? 'badge-table' : type === 'image_ocr' ? 'badge-image' : 'badge-text';
+                    const score = c.rerank_score ? c.rerank_score.toFixed(3) : '--';
+                    const source = c.citation || 'Unknown';
+
+                    html += `<div class="source-card">
+                        <div class="name">${source}</div>
+                        <div class="meta">
+                            <span class="badge ${badgeClass}">${type}</span>
+                            &nbsp; Score: ${score}
+                        </div>
+                    </div>`;
+                });
+                html += '</div>';
+                area.innerHTML = html;
+            }
+
+            function showLatency(ms) {
+                const bar = document.getElementById('latencyBar');
+                const dot = document.getElementById('latencyDot');
+                const txt = document.getElementById('latencyText');
+                bar.style.display = 'flex';
+
+                dot.className = 'latency-dot ' + (ms < 5000 ? 'latency-fast' : ms < 30000 ? 'latency-medium' : 'latency-slow');
+                const label = ms < 1000 ? ms + 'ms (Cached)' : (ms/1000).toFixed(1) + 's';
+                txt.textContent = 'Response: ' + label + ' | Pipeline: Cache > Hybrid Search > Reranker > MMR > LLM';
+            }
+
             async function askQuery() {
                 const query = document.getElementById('queryInput').value;
                 if (!query) return;
-                
+
                 document.getElementById('askSpinner').style.display = 'block';
-                document.getElementById('answerBox').innerText = "Retrieving context and running Ollama inference...";
-                document.getElementById('contextBox').innerHTML = "";
-                
+                document.getElementById('answerBox').innerHTML = '<span class="placeholder">Searching knowledge base and generating response...</span>';
+                document.getElementById('chartArea').innerHTML = '';
+                document.getElementById('sourcesArea').innerHTML = '';
+                document.getElementById('latencyBar').style.display = 'none';
+
                 try {
                     const res = await fetch('/api/v1/query', {
                         method: 'POST',
@@ -640,19 +965,25 @@ def root_ui():
                         body: JSON.stringify({ query: query })
                     });
                     const data = await res.json();
-                    
-                    document.getElementById('answerBox').innerText = data.answer || "No answer generated.";
-                    
-                    if (data.context && data.context.length > 0) {
-                        let ctxHtml = "<strong>Sources retrieved (Top 5):</strong><ul style='margin-bottom:0;'>";
-                        data.context.forEach(c => {
-                            ctxHtml += `<li>${c.citation} (Relevance Score: ${c.rerank_score.toFixed(3)})</li>`;
-                        });
-                        ctxHtml += "</ul><br><small>Response Time: " + data.latency_ms + "ms</small>";
-                        document.getElementById('contextBox').innerHTML = ctxHtml;
-                    }
+
+                    // Render markdown answer with tables
+                    const answerHtml = renderAnswer(data.answer || "No answer generated.");
+                    document.getElementById('answerBox').innerHTML = answerHtml;
+
+                    // Try to build chart from table data
+                    tryBuildChart(data.answer, data.context);
+
+                    // Render source cards
+                    renderSources(data.context);
+
+                    // Show latency
+                    if (data.latency_ms !== undefined) showLatency(data.latency_ms);
+
+                    // Show raw API response
+                    document.getElementById('rawApiBox').textContent = JSON.stringify(data, null, 2);
+
                 } catch (e) {
-                    document.getElementById('answerBox').innerText = "Error connecting to backend.";
+                    document.getElementById('answerBox').innerHTML = '<span style="color:#ef4444">Error connecting to backend.</span>';
                 } finally {
                     document.getElementById('askSpinner').style.display = 'none';
                 }
