@@ -50,7 +50,8 @@ MEDIA_PATH = os.getenv("MEDIA_PATH", "/media")
 # Connecting directly to the independent Ollama container inside this repository
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3") # Set to whichever model you have pulled in Ollama
-OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
+OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
+OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "512"))
 RAG_ENV = os.getenv("RAG_ENV", "local").lower()
 PRELOAD_MODELS_ON_STARTUP = os.getenv(
     "RAG_PRELOAD_MODELS_ON_STARTUP",
@@ -768,7 +769,11 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         response = requests.post(OLLAMA_URL, json={
             "model": OLLAMA_MODEL,
             "prompt": prompt,
-            "stream": False
+            "stream": False,
+            "options": {
+                "num_predict": OLLAMA_NUM_PREDICT,
+                "num_ctx": 4096,
+            }
         }, timeout=OLLAMA_TIMEOUT_SECONDS)
         
         if response.status_code == 200:

@@ -20,6 +20,8 @@ MEDIA_PATH=/media
 # ------------------------------------------------------------------------------
 OLLAMA_URL=http://ollama:11434/api/generate
 OLLAMA_MODEL=itips-brain
+OLLAMA_TIMEOUT_SECONDS=300
+OLLAMA_NUM_PREDICT=512
 
 # GPU
 # ------------------------------------------------------------------------------
