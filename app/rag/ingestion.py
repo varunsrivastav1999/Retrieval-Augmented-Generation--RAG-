@@ -279,12 +279,14 @@ def ingest_pdf(pdf_path: str, tenant_id: str = "default", job_id: str = None) ->
         db.close()
 
 def _process_chunk_batch(db, pending_chunks, tenant_id, doc_id, page_count, embedding_model):
-    """Encodes and saves a batch of chunks for 5x-10x better performance."""
+    """Encodes and saves a batch of chunks. Handles duplicates gracefully."""
     from app.rag.model_loader import encode_texts
+    from sqlalchemy.exc import IntegrityError
     
     texts = [c["text"] for c in pending_chunks]
     vectors = encode_texts(texts)
     
+    # Try to commit the whole batch first for speed
     for i, c in enumerate(pending_chunks):
         doc_chunk = DocumentChunk(
             tenant_id=tenant_id,
@@ -306,7 +308,32 @@ def _process_chunk_batch(db, pending_chunks, tenant_id, doc_id, page_count, embe
     
     try:
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        print(f"[Ingest] Batch commit error: {e}")
+        # If batch fails (likely due to a duplicate), try one by one as fallback
+        for i, c in enumerate(pending_chunks):
+            try:
+                single_chunk = DocumentChunk(
+                    tenant_id=tenant_id,
+                    doc_id=doc_id,
+                    chunk_hash=c["hash"],
+                    text_content=c["text"],
+                    section=c["section"],
+                    doc_metadata={
+                        "type": c["type"],
+                        "page_count": page_count,
+                        "page_num": c["page_num"],
+                        "embedding_model": embedding_model,
+                        "source": doc_id,
+                    },
+                    embedding_model=embedding_model,
+                    embedding=vectors[i]
+                )
+                db.add(single_chunk)
+                db.commit()
+            except IntegrityError:
+                db.rollback() # Skip duplicates
+            except Exception as e:
+                db.rollback()
+                print(f"[Ingest] Single chunk error: {e}")
 
