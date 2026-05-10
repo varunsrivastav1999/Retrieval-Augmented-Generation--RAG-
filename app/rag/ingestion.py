@@ -189,7 +189,7 @@ def _extract_images_from_page(fitz_page, page_num: int, min_size: int = 100) -> 
     return image_texts
 
 
-def ingest_pdf(pdf_path: str, tenant_id: str = "default", job_id: str = None) -> dict:
+def ingest_pdf(pdf_path: str, tenant_id: str = "default", job_id: str = None, force_reindex: bool = False) -> dict:
     """
     Production PDF Ingestion Pipeline:
     1. Extract text per page (PyMuPDF)

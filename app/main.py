@@ -304,7 +304,7 @@ def _queue_pdf_ingestion(
         if not force_reindex and (pdf_file in indexed_sources or pdf_file in active_job_sources):
             skipped += 1
             continue
-        jobs.append(create_ingestion_job(tenant_id, pdf_file))
+        jobs.append(create_ingestion_job(tenant_id, pdf_file, force_reindex=force_reindex))
 
     return {
         "total_candidates": len(unique_pdf_files),
@@ -438,7 +438,7 @@ def ingest_media(
     return {
         "status": "queued" if jobs else "success",
         "message": (
-            f"Queued ingestion for {len(jobs)} of {len(pdf_files)} PDFs."
+            f"Processed {len(pdf_files)} PDFs: {len(jobs)} queued, {queue_result['skipped']} skipped."
             if jobs
             else f"All {len(pdf_files)} PDFs are already indexed or queued."
         ),

@@ -207,9 +207,7 @@ def get_embedding_model() -> Any:
 
 
 def get_embedding_model_id() -> str:
-    model = get_embedding_model()
-    if isinstance(model, HashingEmbedder):
-        return _fallback_embedding_id()
+    # Always return the standard name to ensure ingestion and retrieval match
     return EMBEDDING_MODEL
 
 
@@ -256,9 +254,7 @@ def get_reranker_model() -> Any:
 
 
 def get_reranker_model_id() -> str:
-    model = get_reranker_model()
-    if isinstance(model, LexicalReranker):
-        return _fallback_reranker_id()
+    # Always return the standard name to ensure ingestion and retrieval match
     return RERANKER_MODEL
 
 

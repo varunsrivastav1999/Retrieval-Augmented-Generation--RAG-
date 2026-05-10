@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Column,
+    Boolean,
     DateTime,
     Integer,
     JSON,
@@ -66,6 +67,7 @@ class IngestionJob(Base):
     chunks_total = Column(Integer, default=0, nullable=False)
     chunks_inserted = Column(Integer, default=0, nullable=False)
     error = Column(Text)
+    force_reindex = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=utcnow, nullable=False)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
     completed_at = Column(DateTime)
@@ -93,6 +95,9 @@ def _run_schema_migrations():
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS tenant_id varchar"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding_model varchar"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS created_at timestamp"))
+        conn.execute(text("ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS force_reindex boolean"))
+        conn.execute(text("UPDATE ingestion_jobs SET force_reindex = false WHERE force_reindex IS NULL"))
+        conn.execute(text("ALTER TABLE ingestion_jobs ALTER COLUMN force_reindex SET NOT NULL"))
         conn.execute(text("UPDATE document_chunks SET tenant_id = 'default' WHERE tenant_id IS NULL"))
         conn.execute(
             text(

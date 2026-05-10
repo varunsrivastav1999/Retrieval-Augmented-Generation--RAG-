@@ -9,7 +9,7 @@ from sqlalchemy import text
 from app.database import IngestionJob, SessionLocal, utcnow
 
 
-def create_ingestion_job(tenant_id: str, source_path: str) -> IngestionJob:
+def create_ingestion_job(tenant_id: str, source_path: str, force_reindex: bool = False) -> IngestionJob:
     db = SessionLocal()
     try:
         job = IngestionJob(
@@ -18,6 +18,7 @@ def create_ingestion_job(tenant_id: str, source_path: str) -> IngestionJob:
             source_path=source_path,
             source_name=os.path.basename(source_path),
             status="queued",
+            force_reindex=force_reindex,
         )
         db.add(job)
         db.commit()
@@ -27,8 +28,8 @@ def create_ingestion_job(tenant_id: str, source_path: str) -> IngestionJob:
         db.close()
 
 
-def create_ingestion_jobs(tenant_id: str, source_paths: List[str]) -> List[IngestionJob]:
-    return [create_ingestion_job(tenant_id, source_path) for source_path in source_paths]
+def create_ingestion_jobs(tenant_id: str, source_paths: List[str], force_reindex: bool = False) -> List[IngestionJob]:
+    return [create_ingestion_job(tenant_id, source_path, force_reindex) for source_path in source_paths]
 
 
 def get_ingestion_job(job_id: str) -> Optional[IngestionJob]:
@@ -72,7 +73,7 @@ def claim_next_ingestion_job() -> Optional[Dict[str, str]]:
                 "  LIMIT 1 "
                 "  FOR UPDATE SKIP LOCKED"
                 ") "
-                "RETURNING id, tenant_id, source_path"
+                "RETURNING id, tenant_id, source_path, force_reindex"
             ),
         )
         job = result.mappings().first()
@@ -130,6 +131,7 @@ def ingestion_worker_loop(stop_event: threading.Event, poll_seconds: float = 5.0
                 job["source_path"],
                 tenant_id=job["tenant_id"],
                 job_id=job["id"],
+                force_reindex=bool(job.get("force_reindex", False)),
             )
         except Exception as exc:
             fail_ingestion_job(job["id"], str(exc))
