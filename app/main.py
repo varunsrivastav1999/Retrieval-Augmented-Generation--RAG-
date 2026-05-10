@@ -201,6 +201,7 @@ class QueryRequest(BaseModel):
     sync_documents: bool = False
     include_scan: bool = True
     force_reindex: bool = False
+    stream: bool = False
 
 
 class IngestRequest(BaseModel):
@@ -374,6 +375,7 @@ def _build_generation_prompt(
     broad_query: bool,
     parent: Optional[str] = None,
     child: Optional[str] = None,
+    stream: bool = False,
 ) -> str:
     topic_hint = " / ".join([value for value in [parent, child] if value])
     topic_line = f"The user is currently looking at this topic area: {topic_hint}.\n" if topic_hint else ""
@@ -952,40 +954,66 @@ def root_ui():
                 const query = document.getElementById('queryInput').value;
                 if (!query) return;
 
-                document.getElementById('askSpinner').style.display = 'block';
-                document.getElementById('answerBox').innerHTML = '<span class="placeholder">Searching knowledge base and generating response...</span>';
-                document.getElementById('chartArea').innerHTML = '';
-                document.getElementById('sourcesArea').innerHTML = '';
-                document.getElementById('latencyBar').style.display = 'none';
+                const answerBox = document.getElementById('answerBox');
+                const askSpinner = document.getElementById('askSpinner');
+                const chartArea = document.getElementById('chartArea');
+                const sourcesArea = document.getElementById('sourcesArea');
+                const latencyBar = document.getElementById('latencyBar');
+
+                askSpinner.style.display = 'block';
+                answerBox.innerHTML = '<span class="placeholder">Searching knowledge base and generating response...</span>';
+                chartArea.innerHTML = '';
+                sourcesArea.innerHTML = '';
+                latencyBar.style.display = 'none';
 
                 try {
-                    const res = await fetch('/api/v1/query', {
+                    const response = await fetch('/api/v1/query', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ query: query })
+                        body: JSON.stringify({ query: query, stream: true })
                     });
-                    const data = await res.json();
 
-                    // Render markdown answer with tables
-                    const answerHtml = renderAnswer(data.answer || "No answer generated.");
-                    document.getElementById('answerBox').innerHTML = answerHtml;
+                    if (!response.ok) throw new Error("Request failed");
 
-                    // Try to build chart from table data
-                    tryBuildChart(data.answer, data.context);
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let fullAnswer = "";
 
-                    // Render source cards
-                    renderSources(data.context);
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
 
-                    // Show latency
-                    if (data.latency_ms !== undefined) showLatency(data.latency_ms);
+                        const chunk = decoder.decode(value, { stream: true });
+                        const lines = chunk.split("\n");
 
-                    // Show raw API response
-                    document.getElementById('rawApiBox').textContent = JSON.stringify(data, null, 2);
-
+                        for (const line of lines) {
+                            if (line.startsWith("data: ")) {
+                                try {
+                                    const data = JSON.parse(line.substring(6));
+                                    if (data.token) {
+                                        fullAnswer += data.token;
+                                        answerBox.innerHTML = renderAnswer(fullAnswer);
+                                        // Scroll to bottom
+                                        answerBox.scrollTop = answerBox.scrollHeight;
+                                    }
+                                    if (data.done) {
+                                        if (data.sources) renderSources(data.sources);
+                                        // Update raw API box
+                                        document.getElementById('rawApiBox').textContent = JSON.stringify(data, null, 2);
+                                    }
+                                    if (data.error) {
+                                        answerBox.innerHTML += `<div style="color:#ef4444; margin-top:1rem;">Error: ${data.error}</div>`;
+                                    }
+                                } catch (e) {
+                                    console.error("Error parsing stream chunk", e);
+                                }
+                            }
+                        }
+                    }
                 } catch (e) {
-                    document.getElementById('answerBox').innerHTML = '<span style="color:#ef4444">Error connecting to backend.</span>';
+                    answerBox.innerHTML = `<span style="color:#ef4444">Error: ${e.message}</span>`;
                 } finally {
-                    document.getElementById('askSpinner').style.display = 'none';
+                    askSpinner.style.display = 'none';
                 }
             }
         </script>
@@ -1056,7 +1084,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
     
     # Layer 5: Context Assembly
-    final_context = assemble_context(search_query, reranked_chunks)
+    final_context = assemble_context(search_query, reranked_chunks, db=db)
     sources = _context_sources(final_context)
     
     # Formulate Prompt for Ollama
@@ -1095,6 +1123,33 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             scope=cache_scope,
         )
         return response_data
+
+    if request.stream:
+        def stream_generator():
+            try:
+                with requests.post(OLLAMA_URL, json={
+                    "model": OLLAMA_MODEL,
+                    "prompt": prompt,
+                    "stream": True,
+                    "options": {
+                        "num_predict": OLLAMA_NUM_PREDICT,
+                        "num_ctx": 8192,
+                    }
+                }, timeout=OLLAMA_TIMEOUT_SECONDS, stream=True) as response:
+                    for line in response.iter_lines():
+                        if line:
+                            json_resp = json.loads(line)
+                            token = json_resp.get("response", "")
+                            if token:
+                                yield f"data: {json.dumps({'token': token})}\n\n"
+                            if json_resp.get("done"):
+                                # Final payload with sources
+                                yield f"data: {json.dumps({'done': True, 'sources': sources})}\n\n"
+                                break
+            except Exception as e:
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+        return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
     try:
         response = requests.post(OLLAMA_URL, json={

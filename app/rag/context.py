@@ -1,3 +1,5 @@
+import os
+from app.database import DocumentChunk
 from app.rag.model_loader import cosine_similarity, encode_text, encode_texts
 
 def apply_mmr(query: str, chunks: list, diversity: float = 0.5) -> list:
@@ -38,26 +40,66 @@ def compress_context(chunk: dict) -> dict:
         chunk["text"] = chunk["text"][:max_chars] + "..."
     return chunk
 
-def assemble_context(query: str, reranked_chunks: list) -> list:
+def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
     """
     Layer 5: Context Assembly
     Target 60-70% fill of context window.
     Attach citation metadata [source, page, section] per chunk.
+    Expanded Context: If db is provided, fetch neighboring chunks for top results.
     """
-    # 1. Apply MMR
+    # 1. Apply MMR to ensure diversity
     mmr_filtered = apply_mmr(query, reranked_chunks)
     
+    # 2. Context Window Expansion (Neighboring chunks)
+    # For the top 3 most relevant chunks, fetch their immediate neighbors
     final_context = []
-    # 2. Compress & format citations
-    for chunk in mmr_filtered:
-        compressed = compress_context(chunk)
-        
-        # 3. Attach citation metadata
-        metadata = compressed.get("metadata", {})
-        source = metadata.get("source", "unknown_source")
+    expanded_ids = set()
+    
+    for i, chunk in enumerate(mmr_filtered):
+        if db and i < 3: # Only expand top 3 to avoid context stuffing
+            metadata = chunk.get("metadata", {})
+            doc_id = metadata.get("source")
+            section = metadata.get("section")
+            
+            if doc_id and section is not None:
+                neighbors = (
+                    db.query(DocumentChunk)
+                    .filter(
+                        DocumentChunk.doc_id == doc_id,
+                        DocumentChunk.section.in_([section - 1, section + 1]),
+                        DocumentChunk.id.notin_(expanded_ids)
+                    )
+                    .order_by(DocumentChunk.section)
+                    .all()
+                )
+                for n in neighbors:
+                    if n.id not in expanded_ids:
+                        neighbor_chunk = _candidate_from_chunk(n)
+                        final_context.append(compress_context(neighbor_chunk))
+                        expanded_ids.add(n.id)
+
+        if chunk.get("id") not in expanded_ids:
+            compressed = compress_context(chunk)
+            final_context.append(compressed)
+            expanded_ids.add(chunk.get("id"))
+
+    # 3. Format citations
+    for chunk in final_context:
+        metadata = chunk.get("metadata", {})
+        source = os.path.basename(metadata.get("source", "unknown"))
         page = metadata.get("page_num", "?")
-        compressed["citation"] = f"[{source}, Page {page}]"
-        
-        final_context.append(compressed)
+        chunk["citation"] = f"[{source}, Page {page}]"
         
     return final_context
+
+def _candidate_from_chunk(chunk) -> dict:
+    # Minimal version of the helper from retrieval.py
+    return {
+        "id": chunk.id,
+        "text": chunk.text_content,
+        "metadata": {
+            "source": chunk.doc_id,
+            "section": chunk.section,
+            "page_num": (chunk.doc_metadata or {}).get("page_num"),
+        }
+    }

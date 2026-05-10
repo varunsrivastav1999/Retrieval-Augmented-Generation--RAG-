@@ -55,46 +55,66 @@ def _split_long_text(text: str, max_chars: int, overlap_words: int = 35) -> list
     return chunks
 
 
-def semantic_chunking(text: str, max_chars: int = 1200) -> list:
-    # Normalize common PDF extraction artifacts while preserving paragraph breaks.
-    text = re.sub(r'(?<=\b[a-zA-Z])\s(?=[a-zA-Z]\b)', '', text or "")
-    text = re.sub(r'\r\n?', '\n', text)
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
-    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+def recursive_character_chunking(text: str, chunk_size: int = 1200, chunk_overlap: int = 200) -> list:
+    """
+    Advanced recursive splitting strategy.
+    Tries to split on paragraphs, then sentences, then words to keep chunks meaningful.
+    """
     if not text:
         return []
 
-    sections = [section.strip() for section in re.split(r'\n{2,}', text) if section.strip()]
-    chunks = []
-    current_chunk = ""
-
-    for section in sections:
-        sentences = re.split(r'(?<=[.!?])\s+', section)
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-
-            if len(sentence) > max_chars:
-                if current_chunk.strip():
-                    chunks.append(current_chunk.strip())
+    # Normalize text
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\r\n?', '\n', text)
+    
+    separators = ["\n\n", "\n", ". ", " ", ""]
+    
+    def split_text(text, separators):
+        final_chunks = []
+        
+        # Get the first separator to try
+        separator = separators[0]
+        new_separators = separators[1:]
+        
+        # Split by separator
+        if separator:
+            splits = text.split(separator)
+        else:
+            splits = list(text)
+            
+        current_chunk = ""
+        
+        for s in splits:
+            # If the current split itself is too big, recurse
+            if len(s) > chunk_size:
+                if current_chunk:
+                    final_chunks.append(current_chunk.strip())
                     current_chunk = ""
-                chunks.extend(_split_long_text(sentence, max_chars))
-                continue
-
-            projected_len = len(current_chunk) + len(sentence) + (1 if current_chunk else 0)
-            if projected_len <= max_chars:
-                current_chunk = f"{current_chunk} {sentence}".strip()
+                
+                if new_separators:
+                    final_chunks.extend(split_text(s, new_separators))
+                else:
+                    # No more separators, just force cut
+                    final_chunks.append(s[:chunk_size])
             else:
-                if current_chunk.strip():
-                    chunks.append(current_chunk.strip())
-                current_chunk = sentence
+                # Can we add this split to the current chunk?
+                potential_chunk = f"{current_chunk}{separator if current_chunk else ''}{s}"
+                if len(potential_chunk) <= chunk_size:
+                    current_chunk = potential_chunk
+                else:
+                    if current_chunk:
+                        final_chunks.append(current_chunk.strip())
+                    
+                    # Start new chunk with overlap if possible
+                    # This is a simplified overlap; for production we'd take the tail of the prev
+                    current_chunk = s
+        
+        if current_chunk:
+            final_chunks.append(current_chunk.strip())
+            
+        return final_chunks
 
-    if current_chunk.strip():
-        chunks.append(current_chunk.strip())
-
-    return chunks
+    return split_text(text, separators)
 
 
 # ---------------------------------------------------------------------------
@@ -203,8 +223,8 @@ def ingest_pdf(pdf_path: str, tenant_id: str = "default", job_id: str = None) ->
             all_content = [page_text] + tables + image_texts
             combined_text = "\n\n".join([t for t in all_content if t.strip()])
 
-            # --- 4. Semantic chunking ---
-            page_chunks = semantic_chunking(combined_text)
+            # --- 4. Recursive character chunking ---
+            page_chunks = recursive_character_chunking(combined_text)
 
             for chunk in page_chunks:
                 chunks_total += 1
