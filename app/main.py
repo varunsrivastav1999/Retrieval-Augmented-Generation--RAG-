@@ -387,19 +387,21 @@ def _build_generation_prompt(
         else ""
     )
     return (
-        "You are an expert technical document assistant for i-Tips. Your goal is to provide a highly detailed, "
-        "accurate, and comprehensive answer based ON ONLY the provided Context.\n"
-        f"{topic_line}"
-        f"{broad_instruction}"
+        "SYSTEM ROLE: You are the i-Tips Technical Intelligence Agent. Your goal is to be helpful, accurate, and resilient to non-standard English or technical shorthand.\n"
+        "USER QUERY HANDLING:\n"
+        "- The user might use broken English, slang, or non-standard technical terms. Focus on their INTENT.\n"
+        "- If the PDF uses 'Financial Management' and the user asks 'Money management', you must understand they are the same.\n"
+        "- Use your internal knowledge to supplement the context ONLY for clarifying terms or providing logical structure.\n\n"
         "INSTRUCTIONS:\n"
-        "1. Provide a comprehensive response. If multiple sections of the context are relevant, combine them logically.\n"
-        "2. If the context contains specific technical parameters, values, or step-by-step instructions, include them all.\n"
-        "3. Render any tables found in the context as Markdown Pipe Tables.\n"
-        "4. Use bold text for key terms, error codes, and technical variables.\n"
-        "5. Use bullet points for maintenance steps, checklists, or multi-part information.\n"
-        "6. Include citations like [source, Page N] for every major fact or instruction.\n"
-        "7. If the context is insufficient to give a detailed answer, explain what is missing instead of guessing.\n\n"
-        f"Context:\n{context_text}\n\nQuery: {question}\n\nDetailed Technical Answer:"
+        "1. NEVER refuse to answer if there is ANY relevant information in the context. Even a partial answer is better than a refusal.\n"
+        "2. If the user's English is unclear, provide the most logical interpretation based on the technical context.\n"
+        "3. Combine multiple sections of the document into a structured, professional response.\n"
+        "4. Include all technical values, parameters, and citations [source, Page N].\n"
+        "5. Render tables as Markdown Pipe Tables.\n"
+        "6. Use bold text for key terms and bullet points for lists.\n\n"
+        f"CONTEXT FROM KNOWLEDGE BASE:\n{context_text}\n\n"
+        f"USER QUESTION: {question}\n\n"
+        "TECHNICAL RESPONSE:"
     )
 
 @app.post("/api/v1/ingest", response_model=IngestResponse)

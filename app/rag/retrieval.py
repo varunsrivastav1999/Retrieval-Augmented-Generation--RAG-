@@ -6,8 +6,8 @@ from app.rag.model_loader import encode_text, get_embedding_model_id
 
 
 RRF_K = 60
-DENSE_WEIGHT = 0.7
-LEXICAL_WEIGHT = 0.3
+DENSE_WEIGHT = 0.5
+LEXICAL_WEIGHT = 0.5
 
 
 def _candidate_from_chunk(chunk: DocumentChunk) -> dict:
@@ -66,14 +66,14 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
         text(
             "SELECT id, "
             "ts_rank_cd("
-            "  to_tsvector('simple', coalesce(text_content, '')), "
-            "  plainto_tsquery('simple', :query)"
+            "  to_tsvector('english', coalesce(text_content, '')), "
+            "  websearch_to_tsquery('english', :query)"
             ") AS lexical_score "
             "FROM document_chunks "
             "WHERE tenant_id = :tenant_id "
             "AND embedding_model = :embedding_model "
-            "AND to_tsvector('simple', coalesce(text_content, '')) "
-            "    @@ plainto_tsquery('simple', :query) "
+            "AND to_tsvector('english', coalesce(text_content, '')) "
+            "    @@ websearch_to_tsquery('english', :query) "
             "ORDER BY lexical_score DESC "
             "LIMIT :limit"
         ),
