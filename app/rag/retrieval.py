@@ -40,7 +40,7 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
     print(f"[Retrieval] Executing hybrid search for tenant={tenant_id!r}, query={query!r}")
     embedding_model = get_embedding_model_id()
     query_vector = encode_text(query)
-    candidate_limit = max(top_k * 4, 50)
+    candidate_limit = max(top_k * 8, 100)
     candidates = {}
 
     distance_expr = DocumentChunk.embedding.cosine_distance(query_vector).label("distance")

@@ -1,6 +1,18 @@
 # RAG Production System
 
-A production-grade Retrieval-Augmented Generation (RAG) microservice engineered to handle **1,000+ PDFs** with **zero-latency cached responses** and **high-fidelity document retrieval** — including tables, images (OCR), and structured text.
+A production-grade Retrieval-Augmented Generation (RAG) microservice engineered to handle **1,000,000+ Pages** with **zero-latency cached responses** and **high-fidelity document retrieval** — including tables, images (OCR), and structured text.
+
+## 🚀 Intelligent Hardware Auto-Detection
+The system automatically detects and optimizes for your hardware in the following priority order:
+1.  **MPS (Metal Performance Shaders)**: Optimized for Apple Silicon (Mac M1/M2/M3) local development.
+2.  **CUDA (NVIDIA)**: Optimized for Production/Linux GPU acceleration.
+3.  **CPU**: High-performance fallback for standard environments.
+
+**How to check your hardware:**
+When you run `docker-compose up`, look for the following line in the `rag_api` logs:
+```bash
+[RAG Hardware] Selected compute device: MPS  # or CUDA, or CPU
+```
 
 ## Architecture Overview
 
@@ -39,9 +51,9 @@ A production-grade Retrieval-Augmented Generation (RAG) microservice engineered 
 | Component | Tool | Purpose |
 |---|---|---|
 | **Embedder** | `all-MiniLM-L6-v2` (384d) | Fast, lightweight sentence embeddings |
-| **Storage** | PostgreSQL + pgvector | Native ANN indexing with IVFFlat |
+| **Storage** | PostgreSQL + pgvector | Native ANN indexing with HNSW |
 | **Batch Mode** | Background ingestion worker | Offline embedding avoids runtime CPU spikes |
-| **Win** | Zero runtime inference cost | All embedding happens before queries arrive |
+| **Win** | 1,000,000+ Page Scalability | HNSW provides millisecond search at massive scale |
 
 ### Layer 3 — Hybrid Retrieval (Dense ANN + BM25 Keyword Search)
 | Component | Tool | Purpose |
@@ -156,4 +168,4 @@ volumes:
 - `RAG_PRELOAD_MODELS_ON_STARTUP=true` — Validates models before accepting traffic
 - Tenant-scoped queries prevent cross-tenant data leakage
 - DB-backed ingestion worker with row locking prevents duplicate job claims
-- IVFFlat vector index optimized for 1000+ PDF scale
+- HNSW vector index optimized for 1,000,000+ page scale

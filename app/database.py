@@ -147,8 +147,8 @@ def _run_schema_migrations():
         )
         _execute_best_effort(
             conn,
-            "CREATE INDEX IF NOT EXISTS ix_document_chunks_embedding_ivfflat "
-            "ON document_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)",
+            "CREATE INDEX IF NOT EXISTS ix_document_chunks_embedding_hnsw "
+            "ON document_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
         )
 
 def get_db():

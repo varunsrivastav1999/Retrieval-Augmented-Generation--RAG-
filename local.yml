@@ -15,6 +15,13 @@ services:
       - postgres
       - redis
       - ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     volumes:
       - .:/app:z
       - /Users/tei-1358/Documents/i-Tips Projects/TM-2000_TVS/Dev/external_media:/media
@@ -60,6 +67,13 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: ollama_rag_local
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     volumes:
       - local_ollama_data:/root/.ollama
     ports:

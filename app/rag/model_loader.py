@@ -95,12 +95,45 @@ class LexicalReranker:
         return coverage + density + phrase_bonus
 
 
+@lru_cache(maxsize=1)
+def get_optimal_device() -> str:
+    """
+    Returns the best available hardware accelerator in priority order:
+    1. MPS (Apple Silicon) - Best for Mac local
+    2. CUDA (NVIDIA) - Best for Production/Linux
+    3. CPU (Fallback) - Default
+    """
+    device_override = os.getenv("RAG_MODEL_DEVICE")
+    if device_override:
+        return device_override
+
+    try:
+        import torch
+
+        if torch.backends.mps.is_available():
+            return "mps"
+        if torch.cuda.is_available():
+            return "cuda"
+    except (ImportError, Exception) as e:
+        print(f"[RAG Hardware] Torch check failed: {e}. Defaulting to CPU.")
+
+    return "cpu"
+
+
 def _model_kwargs() -> dict:
     kwargs = {}
     if MODEL_CACHE_DIR:
         kwargs["cache_folder"] = MODEL_CACHE_DIR
-    if os.getenv("RAG_MODEL_DEVICE"):
-        kwargs["device"] = os.getenv("RAG_MODEL_DEVICE")
+    
+    device = get_optimal_device()
+    kwargs["device"] = device
+    
+    # Prominent status banner for Docker logs
+    print("\n" + "="*50)
+    print(f"  RAG HARDWARE STATUS: {device.upper()}")
+    print(f"  MODE: {'🚀 GPU ACCELERATED' if device in ['mps', 'cuda'] else '🐢 CPU ONLY'}")
+    print("="*50 + "\n")
+    
     return kwargs
 
 
@@ -187,8 +220,7 @@ def get_reranker_model() -> Any:
         if MODEL_CACHE_DIR:
             tokenizer_args["cache_dir"] = MODEL_CACHE_DIR
             automodel_args["cache_dir"] = MODEL_CACHE_DIR
-        if os.getenv("RAG_MODEL_DEVICE"):
-            kwargs["device"] = os.getenv("RAG_MODEL_DEVICE")
+        kwargs["device"] = get_optimal_device()
         if HF_OFFLINE:
             tokenizer_args["local_files_only"] = True
             automodel_args["local_files_only"] = True
@@ -236,6 +268,7 @@ def runtime_model_info() -> dict:
     reranker_id = get_reranker_model_id()
     return {
         "environment": RAG_ENV,
+        "device": get_optimal_device(),
         "embedding_model": embedding_id,
         "reranker_model": reranker_id,
         "embedding_dimension": EMBEDDING_DIM,

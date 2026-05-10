@@ -11,13 +11,6 @@ services:
     container_name: itips_rag_prod
     depends_on:
       - ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     volumes:
       - .:/app:z
       - /your/new/absolute/path/to/external_media:/media
@@ -43,13 +36,6 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: ollama_rag_prod
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     volumes:
       - prod_ollama_data:/root/.ollama
 

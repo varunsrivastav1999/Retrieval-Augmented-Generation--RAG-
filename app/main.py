@@ -57,7 +57,7 @@ MEDIA_PATH = os.getenv("MEDIA_PATH", "/media")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3") # Set to whichever model you have pulled in Ollama
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
-OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "512"))
+OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "1024"))
 RAG_ENV = os.getenv("RAG_ENV", "local").lower()
 PRELOAD_MODELS_ON_STARTUP = os.getenv(
     "RAG_PRELOAD_MODELS_ON_STARTUP",
@@ -71,7 +71,7 @@ ENABLE_INGESTION_WORKER = os.getenv("RAG_ENABLE_INGESTION_WORKER", "true").lower
 }
 INGESTION_WORKER_POLL_SECONDS = float(os.getenv("RAG_INGESTION_WORKER_POLL_SECONDS", "5"))
 INGESTION_STALE_TIMEOUT_SECONDS = int(os.getenv("RAG_INGESTION_STALE_TIMEOUT_SECONDS", "1800"))
-DEFAULT_TOP_K = int(os.getenv("RAG_DEFAULT_TOP_K", "8"))
+DEFAULT_TOP_K = int(os.getenv("RAG_DEFAULT_TOP_K", "12"))
 MAX_TOP_K = int(os.getenv("RAG_MAX_TOP_K", "50"))
 BROAD_QUERY_TOP_K = int(os.getenv("RAG_BROAD_QUERY_TOP_K", "16"))
 SOURCE_LIMIT = int(os.getenv("RAG_SOURCE_LIMIT", "12"))
@@ -385,19 +385,19 @@ def _build_generation_prompt(
         else ""
     )
     return (
-        "You are an expert technical document assistant for i-Tips.\n"
-        "Use only the provided Context to answer the user's Query.\n"
+        "You are an expert technical document assistant for i-Tips. Your goal is to provide a highly detailed, "
+        "accurate, and comprehensive answer based ON ONLY the provided Context.\n"
         f"{topic_line}"
         f"{broad_instruction}"
-        "STRICT FORMATTING RULES:\n"
-        "1. If the context contains tables, render them as beautiful Markdown Pipe Tables.\n"
-        "2. Use bold text for key terms and technical parameters.\n"
-        "3. Use bullet points for maintenance steps or list-based information.\n"
-        "4. If the context contains a graph or numeric trend, describe it clearly.\n"
-        "5. Include citations like [source, Page N] from the provided context tags.\n"
-        "If the context is insufficient, say that the knowledge base does not contain enough information.\n"
-        "Write a final, direct answer.\n\n"
-        f"Context:\n{context_text}\n\nQuery: {question}\nAnswer:"
+        "INSTRUCTIONS:\n"
+        "1. Provide a comprehensive response. If multiple sections of the context are relevant, combine them logically.\n"
+        "2. If the context contains specific technical parameters, values, or step-by-step instructions, include them all.\n"
+        "3. Render any tables found in the context as Markdown Pipe Tables.\n"
+        "4. Use bold text for key terms, error codes, and technical variables.\n"
+        "5. Use bullet points for maintenance steps, checklists, or multi-part information.\n"
+        "6. Include citations like [source, Page N] for every major fact or instruction.\n"
+        "7. If the context is insufficient to give a detailed answer, explain what is missing instead of guessing.\n\n"
+        f"Context:\n{context_text}\n\nQuery: {question}\n\nDetailed Technical Answer:"
     )
 
 @app.post("/api/v1/ingest", response_model=IngestResponse)
@@ -1103,7 +1103,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             "stream": False,
             "options": {
                 "num_predict": OLLAMA_NUM_PREDICT,
-                "num_ctx": 4096,
+                "num_ctx": 8192,
             }
         }, timeout=OLLAMA_TIMEOUT_SECONDS)
         
@@ -1136,3 +1136,17 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     )
     
     return response_data
+
+
+if __name__ == "__main__":
+    import uvicorn
+    from dotenv import load_dotenv
+    
+    # Auto-load the local environment if running natively
+    env_path = os.path.join(os.path.dirname(__file__), "..", ".envs", ".local", ".rag")
+    if os.path.exists(env_path):
+        print(f"[RAG Native] Loading environment from {env_path}")
+        load_dotenv(env_path)
+    
+    print("[RAG Native] Starting i-Tips RAG natively for GPU access...")
+    uvicorn.run(app, host="0.0.0.0", port=1000)
