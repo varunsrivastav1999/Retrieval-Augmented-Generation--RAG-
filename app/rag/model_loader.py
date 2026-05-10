@@ -321,3 +321,44 @@ def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
     if not left_norm or not right_norm:
         return 0.0
     return dot / (left_norm * right_norm)
+
+
+if __name__ == "__main__":
+    import os
+    print("\n" + "="*60)
+    print("  RAG MODEL PRE-LOADER (FOR DOCKER & OFFLINE USE)")
+    print("="*60)
+    
+    # Force online mode for the download phase
+    os.environ["RAG_HF_OFFLINE"] = "false"
+    os.environ["HF_HUB_OFFLINE"] = "0"
+    os.environ["TRANSFORMERS_OFFLINE"] = "0"
+    
+    # We import inside main to avoid circular dependency issues if any
+    from app.rag.model_loader import get_embedding_model, get_reranker_model, HashingEmbedder, LexicalReranker
+    
+    print("\n1. Downloading Embedding Model...")
+    try:
+        get_embedding_model.cache_clear()
+        embedder = get_embedding_model()
+        if isinstance(embedder, HashingEmbedder):
+            print("❌ ERROR: Download failed, fell back to Hashing.")
+        else:
+            print("✅ SUCCESS: Embedding model is ready.")
+    except Exception as e:
+        print(f"❌ ERROR: {e}")
+
+    print("\n2. Downloading Reranker Model...")
+    try:
+        get_reranker_model.cache_clear()
+        reranker = get_reranker_model()
+        if isinstance(reranker, LexicalReranker):
+            print("❌ ERROR: Download failed, fell back to Lexical.")
+        else:
+            print("✅ SUCCESS: Reranker model is ready.")
+    except Exception as e:
+        print(f"❌ ERROR: {e}")
+
+    print("\n" + "="*60)
+    print("  PRE-LOADING COMPLETE. YOU CAN NOW START IN OFFLINE MODE.")
+    print("="*60 + "\n")

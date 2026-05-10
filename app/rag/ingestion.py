@@ -225,16 +225,17 @@ def ingest_pdf(pdf_path: str, tenant_id: str = "default", job_id: str = None) ->
                 chunks_total += 1
                 chunk_hash = hash_chunk(chunk_text)
 
-                # Quick check if exists
-                existing = db.query(DocumentChunk.id).filter(
-                    DocumentChunk.tenant_id == tenant_id,
-                    DocumentChunk.doc_id == pdf_path,
-                    DocumentChunk.chunk_hash == chunk_hash
-                ).first()
-                
-                if existing:
-                    section += 1
-                    continue
+                # Quick check if exists (Skip if not force_reindex)
+                if not force_reindex:
+                    existing = db.query(DocumentChunk.id).filter(
+                        DocumentChunk.tenant_id == tenant_id,
+                        DocumentChunk.doc_id == pdf_path,
+                        DocumentChunk.chunk_hash == chunk_hash
+                    ).first()
+                    
+                    if existing:
+                        section += 1
+                        continue
 
                 content_type = "text"
                 if chunk_text.startswith("[TABLE"): content_type = "table"
