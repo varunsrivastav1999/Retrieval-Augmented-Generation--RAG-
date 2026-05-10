@@ -68,6 +68,8 @@ DEFAULT_TOP_K = int(os.getenv("RAG_DEFAULT_TOP_K", "8"))
 MAX_TOP_K = int(os.getenv("RAG_MAX_TOP_K", "50"))
 BROAD_QUERY_TOP_K = int(os.getenv("RAG_BROAD_QUERY_TOP_K", "16"))
 SOURCE_LIMIT = int(os.getenv("RAG_SOURCE_LIMIT", "12"))
+MAX_UPLOAD_SIZE_MB = int(os.getenv("RAG_MAX_UPLOAD_SIZE_MB", "200"))
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 try:
@@ -439,15 +441,38 @@ async def upload_file(
     if not filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
+    # Stream file to disk in chunks to avoid loading entire PDF into RAM
     tenant_media_path = os.path.join(MEDIA_PATH, tenant_id)
     os.makedirs(tenant_media_path, exist_ok=True)
     file_path = os.path.join(tenant_media_path, filename)
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
 
+    total_bytes = 0
+    try:
+        with open(file_path, "wb") as buffer:
+            while True:
+                chunk = await file.read(1024 * 1024)  # Read 1MB at a time
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_SIZE_BYTES:
+                    buffer.close()
+                    os.remove(file_path)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Maximum upload size is {MAX_UPLOAD_SIZE_MB}MB.",
+                    )
+                buffer.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as e:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+
+    file_size_mb = round(total_bytes / (1024 * 1024), 2)
     job = create_ingestion_job(tenant_id, file_path)
     return {
-        "message": f"Saved {filename} and queued background ingestion.",
+        "message": f"Saved {filename} ({file_size_mb}MB) and queued background ingestion.",
         "job": _job_response(job),
     }
 
