@@ -7,7 +7,7 @@ import threading
 import time
 from fastapi import Body, HTTPException, Depends, File, Query, UploadFile
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -165,6 +165,7 @@ def get_corpus_version(db: Session, tenant_id: str, embedding_model: str) -> str
 
 @app.on_event("startup")
 def on_startup():
+    print("🚀 [STARTUP] Application is waking up...")
     global ingestion_worker_thread
     try:
         init_db()
@@ -443,6 +444,7 @@ def _build_generation_prompt(
 def ingest_media(
     payload: Optional[IngestRequest] = Body(None),
     tenant_id: str = Query("default", pattern=TENANT_PATTERN),
+    force_reindex: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """
@@ -451,7 +453,8 @@ def ingest_media(
     if payload and payload.tenant_id:
         tenant_id = payload.tenant_id
     tenant_id = validate_tenant_id(tenant_id)
-    force_reindex = bool(payload.force_reindex) if payload else False
+    if payload and payload.force_reindex:
+        force_reindex = True
     pdf_files = _find_pdf_files(include_scan=True)
     if not pdf_files:
         return {
@@ -843,8 +846,8 @@ def root_ui():
         </div>
 
         <script>
-            // Configure marked for safe markdown rendering
-            marked.setOptions({ breaks: true, gfm: true });
+            // Configure marked for safe markdown rendering (v15 API)
+            marked.use({ breaks: true, gfm: true });
 
             // Load stats on page load
             (async function loadStats() {
@@ -1203,9 +1206,19 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         if response.status_code == 200:
             answer = response.json().get("response", answer)
         else:
-            print(f"Ollama error: {response.text}")
+            print(f"Ollama error: {response.status_code} {response.text}")
+            answer = (
+                f"⚠️ I found {len(final_context)} relevant chunks from the knowledge base, "
+                f"but the LLM ({OLLAMA_MODEL}) returned an error (HTTP {response.status_code}). "
+                "Please check if Ollama is running and the model is loaded."
+            )
     except Exception as e:
         print(f"Error connecting to Ollama at {OLLAMA_URL}: {e}")
+        answer = (
+            f"⚠️ I found {len(final_context)} relevant chunks from the knowledge base, "
+            f"but could not connect to the LLM at {OLLAMA_URL}. "
+            f"Error: {e}"
+        )
     
     latency = int((time.time() - start_time) * 1000)
     

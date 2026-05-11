@@ -216,6 +216,19 @@ def ingest_pdf(pdf_path: str, tenant_id: str = "default", job_id: str = None, fo
             tables = _extract_tables_from_page(pdf_path, page_num)
             image_texts = _extract_images_from_page(page, page_num)
 
+            # --- Full Page OCR Fallback ---
+            # If the page has almost no text but OCR is available, render the WHOLE page and OCR it.
+            # This catches scanned PDFs where the 'image' isn't technically an 'embedded image' object.
+            if OCR_AVAILABLE and len(page_text.strip()) < 50:
+                try:
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 2x scale for better OCR
+                    img = Image.open(io.BytesIO(pix.tobytes()))
+                    full_page_ocr = pytesseract.image_to_string(img).strip()
+                    if full_page_ocr:
+                        image_texts.append(f"[FULL PAGE OCR - Page {page_num}]\n{full_page_ocr}")
+                except Exception as e:
+                    print(f"[Ingestion] Full-page OCR failed for {pdf_path} page {page_num}: {e}")
+
             all_content = [page_text] + tables + image_texts
             combined_text = "\n\n".join([t for t in all_content if t.strip()])
 

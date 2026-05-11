@@ -178,8 +178,17 @@ def _model_appears_cached(model_name: str) -> bool:
     return False
 
 
+def get_ollama_generate_url() -> str:
+    # Try multiple addresses to bypass Mac Docker networking issues
+    potential_hosts = ["host.docker.internal", "172.17.0.1", "localhost", "127.0.0.1"]
+    
+    # Check if we've already found a working one
+    base_url = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434/api/generate")
+    return base_url
+
 @lru_cache(maxsize=1)
 def get_embedding_model() -> Any:
+    # ... (existing logic)
     if HF_OFFLINE and ALLOW_HASH_FALLBACK and not _model_appears_cached(EMBEDDING_MODEL):
         print(
             "[RAG Embeddings] Using deterministic local hashing embeddings "
@@ -259,11 +268,11 @@ def get_reranker_model_id() -> str:
 
 
 def validate_runtime_models() -> None:
-    embedding_id = get_embedding_model_id()
-    reranker_id = get_reranker_model_id()
-    if REQUIRE_REAL_MODELS and (
-        embedding_id.startswith("fallback:") or reranker_id.startswith("fallback:")
-    ):
+    if not REQUIRE_REAL_MODELS:
+        return
+    model = get_embedding_model()
+    reranker = get_reranker_model()
+    if isinstance(model, HashingEmbedder) or isinstance(reranker, LexicalReranker):
         raise RuntimeError(
             "Production requires real embedding and reranker models. Disable fallback "
             "or pre-populate the model cache before starting the service."

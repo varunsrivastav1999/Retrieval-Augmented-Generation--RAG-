@@ -1,6 +1,6 @@
 import os
 from app.database import DocumentChunk
-from app.rag.model_loader import cosine_similarity, encode_text, encode_texts
+from app.rag.model_loader import cosine_similarity, encode_text, encode_texts, get_embedding_model_id
 
 def apply_mmr(query: str, chunks: list, diversity: float = 0.5) -> list:
     """
@@ -62,9 +62,13 @@ def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
             section = metadata.get("section")
             
             if doc_id and section is not None:
+                tenant_id = metadata.get("tenant_id", "default")
+                embedding_model = get_embedding_model_id()
                 neighbors = (
                     db.query(DocumentChunk)
                     .filter(
+                        DocumentChunk.tenant_id == tenant_id,
+                        DocumentChunk.embedding_model == embedding_model,
                         DocumentChunk.doc_id == doc_id,
                         DocumentChunk.section.in_([section - 1, section + 1]),
                         DocumentChunk.id.notin_(expanded_ids)
