@@ -18,7 +18,7 @@ import redis
 import json
 import hashlib
 
-from app.database import DocumentChunk, IngestionJob, init_db, get_db
+from app.database import DocumentChunk, IngestionJob, SessionLocal, init_db, get_db
 from app.rag.jobs import create_ingestion_job, get_ingestion_job, start_ingestion_worker
 from app.rag.model_loader import get_embedding_model_id, runtime_model_info, validate_runtime_models
 from app.rag.retrieval import perform_hybrid_search
@@ -220,6 +220,33 @@ def on_startup():
             stale_timeout_seconds=INGESTION_STALE_TIMEOUT_SECONDS,
         )
         print("Ingestion worker started.")
+
+    # Auto-scan /media for unindexed PDFs and queue them on startup
+    def auto_scan_media():
+        # Wait for models to be ready first
+        sync_thread.join(timeout=600)
+        try:
+            pdf_files = _find_pdf_files(include_scan=True)
+            if not pdf_files:
+                print("[AutoScan] No PDFs found in media path, skipping.")
+                return
+
+            db = SessionLocal()
+            try:
+                result = _queue_pdf_ingestion("default", pdf_files, db)
+                queued = result["queued"]
+                skipped = result["skipped"]
+                if queued:
+                    print(f"[AutoScan] Queued {queued} new PDF(s) for ingestion ({skipped} already indexed).")
+                else:
+                    print(f"[AutoScan] All {len(pdf_files)} PDF(s) already indexed. Nothing to do.")
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[AutoScan] Warning: Auto-scan failed: {e}")
+
+    scan_thread = threading.Thread(target=auto_scan_media, name="rag-auto-scan", daemon=True)
+    scan_thread.start()
 
 
 @app.on_event("shutdown")
