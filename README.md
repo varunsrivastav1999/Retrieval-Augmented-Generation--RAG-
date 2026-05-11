@@ -8,10 +8,10 @@ An advanced, **7-Layer Retrieval-Augmented Generation (RAG)** engine designed fo
 
 ---
 
-## 🌟 The "Amazing Concept": 7-Layer Intelligence
+## The "Amazing Concept": 7-Layer Intelligence
 Unlike basic RAG systems, i-Tips RAG uses a multi-layered pipeline to ensure the AI never "hallucinates" and always has the full technical picture.
 
-### 🏗 Architecture Diagram
+### Architecture Diagram
 ```
                     ┌──────────────────────────────────────────┐
                     │          Enterprise RAG Engine           │
@@ -34,7 +34,7 @@ Unlike basic RAG systems, i-Tips RAG uses a multi-layered pipeline to ensure the
 
 ---
 
-## 🚀 Key Enterprise Features
+## Key Enterprise Features
 
 ### 1. **High-Scale Performance (1M+ Pages)**
 *   **HNSW Indexing**: Uses Hierarchical Navigable Small Worlds for O(log n) search complexity.
@@ -53,9 +53,9 @@ Experience instant interaction. The UI displays the AI's thoughts as they are ge
 
 ---
 
-## 🛠 Deployment & Setup
+## Deployment & Setup
 
-### 🐳 Quick Start (Docker)
+### Quick Start (Docker)
 ```bash
 # Clone the repository
 git clone https://github.com/varunsrivastav1999/Retrieval-Augmented-Generation--RAG-.git
@@ -65,7 +65,7 @@ cd Retrieval-Augmented-Generation--RAG-
 docker-compose -f local.yml up --build
 ```
 
-### ⚡ Native Mode (Max GPU Speed on Mac)
+### Native Mode (Max GPU Speed on Mac)
 To bypass Docker limits and use your Mac's M-series GPU directly:
 ```bash
 pip install -r requirements.txt
@@ -74,7 +74,7 @@ python app/main.py
 
 ---
 
-## 🗺 Roadmap
+## Roadmap
 - [ ] **Multi-Modal Support**: Retrieval of images and diagrams via CLIP.
 - [ ] **Agentic Re-Ranking**: Use a small LLM to decide which chunks are "actually" useful.
 - [ ] **Evaluations Suite**: Integrated RAGAS benchmarks for accuracy tracking.
@@ -82,7 +82,7 @@ python app/main.py
 
 ---
 
-## 🤝 Contributing
+## Contributing
 We welcome contributions! This is an open-source project dedicated to pushing the boundaries of local, private RAG.
 1. Fork the repo.
 2. Create a feature branch (`git checkout -b feature/AmazingNewLayer`).
@@ -92,7 +92,7 @@ We welcome contributions! This is an open-source project dedicated to pushing th
 
 ---
 
-## 📜 License
+## License
 Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
