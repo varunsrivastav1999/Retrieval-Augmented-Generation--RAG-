@@ -20,10 +20,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python dependencies first (cache layer optimization)
+# Install Python dependencies (cache layer optimization)
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+# Pre-download models so they are baked into the Docker image
+ENV HF_HOME=/models/huggingface
+RUN --mount=type=cache,target=/root/.cache/huggingface \
+    python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; \
+    SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); \
+    SentenceTransformer('sentence-transformers/clip-ViT-B-32'); \
+    CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
 
 # Copy application code
 COPY . .
