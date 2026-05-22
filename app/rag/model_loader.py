@@ -4,7 +4,7 @@ import os
 import re
 from glob import glob
 from functools import lru_cache
-from typing import Any, Iterable, List, Sequence
+from typing import Any, Iterable, List, Sequence, Optional
 
 
 EMBEDDING_DIM = int(os.getenv("RAG_EMBEDDING_DIM", "384"))
