@@ -11,7 +11,7 @@ def rerank_results(query: str, retrieved_chunks: list, top_n: int = 5) -> list:
     if not retrieved_chunks:
         return []
         
-    pairs = [[query, chunk["text"]] for chunk in retrieved_chunks]
+    pairs = [[query, chunk["text"] or ""] for chunk in retrieved_chunks]
     scores = get_reranker_model().predict(pairs)
     
     for i, chunk in enumerate(retrieved_chunks):
