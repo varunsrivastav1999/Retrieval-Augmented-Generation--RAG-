@@ -52,7 +52,7 @@ from app.rag.jobs import (
     start_ingestion_worker,
 )
 from app.rag.model_loader import get_embedding_model_id, runtime_model_info, validate_runtime_models
-from app.rag.retrieval import perform_hybrid_search
+from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search
 from app.rag.reranker import rerank_results
 from app.rag.context import assemble_context
 from app.rag.grounding import (
@@ -62,7 +62,7 @@ from app.rag.grounding import (
     verify_answer_grounding,
 )
 from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported_file
-from app.rag.query_intelligence import intelligent_query_pipeline
+from app.rag.query_intelligence import intelligent_query_pipeline, reformulate_query
 
 app = FastAPI(
     title="i-Tips RAG 13-Layer Microservice",
@@ -158,6 +158,17 @@ def _cache_key(
     return f"rag_cache:{query_hash}"
 
 
+import math
+from app.rag.model_loader import encode_text
+
+def _cosine_sim(v1, v2):
+    dot_product = sum(a * b for a, b in zip(v1, v2))
+    norm_a = math.sqrt(sum(a * a for a in v1))
+    norm_b = math.sqrt(sum(b * b for b in v2))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot_product / (norm_a * norm_b)
+
 def get_cached_response(
     query: str,
     tenant_id: str,
@@ -168,11 +179,29 @@ def get_cached_response(
 ):
     if not redis_client: return None
     try:
-        cached = redis_client.get(
-            _cache_key(query, tenant_id, top_k, embedding_model, corpus_version, scope)
-        )
-        if cached: return json.loads(cached)
-    except Exception as e: print(f"Redis get error: {e}")
+        # Layer 11: Semantic Query Cache
+        query_vector = encode_text(query)
+        index_key = f"semantic_index:{tenant_id}:{embedding_model}:{corpus_version}"
+        
+        index_data = redis_client.get(index_key)
+        if index_data:
+            index = json.loads(index_data)
+            best_match = None
+            best_sim = 0.0
+            
+            for item in index:
+                sim = _cosine_sim(query_vector, item["embedding"])
+                if sim > best_sim:
+                    best_sim = sim
+                    best_match = item
+                    
+            if best_match and best_sim > 0.92:
+                print(f"[Cache] Semantic HIT (sim={best_sim:.3f}) for query={query!r}")
+                cached = redis_client.get(best_match["cache_key"])
+                if cached:
+                    return json.loads(cached)
+    except Exception as e:
+        print(f"Redis get error: {e}")
     return None
 
 def set_cached_response(
@@ -186,12 +215,28 @@ def set_cached_response(
 ):
     if not redis_client: return
     try:
-        redis_client.setex(
-            _cache_key(query, tenant_id, top_k, embedding_model, corpus_version, scope),
-            86400,
-            json.dumps(response),
-        )
-    except Exception as e: print(f"Redis set error: {e}")
+        cache_key = _cache_key(query, tenant_id, top_k, embedding_model, corpus_version, scope)
+        redis_client.setex(cache_key, 86400, json.dumps(response))
+        
+        # Update semantic index
+        query_vector = encode_text(query)
+        index_key = f"semantic_index:{tenant_id}:{embedding_model}:{corpus_version}"
+        
+        index_data = redis_client.get(index_key)
+        index = json.loads(index_data) if index_data else []
+        
+        # Prune index to keep it fast (max 1000 items per tenant)
+        if len(index) > 1000:
+            index.pop(0)
+            
+        index.append({
+            "cache_key": cache_key,
+            "embedding": query_vector
+        })
+        redis_client.setex(index_key, 86400, json.dumps(index))
+        
+    except Exception as e:
+        print(f"Redis set error: {e}")
 
 
 def get_corpus_version(db: Session, tenant_id: str, embedding_model: str) -> str:
@@ -1380,25 +1425,49 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
 
     # Layer 13: Query Intelligence (Spelling, Expansion, Decomposition)
     query_intel = intelligent_query_pipeline(search_query)
-    expanded_search_query = query_intel["primary_search_query"]
-    print(f"[QueryIntel] Using expanded query: {expanded_search_query!r}")
     
-    # Layer 5: Hybrid Retrieval (ANN with pgvector + BM25)
-    retrieved_chunks = perform_hybrid_search(db, expanded_search_query, tenant_id, top_k=max(20, effective_top_k * 4))
+    # CRAG Retry Loop
+    max_retries = 1
+    retry_count = 0
+    grounding_result = None
+    final_context = []
     
-    # Layer 6: Cross-Encoder Reranking
-    reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
-    
-    # Layer 7+8: MMR + Context Assembly with Window Expansion
-    final_context = assemble_context(search_query, reranked_chunks, db=db)
-    sources = _context_sources(final_context)
+    while retry_count <= max_retries:
+        if retry_count == 0:
+            queries_to_search = query_intel["expanded_queries"]
+            print(f"[Retrieval] Multi-query search: {queries_to_search}")
+        else:
+            # CRAG: Reformulate query for retry
+            reformulated = reformulate_query(search_query)
+            queries_to_search = [reformulated]
+            print(f"[CRAG] Retrying with reformulated query: {reformulated}")
+            
+        # Layer 5+13: Sub-Query RRF Fusion
+        retrieved_chunks = perform_multi_query_search(db, queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4))
+        
+        # Layer 6: Cross-Encoder Reranking
+        reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
+        
+        # Layer 7+8: MMR + Context Assembly with Window Expansion
+        final_context = assemble_context(search_query, reranked_chunks, db=db)
+        sources = _context_sources(final_context)
 
-    # ============================================================
-    # Layer 9: 🛡️ HALLUCINATION GUARD
-    # If no relevant content → refuse to answer (ZERO general answers)
-    # ============================================================
-    grounding_result = compute_grounding_score(search_query, final_context)
-    print(f"[Grounding] {grounding_result['detail']}")
+        # Layer 9: HALLUCINATION GUARD
+        grounding_result = compute_grounding_score(search_query, final_context)
+        print(f"[Grounding] Try {retry_count+1}: {grounding_result['detail']}")
+
+        score = grounding_result.get("score", 0.0)
+        
+        if grounding_result["is_grounded"] or score == 0.0:
+            # If grounded, or completely irrelevant (score 0), don't retry
+            break
+            
+        if 0.0 < score < 0.25:
+            # Gray zone: answer might be there under different terms
+            print("[CRAG] Grounding score in gray zone. Triggering corrective retry.")
+            retry_count += 1
+        else:
+            break
 
     if not grounding_result["is_grounded"] or not final_context:
         # BLOCKED — no relevant content in documents

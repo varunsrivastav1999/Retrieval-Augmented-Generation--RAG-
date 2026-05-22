@@ -1,14 +1,18 @@
+import os
+import requests
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.database import DocumentChunk
 from app.rag.model_loader import encode_text, get_embedding_model_id, encode_image_text_query, extract_entities
 
-
 RRF_K = 60
 DENSE_WEIGHT = 0.5
 LEXICAL_WEIGHT = 0.5
+HYDE_WEIGHT = 0.3
 
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
 
 def _candidate_from_chunk(chunk: DocumentChunk) -> dict:
     metadata = chunk.doc_metadata or {}
@@ -30,17 +34,38 @@ def _candidate_from_chunk(chunk: DocumentChunk) -> dict:
         }
     }
 
-
 def _rrf_score(rank: int) -> float:
     return 1.0 / (RRF_K + rank)
+
+def _generate_hyde(query: str) -> str:
+    """HyDE: Generate a hypothetical answer to embed for dense retrieval."""
+    prompt = f"Please write a short, informative paragraph answering the following question. Do not provide a long introduction or conclusion, just the factual answer: {query}"
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"num_predict": 100, "temperature": 0.3}
+    }
+    try:
+        response = requests.post(OLLAMA_URL, json=payload, timeout=2.0)
+        if response.status_code == 200:
+            return response.json().get("response", "").strip()
+    except Exception as e:
+        print(f"[HyDE] Failed to generate: {e}")
+    return ""
 
 def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 20) -> list:
     """
     Layer 3: Hybrid search using pgvector dense retrieval plus PostgreSQL full text.
+    Includes HyDE (Hypothetical Document Embeddings).
     """
     print(f"[Retrieval] Executing hybrid search for tenant={tenant_id!r}, query={query!r}")
     embedding_model = get_embedding_model_id()
     query_vector = encode_text(query)
+    
+    hyde_text = _generate_hyde(query)
+    hyde_vector = encode_text(hyde_text) if hyde_text else None
+    
     vision_vector = encode_image_text_query(query)
     query_entities = extract_entities(query)
     
@@ -65,6 +90,25 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
         candidate["dense_score"] = max(candidate["dense_score"], dense_score)
         candidate["hybrid_score"] += DENSE_WEIGHT * _rrf_score(rank)
         candidate["metadata"]["dense_rank"] = rank
+
+    if hyde_vector:
+        hyde_distance_expr = DocumentChunk.embedding.cosine_distance(hyde_vector).label("hyde_distance")
+        hyde_rows = (
+            db.query(DocumentChunk, hyde_distance_expr)
+            .filter(
+                DocumentChunk.tenant_id == tenant_id,
+                DocumentChunk.embedding_model == embedding_model,
+            )
+            .order_by(hyde_distance_expr)
+            .limit(candidate_limit)
+            .all()
+        )
+        for rank, (chunk, distance) in enumerate(hyde_rows, start=1):
+            candidate = candidates.setdefault(chunk.id, _candidate_from_chunk(chunk))
+            hyde_score = 1.0 / (1.0 + float(distance or 0.0))
+            candidate["dense_score"] = max(candidate["dense_score"], hyde_score)
+            candidate["hybrid_score"] += HYDE_WEIGHT * _rrf_score(rank)
+            candidate["metadata"]["hyde_rank"] = rank
 
     lexical_rows = db.execute(
         text(
@@ -148,3 +192,34 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
         item["score"] = item["hybrid_score"]
 
     return ranked[:top_k]
+
+def perform_multi_query_search(db: Session, queries: list, tenant_id: str, top_k: int = 20) -> list:
+    """
+    Layer 13 (Extension): Sub-Query RRF Fusion
+    Runs hybrid search for multiple sub-queries independently and fuses results with RRF.
+    """
+    if not queries:
+        return []
+        
+    all_candidates = {}
+    
+    for q in queries:
+        results = perform_hybrid_search(db, q, tenant_id, top_k=top_k)
+        for rank, res in enumerate(results, start=1):
+            cid = res["id"]
+            if cid not in all_candidates:
+                all_candidates[cid] = res
+                all_candidates[cid]["fused_score"] = 0.0
+            all_candidates[cid]["fused_score"] += _rrf_score(rank)
+            
+    # Re-sort by fused_score
+    ranked = sorted(
+        all_candidates.values(),
+        key=lambda item: item["fused_score"],
+        reverse=True,
+    )
+    for item in ranked:
+        item["score"] = item["fused_score"]
+        
+    return ranked[:top_k]
+

@@ -214,10 +214,15 @@ def ingest_file(
             # --- Layer 3: Parent-Child Chunking ---
             page_chunks = create_parent_child_chunks(combined_text)
 
+            doc_title = os.path.basename(file_path)
+
             for chunk_info in page_chunks:
-                chunk_text = chunk_info["text"]
-                if not chunk_text.strip():
+                raw_text = chunk_info["text"]
+                if not raw_text.strip():
                     continue
+
+                # Contextual Chunk Header: Prepend doc title and page
+                chunk_text = f"[{doc_title} | Page {page.page_num}]\n{raw_text}"
 
                 chunks_total += 1
                 chunk_hash = hash_chunk(chunk_text)

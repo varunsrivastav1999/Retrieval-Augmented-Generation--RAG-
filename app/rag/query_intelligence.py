@@ -344,3 +344,32 @@ def intelligent_query_pipeline(query: str) -> Dict:
         "expanded_queries": expanded,
         "primary_search_query": primary,
     }
+
+def reformulate_query(query: str) -> str:
+    """
+    CRAG: Reformulate query for a second retrieval attempt if grounding was low.
+    Strips question words and extracts keywords.
+    """
+    query_lower = query.lower()
+    
+    # Strip common question prefixes
+    prefixes = [
+        "what is the ", "what is a ", "what is ", "what are ",
+        "how to ", "how do i ", "how do you ", "how does ", "how can ",
+        "why is ", "why does ", "when is ", "where is ", "where are ",
+        "can you explain ", "explain ", "describe ", "tell me about "
+    ]
+    
+    for prefix in prefixes:
+        if query_lower.startswith(prefix):
+            query_lower = query_lower[len(prefix):]
+            break
+            
+    # Remove question marks and extra spaces
+    query_lower = query_lower.replace("?", "").strip()
+    
+    # Expand what's left
+    reformulated = expand_query(query_lower)
+    print(f"[CRAG] Reformulated query: '{query}' -> '{reformulated}'")
+    return reformulated
+
