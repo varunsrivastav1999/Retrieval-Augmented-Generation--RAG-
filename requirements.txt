@@ -25,4 +25,10 @@ pysubs2==1.7.2
 chardet==5.2.0
 beautifulsoup4==4.12.3
 spacy==3.7.4
+# --- AI/ML Models Used ---
+# 1. Text Embedding: sentence-transformers/all-MiniLM-L6-v2 (Auto-downloaded by sentence-transformers)
+# 2. Vision/Image Embedding: sentence-transformers/clip-ViT-B-32 (Auto-downloaded by sentence-transformers)
+# 3. Reranker: cross-encoder/ms-marco-MiniLM-L-6-v2 (Auto-downloaded by sentence-transformers)
+# 4. LLM Synthesis: llama3 (Pulled via Ollama external service)
+# 5. NLP Entity Extraction: spacy en_core_web_sm (Downloaded via direct link below)
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
