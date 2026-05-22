@@ -39,12 +39,12 @@ def _rrf_score(rank: int) -> float:
 
 def _generate_hyde(query: str) -> str:
     """HyDE: Generate a hypothetical answer to embed for dense retrieval."""
-    prompt = f"Please write a short, informative paragraph answering the following question. Do not provide a long introduction or conclusion, just the factual answer: {query}"
+    prompt = f"Please write a very short, single sentence factual answer to the following question: {query}"
     payload = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
-        "options": {"num_predict": 100, "temperature": 0.3}
+        "options": {"num_predict": 30, "temperature": 0.3}
     }
     try:
         response = requests.post(OLLAMA_URL, json=payload, timeout=2.0)
