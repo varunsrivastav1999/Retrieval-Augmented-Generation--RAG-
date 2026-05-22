@@ -44,10 +44,11 @@ def _generate_hyde(query: str) -> str:
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
+        "keep_alive": "30m",
         "options": {"num_predict": 30, "temperature": 0.3}
     }
     try:
-        response = requests.post(OLLAMA_URL, json=payload, timeout=2.0)
+        response = requests.post(OLLAMA_URL, json=payload, timeout=4.0)
         if response.status_code == 200:
             return response.json().get("response", "").strip()
     except Exception as e:
