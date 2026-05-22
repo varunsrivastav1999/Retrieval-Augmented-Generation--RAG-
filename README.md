@@ -1,33 +1,38 @@
-# i-Tips RAG: 13-Layer Production Engine
+# i-Tips RAG: 18-Layer Production Engine
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?logo=docker&logoColor=white)](https://www.docker.com/)
 [![Open Source](https://img.shields.io/badge/Open%20Source-%E2%9D%A4-red)](https://github.com/varunsrivastav1999/Retrieval-Augmented-Generation--RAG-)
 
-An advanced, **13-Layer Retrieval-Augmented Generation (RAG)** microservice with **zero hallucination**, **sub-5ms exact text extraction**, **universal file support (30+ formats)**, and **query intelligence**. Featuring **100% Offline Multi-modal Vision (CLIP)** and an **Offline Entity Knowledge Graph (spaCy)**. Enterprise-grade and production-ready.
+An advanced, **18-Layer Retrieval-Augmented Generation (RAG)** microservice with **zero hallucination**, **sub-5ms exact text extraction**, **universal file support (30+ formats)**, and **query intelligence**. Featuring **100% Offline Multi-modal Vision (CLIP)**, an **Offline Entity Knowledge Graph (spaCy)**, and **Beyond Human Thinking** layers (HyDE, CRAG, Contextual Headers, RRF Fusion, Semantic Cache). Enterprise-grade and production-ready.
 
 ---
 
-## 🧠 The 13-Layer Intelligence Pipeline
+## 🧠 The 18-Layer Intelligence Pipeline
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│                  i-Tips RAG 13-Layer Engine v3.0                   │
+│                  i-Tips RAG 18-Layer Engine v4.0                   │
 │                                                                    │
 │  ANY FILE ──► Layer 1:  Universal Document Parser                  │
 │              Layer 2:  Smart OCR & Table/Image Extraction          │
 │              Layer 3:  Semantic Parent-Child Chunking              │
-│              Layer 4:  Batch Embedding (32/batch, GPU-accelerated) │
-│  QUERY   ──► Layer 13: Query Intelligence (Spelling, Expansion)    │
-│              Layer 5:  Hybrid Search (HNSW + BM25 + Trigram)       │
-│              Layer 6:  Cross-Encoder Reranking                     │
-│              Layer 7:  Max Marginal Relevance (MMR)                │
-│              Layer 8:  Contextual Window Expansion                 │
-│              Layer 9:  🛡️ Hallucination Guard (ZERO general)       │
-│              Layer 10: ✅ Extractive Fast-Path (< 5ms Exact)       │
-│              Layer 11: 👁️ Multi-modal Vision Embeddings (CLIP)     │
-│              Layer 12: 🕸️ Entity Knowledge Graph Boost (spaCy)     │
+│              Layer 4:  Contextual Chunk Headers                    │
+│              Layer 5:  Batch Embedding (32/batch, GPU-accelerated) │
+│  QUERY   ──► Layer 18: Semantic Cache (Cosine Similarity)          │
+│              Layer 17: Query Intelligence (Spelling, Expansion)    │
+│              Layer 16: HyDE (Hypothetical Document Embeddings)     │
+│              Layer 15: Corrective RAG (CRAG) Self-Healing Loop     │
+│              Layer 6:  Hybrid Search (HNSW + BM25 + Trigram)       │
+│              Layer 14: Sub-Query RRF Fusion                        │
+│              Layer 7:  Cross-Encoder Reranking                     │
+│              Layer 8:  Max Marginal Relevance (MMR)                │
+│              Layer 9:  Contextual Window Expansion                 │
+│              Layer 10: 🛡️ Hallucination Guard (ZERO general)       │
+│              Layer 11: ✅ Extractive Fast-Path (< 5ms Exact)       │
+│              Layer 12: 👁️ Multi-modal Vision Embeddings (CLIP)     │
+│              Layer 13: 🕸️ Entity Knowledge Graph Boost (spaCy)     │
 │                                                                    │
 └────┬──────────┬──────────┬──────────┬──────────────────────────────┘
      │          │          │          │
@@ -59,11 +64,11 @@ An advanced, **13-Layer Retrieval-Augmented Generation (RAG)** microservice with
 
 The system **NEVER gives general answers**. Every response is strictly grounded in your uploaded documents:
 
-- **Layer 9 (Hallucination Guard)**: Computes a grounding score BEFORE generating an answer. If no relevant content exists → refuses to answer instantly.
-- **Layer 10 (Extractive Fast-Path)**: Bypasses the LLM entirely and returns **exact document text** in < 5ms with 100% accuracy.
-- **Layer 11 (Offline Vision Embeddings)**: Embeds the actual raw pixels of diagrams and images using `clip-ViT-B-32`. You can search for "Robot Monitor" and it will match the physical image, completely bypassing OCR failures.
-- **Layer 12 (Offline Entity Knowledge Graph)**: Uses `spaCy` to pre-extract named entities (Products, Organizations) offline. If your query mentions a specific product, it guarantees that product's chunks are boosted to the top.
-- **Layer 13 (Query Intelligence)**: Fixes typos, expands synonyms, and decomposes complex questions automatically.
+- **Layer 10 (Hallucination Guard)**: Computes a grounding score BEFORE generating an answer. If no relevant content exists → refuses to answer instantly.
+- **Layer 11 (Extractive Fast-Path)**: Bypasses the LLM entirely and returns **exact document text** in < 5ms with 100% accuracy.
+- **Layer 12 (Offline Vision Embeddings)**: Embeds the actual raw pixels of diagrams and images using `clip-ViT-B-32`. You can search for "Robot Monitor" and it will match the physical image, completely bypassing OCR failures.
+- **Layer 13 (Offline Entity Knowledge Graph)**: Uses `spaCy` to pre-extract named entities (Products, Organizations) offline. If your query mentions a specific product, it guarantees that product's chunks are boosted to the top.
+- **Layer 14-18 (Beyond Human AI)**: Adds Contextual Headers, HyDE, CRAG, Sub-Query RRF Fusion, and Semantic Cache.
 
 ---
 
@@ -130,7 +135,7 @@ Auto-detects Apple Silicon MPS / NVIDIA CUDA for GPU acceleration.
 |--------|----------|-------------|
 | `POST` | `/api/v1/upload` | Upload any file (unlimited size) |
 | `POST` | `/api/v1/ingest` | Scan `/media` and ingest all files |
-| `POST` | `/api/v1/query` | Query knowledge base (13-layer pipeline) |
+| `POST` | `/api/v1/query` | Query knowledge base (18-layer pipeline) |
 | `GET` | `/api/v1/ingest/jobs` | List ingestion jobs + progress |
 | `GET` | `/api/v1/ingest/jobs/{id}` | Get specific job status |
 | `GET` | `/api/v1/formats` | List supported file formats |
@@ -207,12 +212,12 @@ i-tips-rag/
 │   ├── database.py                # SQLAlchemy models, pgvector, migrations
 │   └── rag/
 │       ├── parsers.py             # Layer 1-2: Universal document parser
-│       ├── ingestion.py           # Layer 3-4: Chunking + batch embedding
-│       ├── query_intelligence.py  # Layer 13: Spelling, expansion, decomposition
-│       ├── retrieval.py           # Layer 5: Hybrid search (HNSW + BM25)
-│       ├── reranker.py            # Layer 6: Cross-encoder reranking
-│       ├── context.py             # Layer 7-8: MMR + context expansion
-│       ├── grounding.py           # Layer 9-10: Hallucination guard + verification
+│       ├── ingestion.py           # Layer 3-5: Chunking, Contextual Headers, batch embedding
+│       ├── query_intelligence.py  # Layer 15,17: CRAG, Spelling, expansion, decomposition
+│       ├── retrieval.py           # Layer 6,14,16: Hybrid search, RRF Fusion, HyDE
+│       ├── reranker.py            # Layer 7: Cross-encoder reranking
+│       ├── context.py             # Layer 8-9: MMR + context expansion
+│       ├── grounding.py           # Layer 10-11: Hallucination guard + verification
 │       ├── model_loader.py        # Model management, device detection
 │       └── jobs.py                # Background worker, auto-scanner
 ├── .env.example                   # Environment template
