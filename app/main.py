@@ -121,7 +121,9 @@ SOURCE_LIMIT = int(os.getenv("RAG_SOURCE_LIMIT", "12"))
 # NO FILE SIZE LIMIT — enterprise production system
 MAX_UPLOAD_SIZE_BYTES = None  # Unlimited
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = os.getenv("REDIS_PORT", "6379")
+REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
 try:
     redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 except Exception as e:
