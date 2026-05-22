@@ -82,12 +82,25 @@ class IngestionJob(Base):
     file_type = Column(String, default="pdf", nullable=True)
     progress_pct = Column(Float, default=0.0, nullable=True)
 
+import sqlalchemy.exc
+
 def init_db():
     with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
-        conn.commit()
-    Base.metadata.create_all(bind=engine)
+        try:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print(f"[DB] Skipped extension creation: {e}")
+            
+    try:
+        Base.metadata.create_all(bind=engine)
+    except sqlalchemy.exc.IntegrityError as e:
+        print(f"[DB] IntegrityError during create_all (ignored, likely multi-worker race condition): {e}")
+    except sqlalchemy.exc.ProgrammingError as e:
+        print(f"[DB] ProgrammingError during create_all (ignored, likely multi-worker race condition): {e}")
+
     _run_schema_migrations()
 
 
