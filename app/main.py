@@ -123,7 +123,11 @@ MAX_UPLOAD_SIZE_BYTES = None  # Unlimited
 
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
-REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+if REDIS_PASSWORD:
+    REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+else:
+    REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
 try:
     redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 except Exception as e:
