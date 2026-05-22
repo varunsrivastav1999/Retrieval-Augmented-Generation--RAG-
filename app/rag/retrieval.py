@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.database import DocumentChunk
-from app.rag.model_loader import encode_text, get_embedding_model_id
+from app.rag.model_loader import encode_text, get_embedding_model_id, encode_image_text_query, extract_entities
 
 
 RRF_K = 60
@@ -26,6 +26,7 @@ def _candidate_from_chunk(chunk: DocumentChunk) -> dict:
             "type": metadata.get("type", "text"),
             "page_num": metadata.get("page_num"),
             "embedding_model": chunk.embedding_model,
+            "entities": metadata.get("entities", []),
         }
     }
 
@@ -40,6 +41,9 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
     print(f"[Retrieval] Executing hybrid search for tenant={tenant_id!r}, query={query!r}")
     embedding_model = get_embedding_model_id()
     query_vector = encode_text(query)
+    vision_vector = encode_image_text_query(query)
+    query_entities = extract_entities(query)
+    
     candidate_limit = max(top_k * 8, 100)
     candidates = {}
 
@@ -105,6 +109,35 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
             )
             candidate["hybrid_score"] += LEXICAL_WEIGHT * _rrf_score(rank)
             candidate["metadata"]["lexical_rank"] = rank
+
+    if vision_vector:
+        vision_distance = DocumentChunk.image_embedding.cosine_distance(vision_vector).label("vision_distance")
+        vision_rows = (
+            db.query(DocumentChunk, vision_distance)
+            .filter(
+                DocumentChunk.tenant_id == tenant_id,
+                DocumentChunk.image_embedding.is_not(None)
+            )
+            .order_by(vision_distance)
+            .limit(candidate_limit)
+            .all()
+        )
+        for rank, (chunk, distance) in enumerate(vision_rows, start=1):
+            candidate = candidates.setdefault(chunk.id, _candidate_from_chunk(chunk))
+            vision_score = 1.0 / (1.0 + float(distance or 0.0))
+            candidate["dense_score"] = max(candidate["dense_score"], vision_score)
+            candidate["hybrid_score"] += DENSE_WEIGHT * _rrf_score(rank)
+            candidate["metadata"]["vision_rank"] = rank
+
+    for candidate in candidates.values():
+        chunk_entities = candidate["metadata"].get("entities", [])
+        if chunk_entities and query_entities:
+            overlap = set(query_entities).intersection(set(chunk_entities))
+            if overlap:
+                # Offline Graph: Boost chunks that share named entities
+                boost = len(overlap) * 0.2
+                candidate["hybrid_score"] += boost
+                candidate["metadata"]["entity_overlap"] = list(overlap)
 
     ranked = sorted(
         candidates.values(),

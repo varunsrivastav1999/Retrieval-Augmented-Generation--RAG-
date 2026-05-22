@@ -5,7 +5,7 @@
 [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?logo=docker&logoColor=white)](https://www.docker.com/)
 [![Open Source](https://img.shields.io/badge/Open%20Source-%E2%9D%A4-red)](https://github.com/varunsrivastav1999/Retrieval-Augmented-Generation--RAG-)
 
-An advanced, **13-Layer Retrieval-Augmented Generation (RAG)** microservice with **zero hallucination**, **sub-5ms exact text extraction**, **universal file support (30+ formats)**, and **query intelligence**. 100% offline, enterprise-grade, production-ready.
+An advanced, **13-Layer Retrieval-Augmented Generation (RAG)** microservice with **zero hallucination**, **sub-5ms exact text extraction**, **universal file support (30+ formats)**, and **query intelligence**. Featuring **100% Offline Multi-modal Vision (CLIP)** and an **Offline Entity Knowledge Graph (spaCy)**. Enterprise-grade and production-ready.
 
 ---
 
@@ -13,28 +13,28 @@ An advanced, **13-Layer Retrieval-Augmented Generation (RAG)** microservice with
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│                  i-Tips RAG 13-Layer Engine v3.0                    │
+│                  i-Tips RAG 13-Layer Engine v3.0                   │
 │                                                                    │
 │  ANY FILE ──► Layer 1:  Universal Document Parser                  │
 │              Layer 2:  Smart OCR & Table/Image Extraction          │
-│              Layer 3:  Semantic Parent-Child Chunking               │
-│              Layer 4:  Batch Embedding (32/batch, GPU-accelerated)  │
+│              Layer 3:  Semantic Parent-Child Chunking              │
+│              Layer 4:  Batch Embedding (32/batch, GPU-accelerated) │
 │  QUERY   ──► Layer 13: Query Intelligence (Spelling, Expansion)    │
 │              Layer 5:  Hybrid Search (HNSW + BM25 + Trigram)       │
-│              Layer 6:  Cross-Encoder Reranking                      │
-│              Layer 7:  Max Marginal Relevance (MMR)                 │
-│              Layer 8:  Contextual Window Expansion                  │
-│              Layer 9:  🛡️ Hallucination Guard (ZERO general answers) │
-│              Layer 10: ✅ Extractive Fast-Path (< 5ms Exact Text)    │
-│              Layer 11: Semantic Query Cache (Redis SHA-256)         │
-│              Layer 12: Real-Time Token Streaming                    │
+│              Layer 6:  Cross-Encoder Reranking                     │
+│              Layer 7:  Max Marginal Relevance (MMR)                │
+│              Layer 8:  Contextual Window Expansion                 │
+│              Layer 9:  🛡️ Hallucination Guard (ZERO general)       │
+│              Layer 10: ✅ Extractive Fast-Path (< 5ms Exact)       │
+│              Layer 11: 👁️ Multi-modal Vision Embeddings (CLIP)     │
+│              Layer 12: 🕸️ Entity Knowledge Graph Boost (spaCy)     │
 │                                                                    │
 └────┬──────────┬──────────┬──────────┬──────────────────────────────┘
      │          │          │          │
 ┌────▼───┐ ┌───▼────┐ ┌──▼──────┐ ┌─▼─────────┐
-│Postgres│ │ Redis  │ │ Ollama  │ │ File Store │
-│pgvector│ │ Cache  │ │ LLM     │ │ /media     │
-└────────┘ └────────┘ └─────────┘ └────────────┘
+│Postgres│ │ Redis  │ │ Ollama  │ │ File Store│
+│pgvector│ │ Cache  │ │ LLM     │ │ /media    │
+└────────┘ └────────┘ └─────────┘ └───────────┘
 ```
 
 ---
@@ -61,6 +61,8 @@ The system **NEVER gives general answers**. Every response is strictly grounded 
 
 - **Layer 9 (Hallucination Guard)**: Computes a grounding score BEFORE generating an answer. If no relevant content exists → refuses to answer instantly.
 - **Layer 10 (Extractive Fast-Path)**: Bypasses the LLM entirely and returns **exact document text** in < 5ms with 100% accuracy.
+- **Layer 11 (Offline Vision Embeddings)**: Embeds the actual raw pixels of diagrams and images using `clip-ViT-B-32`. You can search for "Robot Monitor" and it will match the physical image, completely bypassing OCR failures.
+- **Layer 12 (Offline Entity Knowledge Graph)**: Uses `spaCy` to pre-extract named entities (Products, Organizations) offline. If your query mentions a specific product, it guarantees that product's chunks are boosted to the top.
 - **Layer 13 (Query Intelligence)**: Fixes typos, expands synonyms, and decomposes complex questions automatically.
 
 ---

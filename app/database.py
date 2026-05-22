@@ -58,6 +58,8 @@ class DocumentChunk(Base):
     file_type = Column(String, default="pdf", nullable=True, index=True)
     parent_chunk_id = Column(Integer, nullable=True, index=True)
     confidence_score = Column(Float, nullable=True)
+    # --- NEW columns for Multi-modal / Vision ---
+    image_embedding = Column(Vector(512), nullable=True)
 
 
 class IngestionJob(Base):
@@ -104,8 +106,22 @@ def _run_schema_migrations():
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding_model varchar"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS created_at timestamp"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS file_type varchar"))
-        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS parent_chunk_id integer"))
-        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS confidence_score float"))
+        _execute_best_effort(
+            conn,
+            "ALTER TABLE document_chunks ADD COLUMN parent_chunk_id INTEGER"
+        )
+        _execute_best_effort(
+            conn,
+            "ALTER TABLE document_chunks ADD COLUMN confidence_score FLOAT"
+        )
+        _execute_best_effort(
+            conn,
+            "ALTER TABLE document_chunks ADD COLUMN image_embedding vector(512)"
+        )
+        _execute_best_effort(
+            conn,
+            "CREATE INDEX ON document_chunks USING hnsw (image_embedding vector_cosine_ops)"
+        )
         conn.execute(text("ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS force_reindex boolean"))
         conn.execute(text("ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS file_type varchar"))
         conn.execute(text("ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS progress_pct float"))

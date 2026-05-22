@@ -87,6 +87,7 @@ class PageContent:
     text: str = ""
     tables: List[str] = field(default_factory=list)
     image_texts: List[str] = field(default_factory=list)
+    image_bytes: List[bytes] = field(default_factory=list)
     content_type: str = "text"  # text, table, image_ocr, subtitle
 
 
@@ -246,13 +247,14 @@ def _parse_pdf(file_path: str) -> ParseResult:
                 tables = _extract_tables_pdfplumber(file_path, page_num)
 
             # Image OCR extraction
-            image_texts = _extract_images_ocr(fitz_page, page_num)
+            image_texts, image_bytes = _extract_images_ocr(fitz_page, page_num)
 
             # Full-page OCR fallback for scanned PDFs
             if OCR_AVAILABLE and len(text.strip()) < 50:
                 try:
                     pix = fitz_page.get_pixmap(matrix=fitz.Matrix(3, 3))  # 3x for better OCR
-                    img = Image.open(io.BytesIO(pix.tobytes()))
+                    raw_bytes = pix.tobytes("png")
+                    img = Image.open(io.BytesIO(raw_bytes))
                     # Pre-process: convert to grayscale for better OCR
                     img = img.convert("L")
                     img = _auto_rotate_image(img)
@@ -261,6 +263,7 @@ def _parse_pdf(file_path: str) -> ParseResult:
                     full_ocr = _enrich_mcq_text(full_ocr)
                     if full_ocr and len(full_ocr) > 20:
                         image_texts.append(f"[FULL PAGE OCR - Page {page_num}]\n{full_ocr}")
+                        image_bytes.append(raw_bytes)
                 except Exception as e:
                     print(f"[Parser] Full-page OCR failed for page {page_num}: {e}")
 
@@ -269,6 +272,7 @@ def _parse_pdf(file_path: str) -> ParseResult:
                 text=text,
                 tables=tables,
                 image_texts=image_texts,
+                image_bytes=image_bytes,
                 content_type="text",
             ))
 
@@ -338,12 +342,13 @@ def _extract_tables_pdfplumber(pdf_path: str, page_num: int) -> list:
     return tables_text
 
 
-def _extract_images_ocr(fitz_page, page_num: int, min_size: int = 80) -> list:
-    """Extract text from images embedded in a PDF page via OCR."""
+def _extract_images_ocr(fitz_page, page_num: int, min_size: int = 80) -> tuple:
+    """Extract text from images embedded in a PDF page via OCR, and return raw bytes for Vision."""
     if not OCR_AVAILABLE:
-        return []
+        return [], []
 
     image_texts = []
+    image_bytes = []
     try:
         image_list = fitz_page.get_images(full=True)
         doc = fitz_page.parent
@@ -365,18 +370,19 @@ def _extract_images_ocr(fitz_page, page_num: int, min_size: int = 80) -> list:
                 img = img.convert("L")  # Grayscale
                 img = _auto_rotate_image(img)
                 ocr_text = pytesseract.image_to_string(img).strip()
-                ocr_text = _clean_ocr_text(ocr_text)
                 ocr_text = _enrich_mcq_text(ocr_text)
 
                 if ocr_text and len(ocr_text) > 15:
                     image_texts.append(
                         f"[IMAGE OCR - Page {page_num}, Image {img_idx + 1}]\n{ocr_text}"
                     )
+                # Always save image bytes for Multi-modal CLIP embeddings
+                image_bytes.append(base_image["image"])
             except Exception:
                 continue
     except Exception as e:
         print(f"[Parser] Image OCR warning for page {page_num}: {e}")
-    return image_texts
+    return image_texts, image_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -994,6 +1000,12 @@ def _parse_url(file_path: str) -> ParseResult:
 
         if not url:
             return ParseResult(success=False, error="No valid URL found in file")
+
+        if os.getenv("RAG_HF_OFFLINE", "false").lower() in {"1", "true", "yes", "on"}:
+            return ParseResult(
+                pages=[PageContent(page_num=1, text=f"[WEB URL]\n{url}\n\n(Offline mode: content not scraped)")],
+                metadata={"format": "url", "page_count": 1, "source": url},
+            )
 
         # Scrape content offline
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})

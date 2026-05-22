@@ -27,8 +27,10 @@ from sqlalchemy.exc import IntegrityError
 
 from app.database import DocumentChunk, SessionLocal
 from app.rag.jobs import complete_ingestion_job, fail_ingestion_job, update_ingestion_job
-from app.rag.model_loader import encode_text, encode_texts, get_embedding_model_id
+from app.rag.model_loader import encode_text, encode_texts, get_embedding_model_id, extract_entities, encode_image
 from app.rag.parsers import ParseResult, get_file_type, is_supported_file, parse_file
+from PIL import Image
+import io
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +257,7 @@ def ingest_file(
                     "file_type": file_type,
                     "is_parent": chunk_info.get("is_parent", False),
                     "parent_idx": chunk_info.get("parent_idx"),
+                    "entities": extract_entities(chunk_text),
                 })
                 section += 1
 
@@ -275,6 +278,38 @@ def ingest_file(
                             chunks_inserted=chunks_inserted,
                             progress_pct=round(progress, 1),
                         )
+
+            # Process any raw image bytes for Vision embeddings
+            if hasattr(page, "image_bytes") and page.image_bytes:
+                for img_bytes in page.image_bytes:
+                    try:
+                        img = Image.open(io.BytesIO(img_bytes))
+                        vector = encode_image(img)
+                        if vector:
+                            img_hash = hash_chunk(str(img_bytes[:100]))
+                            img_chunk = DocumentChunk(
+                                tenant_id=tenant_id,
+                                doc_id=file_path,
+                                chunk_hash=img_hash,
+                                file_type=file_type,
+                                embedding_model=embedding_model,
+                                image_embedding=vector,
+                                doc_metadata={
+                                    "page_num": page.page_num, 
+                                    "type": "image",
+                                    "source": file_path,
+                                    "embedding_model": embedding_model,
+                                }
+                            )
+                            db.add(img_chunk)
+                            db.commit()
+                            chunks_inserted += 1
+                            chunks_total += 1
+                    except IntegrityError:
+                        db.rollback()
+                    except Exception as e:
+                        db.rollback()
+                        print(f"[Ingest] Vision embedding failed: {e}")
 
         # Process remaining chunks
         if pending_chunks:
@@ -334,6 +369,7 @@ def _process_chunk_batch(
                 "source": doc_id,
                 "file_type": file_type,
                 "is_parent": c.get("is_parent", False),
+                "entities": c.get("entities", []),
             },
             embedding_model=embedding_model,
             embedding=vectors[i],
@@ -363,6 +399,7 @@ def _process_chunk_batch(
                         "source": doc_id,
                         "file_type": file_type,
                         "is_parent": c.get("is_parent", False),
+                        "entities": c.get("entities", []),
                     },
                     embedding_model=embedding_model,
                     embedding=vectors[i],

@@ -13,6 +13,10 @@ EMBEDDING_MODEL = os.getenv(
     "RAG_EMBEDDING_MODEL",
     "sentence-transformers/all-MiniLM-L6-v2",
 )
+CLIP_MODEL = os.getenv(
+    "RAG_CLIP_MODEL",
+    "sentence-transformers/clip-ViT-B-32"
+)
 RERANKER_MODEL = os.getenv(
     "RAG_RERANKER_MODEL",
     "cross-encoder/ms-marco-MiniLM-L-6-v2",
@@ -367,3 +371,55 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("  PRE-LOADING COMPLETE. YOU CAN NOW START IN OFFLINE MODE.")
     print("="*60 + "\n")
+
+# ---------------------------------------------------------------------------
+# Offline Vision (CLIP) & Offline Graph (spaCy) Additions
+# ---------------------------------------------------------------------------
+@lru_cache(maxsize=1)
+def get_clip_model() -> Any:
+    try:
+        from sentence_transformers import SentenceTransformer
+        print(f"[RAG Vision] Loading CLIP model: {CLIP_MODEL}")
+        return SentenceTransformer(CLIP_MODEL, **_model_kwargs())
+    except Exception as exc:
+        print(f"[RAG Vision] CLIP Model failed to load: {exc}")
+        return None
+
+def encode_image(image) -> Optional[List[float]]:
+    """Encode a PIL Image using CLIP for multi-modal vector search."""
+    model = get_clip_model()
+    if model:
+        return model.encode(image).tolist()
+    return None
+
+def encode_image_text_query(text: str) -> Optional[List[float]]:
+    """Encode a user's text query using CLIP to search against image vectors."""
+    model = get_clip_model()
+    if model:
+        return model.encode(text).tolist()
+    return None
+
+@lru_cache(maxsize=1)
+def get_spacy_model() -> Any:
+    try:
+        import spacy
+        print("[RAG Graph] Loading offline spaCy model (en_core_web_sm)")
+        return spacy.load("en_core_web_sm")
+    except Exception as exc:
+        print(f"[RAG Graph] spaCy Model failed to load: {exc}")
+        return None
+
+def extract_entities(text: str) -> List[str]:
+    """Offline Knowledge Graph: Extract entities like Products/Organizations."""
+    nlp = get_spacy_model()
+    if not nlp or not text:
+        return []
+    try:
+        doc = nlp(text[:100000]) # Limit chunk to 100k chars for fast NER
+        entities = []
+        for ent in doc.ents:
+            if ent.label_ in {"PERSON", "ORG", "GPE", "PRODUCT", "LOC", "FAC"}:
+                entities.append(ent.text)
+        return list(set(entities))
+    except Exception:
+        return []
