@@ -56,7 +56,7 @@ def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
     expanded_ids = set()
     
     for i, chunk in enumerate(mmr_filtered):
-        if db and i < 3: # Only expand top 3 to avoid context stuffing
+        if False: # Disabled for ultra-low latency to prevent massive context dumps
             metadata = chunk.get("metadata", {})
             doc_id = metadata.get("source")
             section = metadata.get("section")
