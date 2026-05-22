@@ -37,18 +37,21 @@
 
 ---
 
-## 📁 Supported File Formats
+## 📁 Universal File Support (Omni-Ingestion)
 
 | Category | Extensions | Parser | Notes |
 |----------|-----------|--------|-------|
-| **Documents** | `.pdf` | PyMuPDF + pdfplumber | Text, tables, images (OCR), full-page OCR fallback |
-| **Word** | `.docx`, `.doc` | python-docx | Headings, paragraphs, tables, embedded images |
+| **Documents** | `.pdf` | PyMuPDF + pdfplumber | Text, tables, images (OCR), **Anti-Watermark**, MCQ Ticks |
+| **Word/PPT** | `.docx`, `.doc`, `.pptx` | python-docx / pptx | Headings, paragraphs, tables, images, speaker notes |
 | **Excel** | `.xlsx`, `.xls`, `.csv` | openpyxl / csv | All sheets → markdown tables, auto-pagination |
-| **PowerPoint** | `.pptx`, `.ppt` | python-pptx | Slides, speaker notes, tables |
-| **Text** | `.txt`, `.md`, `.log`, `.json`, `.xml` | Python stdlib | Auto-encoding detection via chardet |
-| **Images** | `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tiff`, `.gif`, `.webp` | Pillow + pytesseract | Grayscale OCR with pre-processing |
-| **Video** | `.mp4`, `.avi`, `.mkv`, `.mov`, `.wmv`, `.flv` | ffmpeg | Embedded subtitle extraction |
-| **Subtitles** | `.srt`, `.ass`, `.ssa`, `.vtt` | pysubs2 | Clean text extraction, HTML/tag removal |
+| **Code** | `.py`, `.js`, `.java`, etc. | Universal | **Strict Indentation Preservation**, markdown code blocks |
+| **Email** | `.eml`, `.msg` | `email` module | Extracts Subject, From, To, Date, and pure text body |
+| **Web Links**| `.url`, `.webloc` | `urllib` + `bs4` | **100% Offline Auto-Scraper** (Removes ads/nav, extracts article) |
+| **Images** | `.png`, `.jpg`, `.jpeg`, etc. | Pillow + pytesseract | Auto-Rotates flipped scans (OSD), full OCR |
+| **Video** | `.mp4`, `.avi`, `.mkv`, etc. | ffmpeg | Embedded subtitle extraction |
+| **Subtitles**| `.srt`, `.ass`, `.vtt` | pysubs2 | Clean text extraction, HTML/tag removal |
+| **Archives** | `.zip`, `.tar.gz`, `.rar` | `zipfile` | **Auto-Extracts** to hidden dir and recursive multi-ingest |
+| **Text** | `.txt`, `.md`, `.json`, etc. | Python stdlib | Auto-encoding detection via chardet |
 
 ---
 
@@ -178,10 +181,12 @@ volumes:
 - **Child chunks**: 600 chars — precise retrieval matching
 - Each child references its parent for contextual expansion
 
-### Batch Processing
-- Embedding batch size: 32 (up from 16)
-- File upload streaming: 4MB chunks (up from 1MB)
-- No file size limit
+### Omni-Ingestion Capabilities
+- **Anti-Watermark**: Dynamically detects and deletes repeating corporate footers/headers across 3+ PDF pages.
+- **Archive Extraction**: Auto-unzips `.zip`/`.tar.gz` and queues all internal files.
+- **Code & Emails**: Explicitly preserves indentation and structure for complex queries.
+- **Web Scraping**: Downloading internet `.url` shortcuts into offline markdown text instantly.
+- **PDF Flip & MCQ Ticks**: Auto-rotates inverted pages using OSD and explicitly injects `[CORRECT ANSWER]` tags next to unicode checkmarks.
 
 ---
 

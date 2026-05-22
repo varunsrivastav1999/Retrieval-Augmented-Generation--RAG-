@@ -12,6 +12,9 @@ import io
 import os
 import re
 import subprocess
+import email
+from email import policy
+import urllib.request
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -67,6 +70,12 @@ try:
 except ImportError:
     CHARDET_AVAILABLE = False
 
+try:
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+except ImportError:
+    BS4_AVAILABLE = False
+
 
 # ---------------------------------------------------------------------------
 # Data Models
@@ -93,17 +102,19 @@ class ParseResult:
 # ---------------------------------------------------------------------------
 # Supported Extensions
 # ---------------------------------------------------------------------------
-SUPPORTED_EXTENSIONS = {
-    ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv",
-    ".pptx", ".ppt", ".txt", ".text", ".md", ".log", ".json", ".xml",
-    ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".gif", ".webp",
-    ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".srt", ".ass", ".ssa", ".vtt",
-}
-
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".gif", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv"}
 SUBTITLE_EXTENSIONS = {".srt", ".ass", ".ssa", ".vtt"}
 TEXT_EXTENSIONS = {".txt", ".text", ".md", ".log", ".json", ".xml"}
+CODE_EXTENSIONS = {".py", ".js", ".java", ".cpp", ".c", ".h", ".cs", ".go", ".rs", ".rb", ".php", ".sql", ".html", ".css", ".sh"}
+EMAIL_EXTENSIONS = {".eml", ".msg"}
+URL_EXTENSIONS = {".url", ".webloc"}
+ARCHIVE_EXTENSIONS = {".zip", ".tar", ".gz", ".tgz", ".rar"}
+
+SUPPORTED_EXTENSIONS = {
+    ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv",
+    ".pptx", ".ppt"
+} | IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | SUBTITLE_EXTENSIONS | TEXT_EXTENSIONS | CODE_EXTENSIONS | EMAIL_EXTENSIONS | URL_EXTENSIONS | ARCHIVE_EXTENSIONS
 
 
 def is_supported_file(file_path: str) -> bool:
@@ -127,6 +138,14 @@ def get_file_type(file_path: str) -> str:
         return "csv"
     elif ext in TEXT_EXTENSIONS:
         return "text"
+    elif ext in CODE_EXTENSIONS:
+        return "code"
+    elif ext in EMAIL_EXTENSIONS:
+        return "email"
+    elif ext in URL_EXTENSIONS:
+        return "url"
+    elif ext in ARCHIVE_EXTENSIONS:
+        return "archive"
     elif ext in IMAGE_EXTENSIONS:
         return "image"
     elif ext in VIDEO_EXTENSIONS:
@@ -222,6 +241,24 @@ def _parse_pdf(file_path: str) -> ParseResult:
                 image_texts=image_texts,
                 content_type="text",
             ))
+
+        # Anti-Watermark & Repetitive Header/Footer Stripping
+        if len(pages) >= 3:
+            # Check for common headers (first line exact match across first 3 pages)
+            h_lines = [p.text.strip().split('\n')[0] for p in pages[:3] if p.text.strip()]
+            if len(h_lines) == 3 and len(set(h_lines)) == 1 and len(h_lines[0]) > 5:
+                common_header = h_lines[0]
+                for p in pages:
+                    if p.text.strip().startswith(common_header):
+                        p.text = p.text.strip()[len(common_header):].strip()
+
+            # Check for common footers (last line exact match across first 3 pages)
+            f_lines = [p.text.strip().split('\n')[-1] for p in pages[:3] if p.text.strip()]
+            if len(f_lines) == 3 and len(set(f_lines)) == 1 and len(f_lines[0]) > 5:
+                common_footer = f_lines[0]
+                for p in pages:
+                    if p.text.strip().endswith(common_footer):
+                        p.text = p.text.strip()[:-len(common_footer)].strip()
 
         return ParseResult(
             pages=pages,
@@ -812,6 +849,149 @@ def _parse_subtitle_file(file_path: str) -> ParseResult:
 
 
 # ---------------------------------------------------------------------------
+# Code Parser
+# ---------------------------------------------------------------------------
+def _parse_code(file_path: str) -> ParseResult:
+    """Parse code files and explicitly preserve formatting."""
+    try:
+        encoding = "utf-8"
+        if CHARDET_AVAILABLE:
+            with open(file_path, "rb") as f:
+                raw = f.read(10000)
+                detected = chardet.detect(raw)
+                encoding = detected.get("encoding", "utf-8") or "utf-8"
+
+        with open(file_path, "r", encoding=encoding, errors="replace") as f:
+            content = f.read()
+
+        if not content.strip():
+            return ParseResult(
+                pages=[PageContent(page_num=1, text="(Empty code file)")],
+                metadata={"format": "code", "page_count": 1, "source": file_path},
+            )
+
+        ext = os.path.splitext(file_path)[1][1:]
+        formatted_code = f"[CODE FILE: {os.path.basename(file_path)}]\n```{ext}\n{content}\n```"
+
+        return ParseResult(
+            pages=[PageContent(
+                page_num=1,
+                text=formatted_code,
+            )],
+            metadata={"format": "code", "page_count": 1, "source": file_path},
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"Code parse error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Email Parser
+# ---------------------------------------------------------------------------
+def _parse_email(file_path: str) -> ParseResult:
+    """Parse .eml / .msg files into structured text."""
+    try:
+        with open(file_path, "rb") as f:
+            msg = email.message_from_binary_file(f, policy=policy.default)
+
+        subject = msg.get("subject", "(No Subject)")
+        sender = msg.get("from", "(Unknown Sender)")
+        date = msg.get("date", "(Unknown Date)")
+        to = msg.get("to", "(Unknown Recipient)")
+
+        body = ""
+        # Extract body
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_type() == "text/plain":
+                    body += part.get_content() + "\n"
+        else:
+            body = msg.get_content()
+
+        if not body.strip() and msg.is_multipart():
+            # Fallback to html if no plain text
+            for part in msg.walk():
+                if part.get_content_type() == "text/html":
+                    html = part.get_content()
+                    if BS4_AVAILABLE:
+                        soup = BeautifulSoup(html, "html.parser")
+                        body += soup.get_text() + "\n"
+                    else:
+                        body += re.sub(r'<[^>]+>', '', html) + "\n"
+
+        email_text = (
+            f"[EMAIL MESSAGE]\n"
+            f"Subject: {subject}\n"
+            f"From: {sender}\n"
+            f"To: {to}\n"
+            f"Date: {date}\n"
+            f"---\n{body.strip()}"
+        )
+
+        return ParseResult(
+            pages=[PageContent(
+                page_num=1,
+                text=email_text,
+            )],
+            metadata={"format": "email", "page_count": 1, "source": file_path},
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"Email parse error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# URL Link Parser
+# ---------------------------------------------------------------------------
+def _parse_url(file_path: str) -> ParseResult:
+    """Parse .url or .webloc and scrape offline content."""
+    try:
+        url = None
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+            # Find HTTP links
+            match = re.search(r'(https?://[^\s]+)', content)
+            if match:
+                url = match.group(1)
+                # Cleanup common trailing characters
+                url = url.rstrip('"]').rstrip('</string>')
+
+        if not url:
+            return ParseResult(success=False, error="No valid URL found in file")
+
+        # Scrape content offline
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            html = response.read().decode('utf-8', errors='replace')
+
+        title = "Web Page"
+        body_text = html
+        if BS4_AVAILABLE:
+            soup = BeautifulSoup(html, "html.parser")
+            if soup.title:
+                title = soup.title.string
+            # Remove scripts and styles
+            for script in soup(["script", "style", "nav", "footer", "header"]):
+                script.decompose()
+            body_text = soup.get_text(separator="\n", strip=True)
+
+        web_content = f"[WEB PAGE]\nTitle: {title}\nURL: {url}\n\n{body_text}"
+        
+        # Paginate very long web pages
+        pages = []
+        lines = web_content.split("\n")
+        page_size = 100
+        for i in range(0, max(len(lines), 1), page_size):
+            chunk = lines[i:i + page_size]
+            pages.append(PageContent(page_num=(i//page_size)+1, text="\n".join(chunk)))
+
+        return ParseResult(
+            pages=pages,
+            metadata={"format": "url", "page_count": len(pages), "source": url},
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"URL scrape error: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Main Entry Point — Universal Parser
 # ---------------------------------------------------------------------------
 PARSER_REGISTRY = {
@@ -852,6 +1032,18 @@ PARSER_REGISTRY = {
     ".ssa": _parse_subtitle_file,
     ".vtt": _parse_subtitle_file,
 }
+
+# Add code extensions dynamically
+for ext in CODE_EXTENSIONS:
+    PARSER_REGISTRY[ext] = _parse_code
+
+# Add email extensions dynamically
+for ext in EMAIL_EXTENSIONS:
+    PARSER_REGISTRY[ext] = _parse_email
+
+# Add URL extensions dynamically
+for ext in URL_EXTENSIONS:
+    PARSER_REGISTRY[ext] = _parse_url
 
 
 def parse_file(file_path: str) -> ParseResult:

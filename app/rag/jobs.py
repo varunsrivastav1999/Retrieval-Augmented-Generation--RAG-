@@ -14,6 +14,9 @@ import os
 import threading
 import time
 import uuid
+import shutil
+import zipfile
+import tarfile
 from glob import glob
 from typing import Dict, List, Optional
 
@@ -190,6 +193,34 @@ def ingestion_worker_loop(stop_event: threading.Event, poll_seconds: float = 5.0
             continue
 
         try:
+            # Check if this is an archive
+            if job.get("file_type") == "archive":
+                source_path = job["source_path"]
+                tenant_id = job["tenant_id"]
+                job_id = job["id"]
+                
+                extract_dir = os.path.join(os.path.dirname(source_path), f"extracted_{job_id}")
+                os.makedirs(extract_dir, exist_ok=True)
+                
+                # Unpack archive
+                if source_path.endswith(".zip"):
+                    with zipfile.ZipFile(source_path, 'r') as zip_ref:
+                        zip_ref.extractall(extract_dir)
+                elif source_path.endswith((".tar", ".tar.gz", ".tgz")):
+                    with tarfile.open(source_path, 'r:*') as tar_ref:
+                        tar_ref.extractall(extract_dir)
+                
+                # Find all supported files inside
+                extracted_files = find_all_supported_files(extract_dir, include_scan=True)
+                
+                # Create jobs for them
+                if extracted_files:
+                    create_ingestion_jobs(tenant_id, extracted_files, force_reindex=bool(job.get("force_reindex", False)))
+                
+                # Complete the archive job itself
+                complete_ingestion_job(job_id, chunks_total=len(extracted_files), chunks_inserted=len(extracted_files))
+                continue
+
             ingest_file(
                 job["source_path"],
                 tenant_id=job["tenant_id"],
