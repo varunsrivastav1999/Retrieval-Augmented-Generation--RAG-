@@ -1505,10 +1505,9 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     
     context_texts = []
     for chunk in final_context:
-        citation = chunk.get('citation', '[Unknown Source]')
         text = chunk.get('text', '')
-        context_texts.append(f"From {citation}:\n{text}")
-    context_text = "\n\n".join(context_texts)
+        context_texts.append(text)
+    context_text = "\n\n---\n\n".join(context_texts)
     
     prompt = build_strict_grounding_prompt(search_query, context_text, False)
     
@@ -1532,7 +1531,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 prefixes = [
                     "based on the provided context,", "based on the provided manual,", 
                     "based on the context,", "according to the document,", "according to the documents,",
-                    "the context states that", "from the provided context,"
+                    "the context states that", "from the provided context,",
+                    "according to the extracted data", "according to the database records"
                 ]
                 for p in prefixes:
                     if lower.startswith(p):
