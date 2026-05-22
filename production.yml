@@ -11,6 +11,7 @@ services:
     container_name: itips_rag_prod
     depends_on:
       - ollama
+      - redis
     volumes:
       - .:/app:z
       - /your/new/absolute/path/to/external_media:/media
@@ -64,3 +65,10 @@ services:
     volumes:
       - .:/app:ro
     command: -c "sleep 10 && (ollama pull llama3 || echo 'Pull skipped') && ollama create itips-brain -f /app/Modelfile && echo 'itips-brain ready'"
+
+  redis:
+    image: redis:7-alpine
+    container_name: itips_redis_prod
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass ${REDIS_PASSWORD:-mysecurepassword}

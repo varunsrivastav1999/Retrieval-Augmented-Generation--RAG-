@@ -1,5 +1,5 @@
-# REDIS (Native System - No Docker)
+# REDIS (Docker Native)
 # ------------------------------------------------------------------------------
-REDIS_HOST=172.17.0.1
+REDIS_HOST=redis
 REDIS_PORT=6379
-REDIS_PASSWORD=
+REDIS_PASSWORD=mysecurepassword
