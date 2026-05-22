@@ -5,6 +5,7 @@ from sqlalchemy import (
     Column,
     Boolean,
     DateTime,
+    Float,
     Integer,
     JSON,
     String,
@@ -23,7 +24,7 @@ LEGACY_EMBEDDING_MODEL = os.getenv(
     "sentence-transformers/all-MiniLM-L6-v2",
 )
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL, pool_size=10, max_overflow=20, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -53,6 +54,10 @@ class DocumentChunk(Base):
     embedding_model = Column(String, default=LEGACY_EMBEDDING_MODEL, nullable=False, index=True)
     embedding = Column(Vector(EMBEDDING_DIM))
     created_at = Column(DateTime, default=utcnow, nullable=False)
+    # --- NEW columns for 12-layer architecture ---
+    file_type = Column(String, default="pdf", nullable=True, index=True)
+    parent_chunk_id = Column(Integer, nullable=True, index=True)
+    confidence_score = Column(Float, nullable=True)
 
 
 class IngestionJob(Base):
@@ -71,6 +76,9 @@ class IngestionJob(Base):
     created_at = Column(DateTime, default=utcnow, nullable=False)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
     completed_at = Column(DateTime)
+    # --- NEW columns ---
+    file_type = Column(String, default="pdf", nullable=True)
+    progress_pct = Column(Float, default=0.0, nullable=True)
 
 def init_db():
     with engine.connect() as conn:
@@ -95,7 +103,12 @@ def _run_schema_migrations():
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS tenant_id varchar"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding_model varchar"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS created_at timestamp"))
+        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS file_type varchar"))
+        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS parent_chunk_id integer"))
+        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS confidence_score float"))
         conn.execute(text("ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS force_reindex boolean"))
+        conn.execute(text("ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS file_type varchar"))
+        conn.execute(text("ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS progress_pct float"))
         conn.execute(text("UPDATE ingestion_jobs SET force_reindex = false WHERE force_reindex IS NULL"))
         conn.execute(text("ALTER TABLE ingestion_jobs ALTER COLUMN force_reindex SET NOT NULL"))
         conn.execute(text("UPDATE document_chunks SET tenant_id = 'default' WHERE tenant_id IS NULL"))
@@ -108,6 +121,7 @@ def _run_schema_migrations():
             {"model": LEGACY_EMBEDDING_MODEL},
         )
         conn.execute(text("UPDATE document_chunks SET created_at = now() WHERE created_at IS NULL"))
+        conn.execute(text("UPDATE document_chunks SET file_type = 'pdf' WHERE file_type IS NULL"))
         conn.execute(text("ALTER TABLE document_chunks ALTER COLUMN tenant_id SET NOT NULL"))
         conn.execute(text("ALTER TABLE document_chunks ALTER COLUMN embedding_model SET NOT NULL"))
         conn.execute(text("ALTER TABLE document_chunks ALTER COLUMN created_at SET NOT NULL"))
@@ -129,6 +143,18 @@ def _run_schema_migrations():
             text(
                 "CREATE INDEX IF NOT EXISTS ix_document_chunks_tenant_model "
                 "ON document_chunks (tenant_id, embedding_model)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_document_chunks_file_type "
+                "ON document_chunks (file_type)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_document_chunks_parent_chunk "
+                "ON document_chunks (parent_chunk_id)"
             )
         )
         conn.execute(

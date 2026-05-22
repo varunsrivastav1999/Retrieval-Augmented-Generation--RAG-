@@ -1,0 +1,843 @@
+"""
+=============================================================================
+ i-Tips RAG: Layer 1 — Universal Document Parser
+=============================================================================
+ Supports: PDF, DOCX, XLSX, PPTX, CSV, TXT, Images, Video (subtitles)
+ All parsing is 100% offline — no API calls, no cloud services.
+=============================================================================
+"""
+
+import csv
+import io
+import os
+import re
+import subprocess
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+# ---------------------------------------------------------------------------
+# Optional imports — each format gracefully degrades if library missing
+# ---------------------------------------------------------------------------
+try:
+    import fitz  # PyMuPDF
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+
+try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    PDFPLUMBER_AVAILABLE = False
+
+try:
+    from docx import Document as DocxDocument
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
+try:
+    from openpyxl import load_workbook
+    XLSX_AVAILABLE = True
+except ImportError:
+    XLSX_AVAILABLE = False
+
+try:
+    from pptx import Presentation
+    PPTX_AVAILABLE = True
+except ImportError:
+    PPTX_AVAILABLE = False
+
+try:
+    from PIL import Image
+    import pytesseract
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+
+try:
+    import pysubs2
+    SUBS_AVAILABLE = True
+except ImportError:
+    SUBS_AVAILABLE = False
+
+try:
+    import chardet
+    CHARDET_AVAILABLE = True
+except ImportError:
+    CHARDET_AVAILABLE = False
+
+
+# ---------------------------------------------------------------------------
+# Data Models
+# ---------------------------------------------------------------------------
+@dataclass
+class PageContent:
+    """Content extracted from a single page / sheet / slide."""
+    page_num: int
+    text: str = ""
+    tables: List[str] = field(default_factory=list)
+    image_texts: List[str] = field(default_factory=list)
+    content_type: str = "text"  # text, table, image_ocr, subtitle
+
+
+@dataclass
+class ParseResult:
+    """Complete result from parsing a file."""
+    pages: List[PageContent] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
+    success: bool = True
+    error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Supported Extensions
+# ---------------------------------------------------------------------------
+SUPPORTED_EXTENSIONS = {
+    ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv",
+    ".pptx", ".ppt", ".txt", ".text", ".md", ".log", ".json", ".xml",
+    ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".gif", ".webp",
+    ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".srt", ".ass", ".ssa", ".vtt",
+}
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".gif", ".webp"}
+VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv"}
+SUBTITLE_EXTENSIONS = {".srt", ".ass", ".ssa", ".vtt"}
+TEXT_EXTENSIONS = {".txt", ".text", ".md", ".log", ".json", ".xml"}
+
+
+def is_supported_file(file_path: str) -> bool:
+    """Check if a file extension is supported."""
+    ext = os.path.splitext(file_path)[1].lower()
+    return ext in SUPPORTED_EXTENSIONS
+
+
+def get_file_type(file_path: str) -> str:
+    """Return a human-readable file type category."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".pdf":
+        return "pdf"
+    elif ext in {".docx", ".doc"}:
+        return "docx"
+    elif ext in {".xlsx", ".xls"}:
+        return "xlsx"
+    elif ext in {".pptx", ".ppt"}:
+        return "pptx"
+    elif ext == ".csv":
+        return "csv"
+    elif ext in TEXT_EXTENSIONS:
+        return "text"
+    elif ext in IMAGE_EXTENSIONS:
+        return "image"
+    elif ext in VIDEO_EXTENSIONS:
+        return "video"
+    elif ext in SUBTITLE_EXTENSIONS:
+        return "subtitle"
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# PDF Parser
+# ---------------------------------------------------------------------------
+def _parse_pdf(file_path: str) -> ParseResult:
+    """Extract text, tables, and images from PDF."""
+    if not PDF_AVAILABLE:
+        return ParseResult(success=False, error="PyMuPDF not installed")
+
+    pages = []
+    doc = None
+    try:
+        doc = fitz.open(file_path)
+        for page_num_idx, fitz_page in enumerate(doc):
+            page_num = page_num_idx + 1
+            # Text extraction
+            text = fitz_page.get_text() or ""
+
+            # Table extraction via pdfplumber
+            tables = []
+            if PDFPLUMBER_AVAILABLE:
+                tables = _extract_tables_pdfplumber(file_path, page_num)
+
+            # Image OCR extraction
+            image_texts = _extract_images_ocr(fitz_page, page_num)
+
+            # Full-page OCR fallback for scanned PDFs
+            if OCR_AVAILABLE and len(text.strip()) < 50:
+                try:
+                    pix = fitz_page.get_pixmap(matrix=fitz.Matrix(3, 3))  # 3x for better OCR
+                    img = Image.open(io.BytesIO(pix.tobytes()))
+                    # Pre-process: convert to grayscale for better OCR
+                    img = img.convert("L")
+                    full_ocr = pytesseract.image_to_string(img).strip()
+                    if full_ocr and len(full_ocr) > 20:
+                        image_texts.append(f"[FULL PAGE OCR - Page {page_num}]\n{full_ocr}")
+                except Exception as e:
+                    print(f"[Parser] Full-page OCR failed for page {page_num}: {e}")
+
+            pages.append(PageContent(
+                page_num=page_num,
+                text=text,
+                tables=tables,
+                image_texts=image_texts,
+                content_type="text",
+            ))
+
+        return ParseResult(
+            pages=pages,
+            metadata={
+                "format": "pdf",
+                "page_count": len(doc),
+                "source": file_path,
+            },
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"PDF parse error: {e}")
+    finally:
+        if doc is not None:
+            doc.close()
+
+
+def _extract_tables_pdfplumber(pdf_path: str, page_num: int) -> list:
+    """Extract structured tables from a PDF page using pdfplumber."""
+    tables_text = []
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            if page_num - 1 >= len(pdf.pages):
+                return []
+            page = pdf.pages[page_num - 1]
+            tables = page.extract_tables()
+            for table_idx, table in enumerate(tables):
+                if not table:
+                    continue
+                rows = []
+                for row in table:
+                    cleaned = [str(cell).strip() if cell else "" for cell in row]
+                    rows.append(" | ".join(cleaned))
+                if rows:
+                    header = rows[0]
+                    separator = " | ".join(["---"] * len(table[0])) if table[0] else "---"
+                    table_text = f"[TABLE {table_idx + 1} - Page {page_num}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
+                    tables_text.append(table_text.strip())
+    except Exception as e:
+        print(f"[Parser] Table extraction warning for page {page_num}: {e}")
+    return tables_text
+
+
+def _extract_images_ocr(fitz_page, page_num: int, min_size: int = 80) -> list:
+    """Extract text from images embedded in a PDF page via OCR."""
+    if not OCR_AVAILABLE:
+        return []
+
+    image_texts = []
+    try:
+        image_list = fitz_page.get_images(full=True)
+        doc = fitz_page.parent
+
+        for img_idx, img_info in enumerate(image_list):
+            xref = img_info[0]
+            try:
+                base_image = doc.extract_image(xref)
+                if not base_image:
+                    continue
+
+                width = base_image.get("width", 0)
+                height = base_image.get("height", 0)
+                if width < min_size or height < min_size:
+                    continue
+
+                img = Image.open(io.BytesIO(base_image["image"]))
+                # Pre-process for better OCR
+                img = img.convert("L")  # Grayscale
+                ocr_text = pytesseract.image_to_string(img).strip()
+
+                if ocr_text and len(ocr_text) > 15:
+                    image_texts.append(
+                        f"[IMAGE OCR - Page {page_num}, Image {img_idx + 1}]\n{ocr_text}"
+                    )
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[Parser] Image OCR warning for page {page_num}: {e}")
+    return image_texts
+
+
+# ---------------------------------------------------------------------------
+# DOCX Parser
+# ---------------------------------------------------------------------------
+def _parse_docx(file_path: str) -> ParseResult:
+    """Extract text and tables from DOCX files."""
+    if not DOCX_AVAILABLE:
+        return ParseResult(success=False, error="python-docx not installed")
+
+    try:
+        doc = DocxDocument(file_path)
+        pages = []
+        current_text_parts = []
+        current_tables = []
+        current_image_texts = []
+        page_num = 1
+
+        # Extract paragraphs
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if text:
+                # Detect page breaks (approximate)
+                if para.paragraph_format.page_break_before:
+                    if current_text_parts or current_tables:
+                        pages.append(PageContent(
+                            page_num=page_num,
+                            text="\n".join(current_text_parts),
+                            tables=current_tables,
+                            image_texts=current_image_texts,
+                        ))
+                        page_num += 1
+                        current_text_parts = []
+                        current_tables = []
+                        current_image_texts = []
+
+                # Preserve heading structure
+                if para.style and para.style.name and para.style.name.startswith("Heading"):
+                    level = para.style.name.replace("Heading", "").strip()
+                    prefix = "#" * (int(level) if level.isdigit() else 1)
+                    current_text_parts.append(f"{prefix} {text}")
+                else:
+                    current_text_parts.append(text)
+
+        # Extract tables
+        for table_idx, table in enumerate(doc.tables):
+            rows = []
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                rows.append(" | ".join(cells))
+            if rows:
+                header = rows[0]
+                separator = " | ".join(["---"] * len(table.rows[0].cells))
+                table_md = f"[TABLE {table_idx + 1}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
+                current_tables.append(table_md.strip())
+
+        # Extract images via OCR
+        if OCR_AVAILABLE:
+            for rel in doc.part.rels.values():
+                if "image" in rel.reltype:
+                    try:
+                        image_data = rel.target_part.blob
+                        img = Image.open(io.BytesIO(image_data))
+                        if img.width >= 80 and img.height >= 80:
+                            img = img.convert("L")
+                            ocr_text = pytesseract.image_to_string(img).strip()
+                            if ocr_text and len(ocr_text) > 15:
+                                current_image_texts.append(f"[IMAGE OCR]\n{ocr_text}")
+                    except Exception:
+                        continue
+
+        # Add remaining content
+        if current_text_parts or current_tables or current_image_texts:
+            pages.append(PageContent(
+                page_num=page_num,
+                text="\n".join(current_text_parts),
+                tables=current_tables,
+                image_texts=current_image_texts,
+            ))
+
+        return ParseResult(
+            pages=pages,
+            metadata={
+                "format": "docx",
+                "page_count": len(pages),
+                "source": file_path,
+            },
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"DOCX parse error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# XLSX / Excel Parser
+# ---------------------------------------------------------------------------
+def _parse_xlsx(file_path: str) -> ParseResult:
+    """Extract all sheets from Excel as markdown tables."""
+    if not XLSX_AVAILABLE:
+        return ParseResult(success=False, error="openpyxl not installed")
+
+    try:
+        wb = load_workbook(file_path, read_only=True, data_only=True)
+        pages = []
+
+        for sheet_idx, sheet_name in enumerate(wb.sheetnames):
+            ws = wb[sheet_name]
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                cells = [str(cell).strip() if cell is not None else "" for cell in row]
+                if any(cells):  # Skip completely empty rows
+                    rows.append(" | ".join(cells))
+
+            if not rows:
+                continue
+
+            # First row as header
+            header = rows[0]
+            # Count columns from first data row
+            col_count = len(rows[0].split(" | "))
+            separator = " | ".join(["---"] * col_count)
+            table_md = f"[EXCEL SHEET: {sheet_name}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
+
+            pages.append(PageContent(
+                page_num=sheet_idx + 1,
+                text=f"Sheet: {sheet_name}\n\n{table_md}",
+                tables=[table_md],
+                content_type="table",
+            ))
+
+        wb.close()
+        return ParseResult(
+            pages=pages,
+            metadata={
+                "format": "xlsx",
+                "page_count": len(pages),
+                "sheet_names": wb.sheetnames if hasattr(wb, 'sheetnames') else [],
+                "source": file_path,
+            },
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"XLSX parse error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# PPTX Parser
+# ---------------------------------------------------------------------------
+def _parse_pptx(file_path: str) -> ParseResult:
+    """Extract text, notes, and tables from PowerPoint files."""
+    if not PPTX_AVAILABLE:
+        return ParseResult(success=False, error="python-pptx not installed")
+
+    try:
+        prs = Presentation(file_path)
+        pages = []
+
+        for slide_idx, slide in enumerate(prs.slides):
+            slide_num = slide_idx + 1
+            text_parts = []
+            tables = []
+
+            for shape in slide.shapes:
+                # Text frames
+                if shape.has_text_frame:
+                    for paragraph in shape.text_frame.paragraphs:
+                        para_text = paragraph.text.strip()
+                        if para_text:
+                            text_parts.append(para_text)
+
+                # Tables
+                if shape.has_table:
+                    table = shape.table
+                    rows = []
+                    for row in table.rows:
+                        cells = [cell.text.strip() for cell in row.cells]
+                        rows.append(" | ".join(cells))
+                    if rows:
+                        header = rows[0]
+                        separator = " | ".join(["---"] * len(table.rows[0].cells))
+                        table_md = f"[TABLE - Slide {slide_num}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
+                        tables.append(table_md)
+
+            # Slide notes
+            if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                notes = slide.notes_slide.notes_text_frame.text.strip()
+                if notes:
+                    text_parts.append(f"[SPEAKER NOTES]\n{notes}")
+
+            if text_parts or tables:
+                pages.append(PageContent(
+                    page_num=slide_num,
+                    text="\n".join(text_parts),
+                    tables=tables,
+                ))
+
+        return ParseResult(
+            pages=pages,
+            metadata={
+                "format": "pptx",
+                "page_count": len(prs.slides),
+                "source": file_path,
+            },
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"PPTX parse error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# CSV Parser
+# ---------------------------------------------------------------------------
+def _parse_csv(file_path: str) -> ParseResult:
+    """Parse CSV files into markdown table format."""
+    try:
+        # Detect encoding
+        encoding = "utf-8"
+        if CHARDET_AVAILABLE:
+            with open(file_path, "rb") as f:
+                raw = f.read(10000)
+                detected = chardet.detect(raw)
+                encoding = detected.get("encoding", "utf-8") or "utf-8"
+
+        with open(file_path, "r", encoding=encoding, errors="replace") as f:
+            reader = csv.reader(f)
+            rows = []
+            for row in reader:
+                cells = [str(cell).strip() for cell in row]
+                if any(cells):
+                    rows.append(" | ".join(cells))
+
+        if not rows:
+            return ParseResult(
+                pages=[PageContent(page_num=1, text="(Empty CSV file)")],
+                metadata={"format": "csv", "page_count": 1, "source": file_path},
+            )
+
+        header = rows[0]
+        col_count = len(rows[0].split(" | "))
+        separator = " | ".join(["---"] * col_count)
+        table_md = f"[CSV DATA]\n{header}\n{separator}\n" + "\n".join(rows[1:])
+
+        # Split into pages of 100 rows for very large CSVs
+        chunk_size = 100
+        pages = []
+        data_rows = rows[1:]
+        for i in range(0, max(len(data_rows), 1), chunk_size):
+            chunk = data_rows[i:i + chunk_size]
+            chunk_table = f"[CSV DATA - Rows {i + 1} to {i + len(chunk)}]\n{header}\n{separator}\n" + "\n".join(chunk)
+            pages.append(PageContent(
+                page_num=(i // chunk_size) + 1,
+                text=chunk_table,
+                tables=[chunk_table],
+                content_type="table",
+            ))
+
+        if not pages:
+            pages.append(PageContent(page_num=1, text=table_md, tables=[table_md], content_type="table"))
+
+        return ParseResult(
+            pages=pages,
+            metadata={
+                "format": "csv",
+                "page_count": len(pages),
+                "total_rows": len(rows),
+                "source": file_path,
+            },
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"CSV parse error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Plain Text Parser
+# ---------------------------------------------------------------------------
+def _parse_text(file_path: str) -> ParseResult:
+    """Parse plain text, markdown, log, JSON, XML files."""
+    try:
+        encoding = "utf-8"
+        if CHARDET_AVAILABLE:
+            with open(file_path, "rb") as f:
+                raw = f.read(10000)
+                detected = chardet.detect(raw)
+                encoding = detected.get("encoding", "utf-8") or "utf-8"
+
+        with open(file_path, "r", encoding=encoding, errors="replace") as f:
+            content = f.read()
+
+        if not content.strip():
+            return ParseResult(
+                pages=[PageContent(page_num=1, text="(Empty file)")],
+                metadata={"format": "text", "page_count": 1, "source": file_path},
+            )
+
+        # Split large text files into ~4000 char pages
+        page_size = 4000
+        pages = []
+        lines = content.split("\n")
+        current_page = []
+        current_len = 0
+        page_num = 1
+
+        for line in lines:
+            if current_len + len(line) > page_size and current_page:
+                pages.append(PageContent(
+                    page_num=page_num,
+                    text="\n".join(current_page),
+                ))
+                page_num += 1
+                current_page = []
+                current_len = 0
+            current_page.append(line)
+            current_len += len(line) + 1
+
+        if current_page:
+            pages.append(PageContent(page_num=page_num, text="\n".join(current_page)))
+
+        return ParseResult(
+            pages=pages,
+            metadata={
+                "format": "text",
+                "page_count": len(pages),
+                "total_chars": len(content),
+                "source": file_path,
+            },
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"Text parse error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Image Parser (OCR)
+# ---------------------------------------------------------------------------
+def _parse_image(file_path: str) -> ParseResult:
+    """Extract text from images using OCR."""
+    if not OCR_AVAILABLE:
+        return ParseResult(success=False, error="pytesseract/Pillow not installed for image OCR")
+
+    try:
+        img = Image.open(file_path)
+
+        # Pre-process for optimal OCR
+        if img.mode != "L":
+            img = img.convert("L")
+
+        ocr_text = pytesseract.image_to_string(img).strip()
+        filename = os.path.basename(file_path)
+
+        if not ocr_text:
+            return ParseResult(
+                pages=[PageContent(
+                    page_num=1,
+                    text=f"[IMAGE: {filename}]\n(No text detected in image)",
+                    content_type="image_ocr",
+                )],
+                metadata={"format": "image", "page_count": 1, "source": file_path},
+            )
+
+        return ParseResult(
+            pages=[PageContent(
+                page_num=1,
+                text=f"[IMAGE OCR: {filename}]\n{ocr_text}",
+                image_texts=[ocr_text],
+                content_type="image_ocr",
+            )],
+            metadata={
+                "format": "image",
+                "page_count": 1,
+                "image_size": f"{img.width}x{img.height}",
+                "source": file_path,
+            },
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"Image parse error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Video Subtitle Parser
+# ---------------------------------------------------------------------------
+def _parse_video(file_path: str) -> ParseResult:
+    """Extract embedded subtitles from video files using ffmpeg + pysubs2."""
+    try:
+        # First try to extract embedded subtitles using ffmpeg
+        subtitle_text = _extract_subtitles_ffmpeg(file_path)
+
+        if not subtitle_text:
+            return ParseResult(
+                pages=[PageContent(
+                    page_num=1,
+                    text=f"[VIDEO: {os.path.basename(file_path)}]\n(No embedded subtitles found)",
+                    content_type="subtitle",
+                )],
+                metadata={"format": "video", "page_count": 1, "source": file_path},
+            )
+
+        # Split subtitles into manageable pages
+        lines = subtitle_text.split("\n")
+        page_size = 50  # lines per page
+        pages = []
+        for i in range(0, len(lines), page_size):
+            chunk = lines[i:i + page_size]
+            pages.append(PageContent(
+                page_num=(i // page_size) + 1,
+                text=f"[VIDEO SUBTITLES - Part {(i // page_size) + 1}]\n" + "\n".join(chunk),
+                content_type="subtitle",
+            ))
+
+        return ParseResult(
+            pages=pages,
+            metadata={
+                "format": "video",
+                "page_count": len(pages),
+                "subtitle_lines": len(lines),
+                "source": file_path,
+            },
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"Video parse error: {e}")
+
+
+def _extract_subtitles_ffmpeg(video_path: str) -> str:
+    """Extract embedded subtitle tracks from video using ffmpeg."""
+    try:
+        # Extract subtitle to SRT format using ffmpeg
+        result = subprocess.run(
+            [
+                "ffmpeg", "-i", video_path,
+                "-map", "0:s:0",  # First subtitle stream
+                "-f", "srt",
+                "-",  # Output to stdout
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            # Parse SRT and extract just the text (no timestamps)
+            lines = result.stdout.strip().split("\n")
+            text_lines = []
+            for line in lines:
+                line = line.strip()
+                # Skip sequence numbers, timestamps, and empty lines
+                if not line:
+                    continue
+                if line.isdigit():
+                    continue
+                if "-->" in line:
+                    continue
+                # Remove HTML tags from subtitles
+                clean = re.sub(r"<[^>]+>", "", line)
+                if clean.strip():
+                    text_lines.append(clean.strip())
+
+            return "\n".join(text_lines)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    return ""
+
+
+def _parse_subtitle_file(file_path: str) -> ParseResult:
+    """Parse standalone subtitle files (SRT, ASS, SSA, VTT)."""
+    try:
+        if SUBS_AVAILABLE:
+            subs = pysubs2.load(file_path)
+            text_lines = []
+            for event in subs:
+                if event.text.strip():
+                    # Clean subtitle formatting tags
+                    clean = re.sub(r"\{[^}]*\}", "", event.text)
+                    clean = re.sub(r"<[^>]+>", "", clean)
+                    clean = clean.replace("\\N", "\n").replace("\\n", "\n").strip()
+                    if clean:
+                        text_lines.append(clean)
+
+            subtitle_text = "\n".join(text_lines)
+        else:
+            # Fallback: read as plain text
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                subtitle_text = f.read()
+
+        if not subtitle_text.strip():
+            return ParseResult(
+                pages=[PageContent(page_num=1, text="(Empty subtitle file)", content_type="subtitle")],
+                metadata={"format": "subtitle", "page_count": 1, "source": file_path},
+            )
+
+        return ParseResult(
+            pages=[PageContent(
+                page_num=1,
+                text=f"[SUBTITLES: {os.path.basename(file_path)}]\n{subtitle_text}",
+                content_type="subtitle",
+            )],
+            metadata={
+                "format": "subtitle",
+                "page_count": 1,
+                "source": file_path,
+            },
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"Subtitle parse error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Main Entry Point — Universal Parser
+# ---------------------------------------------------------------------------
+PARSER_REGISTRY = {
+    ".pdf": _parse_pdf,
+    ".docx": _parse_docx,
+    ".doc": _parse_docx,  # Best-effort with python-docx
+    ".xlsx": _parse_xlsx,
+    ".xls": _parse_xlsx,   # Best-effort with openpyxl
+    ".csv": _parse_csv,
+    ".pptx": _parse_pptx,
+    ".ppt": _parse_pptx,   # Best-effort with python-pptx
+    # Text formats
+    ".txt": _parse_text,
+    ".text": _parse_text,
+    ".md": _parse_text,
+    ".log": _parse_text,
+    ".json": _parse_text,
+    ".xml": _parse_text,
+    # Images
+    ".png": _parse_image,
+    ".jpg": _parse_image,
+    ".jpeg": _parse_image,
+    ".bmp": _parse_image,
+    ".tiff": _parse_image,
+    ".tif": _parse_image,
+    ".gif": _parse_image,
+    ".webp": _parse_image,
+    # Video
+    ".mp4": _parse_video,
+    ".avi": _parse_video,
+    ".mkv": _parse_video,
+    ".mov": _parse_video,
+    ".wmv": _parse_video,
+    ".flv": _parse_video,
+    # Subtitle files
+    ".srt": _parse_subtitle_file,
+    ".ass": _parse_subtitle_file,
+    ".ssa": _parse_subtitle_file,
+    ".vtt": _parse_subtitle_file,
+}
+
+
+def parse_file(file_path: str) -> ParseResult:
+    """
+    Universal file parser — auto-detects format and extracts all content.
+    
+    Supports: PDF, DOCX, XLSX, PPTX, CSV, TXT, MD, LOG, JSON, XML,
+              PNG, JPG, BMP, TIFF, GIF, WEBP, MP4, AVI, MKV, MOV,
+              SRT, ASS, SSA, VTT
+    
+    Returns ParseResult with pages, metadata, and error info.
+    All processing is 100% offline.
+    """
+    if not os.path.exists(file_path):
+        return ParseResult(success=False, error=f"File not found: {file_path}")
+
+    ext = os.path.splitext(file_path)[1].lower()
+    parser = PARSER_REGISTRY.get(ext)
+
+    if not parser:
+        return ParseResult(
+            success=False,
+            error=f"Unsupported file format: {ext}. Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
+        )
+
+    print(f"[Parser] Parsing {os.path.basename(file_path)} (format: {ext})")
+    result = parser(file_path)
+
+    if result.success:
+        total_text = sum(len(p.text) for p in result.pages)
+        total_tables = sum(len(p.tables) for p in result.pages)
+        total_images = sum(len(p.image_texts) for p in result.pages)
+        print(
+            f"[Parser] ✅ Parsed {len(result.pages)} pages, "
+            f"{total_text} chars, {total_tables} tables, {total_images} images"
+        )
+    else:
+        print(f"[Parser] ❌ Failed: {result.error}")
+
+    return result

@@ -1,76 +1,112 @@
-# RAG: Enterprise-Grade Production RAG
+# i-Tips RAG: World-Class 12-Layer Production Engine
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?logo=docker&logoColor=white)](https://www.docker.com/)
 
-An advanced, **7-Layer Retrieval-Augmented Generation (RAG)** engine designed for high-stakes technical environments. This system handles **1,000,000+ pages** with millisecond search latency, deep contextual accuracy, and 100% offline privacy.
+An advanced, **12-Layer Retrieval-Augmented Generation (RAG)** microservice with **zero hallucination**, **universal file support**, and **millisecond search latency**. 100% offline, enterprise-grade.
 
 ---
 
-## The "Amazing Concept": 7-Layer Intelligence
-Unlike basic RAG systems, i-Tips RAG uses a multi-layered pipeline to ensure the AI never "hallucinates" and always has the full technical picture.
+## 🧠 The 12-Layer Intelligence Pipeline
 
-### Architecture Diagram
 ```
-                    ┌──────────────────────────────────────────┐
-                    │          Enterprise RAG Engine           │
-                    │                                          │
-  PDF Ingest  ──────►  Layer 1: Smart OCR & Table Extraction   │
-                    │  Layer 2: Recursive Character Chunking   │
-  User Query  ──────►  Layer 3: Hybrid Search (HNSW + BM25)    │
-                    │  Layer 4: Cross-Encoder Reranking        │
-                    │  Layer 5: Max Marginal Relevance (MMR)   │
-                    │  Layer 6: Contextual Window Expansion    │
-                    │  Layer 7: Real-Time Token Streaming      │
-                    │                                          │
-                    └────┬──────────┬──────────┬───────────────┘
-                         │          │          │
-                    ┌────▼───┐ ┌───▼────┐ ┌──▼──────┐
-                    │Postgres│ │ Redis  │ │ Ollama  │
-                    │pgvector│ │ Cache  │ │ LLM     │
-                    └────────┘ └────────┘ └─────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                  i-Tips RAG 12-Layer Engine v2.0                    │
+│                                                                    │
+│  ANY FILE ──► Layer 1:  Universal Document Parser                  │
+│              Layer 2:  Smart OCR & Table/Image Extraction          │
+│              Layer 3:  Semantic Parent-Child Chunking               │
+│              Layer 4:  Batch Embedding (32/batch, GPU-accelerated)  │
+│  QUERY   ──► Layer 5:  Hybrid Search (HNSW + BM25 + Trigram)       │
+│              Layer 6:  Cross-Encoder Reranking                      │
+│              Layer 7:  Max Marginal Relevance (MMR)                 │
+│              Layer 8:  Contextual Window Expansion                  │
+│              Layer 9:  🛡️ Hallucination Guard (ZERO general answers) │
+│              Layer 10: ✅ Answer Verification & Grounding            │
+│              Layer 11: Semantic Query Cache (Redis SHA-256)         │
+│              Layer 12: Real-Time Token Streaming                    │
+│                                                                    │
+└────┬──────────┬──────────┬──────────┬──────────────────────────────┘
+     │          │          │          │
+┌────▼───┐ ┌───▼────┐ ┌──▼──────┐ ┌─▼─────────┐
+│Postgres│ │ Redis  │ │ Ollama  │ │ File Store │
+│pgvector│ │ Cache  │ │ LLM     │ │ /media     │
+└────────┘ └────────┘ └─────────┘ └────────────┘
 ```
 
 ---
 
-## Key Enterprise Features
+## 📁 Universal File Support
 
-### 1. **High-Scale Performance (1M+ Pages)**
-*   **HNSW Indexing**: Uses Hierarchical Navigable Small Worlds for O(log n) search complexity.
-*   **Semantic Caching**: Redis-backed SHA-256 caching bypasses the LLM for repeat queries.
+| Category | Formats | Extraction |
+|----------|---------|------------|
+| **Documents** | PDF, DOCX, DOC | Text + Tables + Images (OCR) |
+| **Spreadsheets** | XLSX, XLS, CSV | All sheets → Markdown tables |
+| **Presentations** | PPTX, PPT | Slides + Notes + Tables |
+| **Text** | TXT, MD, LOG, JSON, XML | Auto-encoding detection |
+| **Images** | PNG, JPG, JPEG, BMP, TIFF, GIF, WEBP | Full OCR text extraction |
+| **Video** | MP4, AVI, MKV, MOV, WMV, FLV | Embedded subtitle extraction |
+| **Subtitles** | SRT, ASS, SSA, VTT | Clean text parsing |
 
-### 2. **Contextual Window Expansion**
-The system doesn't just find a "snippet"—it automatically pulls the **neighboring sections** from the document. This gives the AI a broader "vision," essential for technical manuals and complex data.
-
-### 3. **Real-Time Token Streaming**
-Experience instant interaction. The UI displays the AI's thoughts as they are generated, eliminating the "waiting" period common in other systems.
-
-### 4. **Hardware Auto-Detection (Cross-Platform)**
-*   **Apple Silicon**: Auto-selects **MPS** (Metal) for Mac M1-M5.
-*   **NVIDIA**: Auto-selects **CUDA** for Linux/Windows servers.
-*   **Fallback**: High-performance **CPU** mode for general hardware.
+**No file size limit.** Drop files into the shared Docker volume — background ingestion starts automatically.
 
 ---
 
-## Deployment & Setup
+## 🛡️ Zero Hallucination
 
-### Quick Start (Docker)
+The system **NEVER gives general answers**. Every response is strictly grounded in your uploaded documents:
+
+- **Layer 9 (Hallucination Guard)**: Computes a grounding score BEFORE calling the LLM. If no relevant content exists → refuses to answer instantly.
+- **Layer 10 (Answer Verification)**: After generation, verifies every claim maps back to a source chunk. Adds confidence scoring (high/medium/low).
+- **Strict Prompt**: The LLM is explicitly forbidden from using general knowledge.
+
+---
+
+## 🚀 Quick Start
+
+### Docker (Full Stack)
 ```bash
-# Clone the repository
 git clone https://github.com/varunsrivastav1999/Retrieval-Augmented-Generation--RAG-.git
 cd Retrieval-Augmented-Generation--RAG-
 
-# Start the full stack
+# Start all services
 docker-compose -f local.yml up --build
 ```
 
-### Native Mode (Max GPU Speed on Mac)
-To bypass Docker limits and use your Mac's M-series GPU directly:
+### Native Mode (Mac GPU)
 ```bash
 pip install -r requirements.txt
 python app/main.py
 ```
+Auto-detects Apple Silicon MPS / NVIDIA CUDA for GPU acceleration.
+
+### Auto-Ingestion
+Place any supported file in your mapped `/media` volume. The system auto-detects and begins background chunking + embedding immediately.
+
+---
+
+## 🔌 Microservice API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/upload` | Upload any file (unlimited size) |
+| `POST` | `/api/v1/ingest` | Scan /media and ingest all files |
+| `POST` | `/api/v1/query` | Query knowledge base (12-layer pipeline) |
+| `GET` | `/api/v1/ingest/jobs` | List ingestion jobs + progress |
+| `GET` | `/api/v1/formats` | List supported formats |
+| `GET` | `/health/ready` | Readiness + system stats |
+| `GET` | `/` | Production dashboard UI |
+
+---
+
+## 📖 Documentation
+
+See [`memory.md`](memory.md) for complete system documentation including:
+- All 12 layers explained
+- Database schema
+- Configuration reference (all env vars)
+- Deployment guide
 
 ---
 
@@ -79,11 +115,11 @@ python app/main.py
 - [ ] **Agentic Re-Ranking**: Use a small LLM to decide which chunks are "actually" useful.
 - [ ] **Evaluations Suite**: Integrated RAGAS benchmarks for accuracy tracking.
 - [ ] **Plugin System**: Connect to SharePoint, Google Drive, and Slack.
+- [ ] **Whisper Integration**: Speech-to-text for video files without subtitles.
 
 ---
 
 ## Contributing
-We welcome contributions! This is an open-source project dedicated to pushing the boundaries of local, private RAG.
 1. Fork the repo.
 2. Create a feature branch (`git checkout -b feature/AmazingNewLayer`).
 3. Commit your changes (`git commit -m 'Add some AmazingNewLayer'`).

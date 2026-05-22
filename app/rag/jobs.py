@@ -1,17 +1,44 @@
+"""
+=============================================================================
+ i-Tips RAG: Background Ingestion Worker & Auto-Scanner
+=============================================================================
+ - Universal file worker (all formats, not just PDF)
+ - Auto-scan /media for ALL supported file types
+ - Background chunking starts automatically when files appear
+ - Progress tracking per job
+ - Stale job recovery
+=============================================================================
+"""
+
 import os
 import threading
 import time
 import uuid
+from glob import glob
 from typing import Dict, List, Optional
 
 from sqlalchemy import text
 
 from app.database import IngestionJob, SessionLocal, utcnow
+from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported_file
 
 
-def create_ingestion_job(tenant_id: str, source_path: str, force_reindex: bool = False) -> IngestionJob:
+# ---------------------------------------------------------------------------
+# Job CRUD
+# ---------------------------------------------------------------------------
+def create_ingestion_job(
+    tenant_id: str,
+    source_path: str,
+    force_reindex: bool = False,
+    file_type: Optional[str] = None,
+) -> IngestionJob:
+    """Create a new ingestion job for any file type."""
     db = SessionLocal()
     try:
+        if file_type is None:
+            from app.rag.parsers import get_file_type
+            file_type = get_file_type(source_path)
+
         job = IngestionJob(
             id=str(uuid.uuid4()),
             tenant_id=tenant_id,
@@ -19,6 +46,7 @@ def create_ingestion_job(tenant_id: str, source_path: str, force_reindex: bool =
             source_name=os.path.basename(source_path),
             status="queued",
             force_reindex=force_reindex,
+            file_type=file_type,
         )
         db.add(job)
         db.commit()
@@ -73,7 +101,7 @@ def claim_next_ingestion_job() -> Optional[Dict[str, str]]:
                 "  LIMIT 1 "
                 "  FOR UPDATE SKIP LOCKED"
                 ") "
-                "RETURNING id, tenant_id, source_path, force_reindex"
+                "RETURNING id, tenant_id, source_path, force_reindex, file_type"
             ),
         )
         job = result.mappings().first()
@@ -104,6 +132,7 @@ def complete_ingestion_job(job_id: str, chunks_total: int, chunks_inserted: int)
         chunks_total=chunks_total,
         chunks_inserted=chunks_inserted,
         completed_at=utcnow(),
+        progress_pct=100.0,
         error=None,
     )
 
@@ -117,8 +146,42 @@ def fail_ingestion_job(job_id: str, error: str) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# File Discovery — scan /media for ALL supported file types
+# ---------------------------------------------------------------------------
+def find_all_supported_files(media_path: str, include_scan: bool = True) -> List[str]:
+    """
+    Recursively scan media_path for ALL supported file types.
+    Returns sorted list of absolute file paths.
+    """
+    if not include_scan or not os.path.isdir(media_path):
+        return []
+
+    found_files = set()
+    for ext in SUPPORTED_EXTENSIONS:
+        # Glob for each extension (case-insensitive by trying both)
+        pattern_lower = os.path.join(media_path, f"**/*{ext}")
+        pattern_upper = os.path.join(media_path, f"**/*{ext.upper()}")
+        found_files.update(glob(pattern_lower, recursive=True))
+        found_files.update(glob(pattern_upper, recursive=True))
+
+    # Filter out hidden files and directories
+    filtered = [
+        f for f in found_files
+        if os.path.isfile(f)
+        and not os.path.basename(f).startswith(".")
+        and is_supported_file(f)
+    ]
+
+    return sorted(filtered)
+
+
+# ---------------------------------------------------------------------------
+# Universal Ingestion Worker
+# ---------------------------------------------------------------------------
 def ingestion_worker_loop(stop_event: threading.Event, poll_seconds: float = 5.0) -> None:
-    from app.rag.ingestion import ingest_pdf
+    """Background worker that processes queued ingestion jobs for any file type."""
+    from app.rag.ingestion import ingest_file
 
     while not stop_event.is_set():
         job = claim_next_ingestion_job()
@@ -127,7 +190,7 @@ def ingestion_worker_loop(stop_event: threading.Event, poll_seconds: float = 5.0
             continue
 
         try:
-            ingest_pdf(
+            ingest_file(
                 job["source_path"],
                 tenant_id=job["tenant_id"],
                 job_id=job["id"],
@@ -142,6 +205,7 @@ def start_ingestion_worker(
     poll_seconds: float = 5.0,
     stale_timeout_seconds: int = 1800,
 ) -> threading.Thread:
+    """Start the background ingestion worker thread."""
     recovered = mark_stale_running_jobs_queued(stale_timeout_seconds)
     if recovered:
         print(f"[IngestWorker] Re-queued {recovered} stale ingestion jobs")
