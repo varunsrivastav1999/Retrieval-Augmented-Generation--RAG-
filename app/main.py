@@ -284,12 +284,12 @@ def on_startup():
                             # Trigger the create API
                             resp = client.post(
                                 f"{ollama_base_url}/api/create",
-                                json={"name": OLLAMA_MODEL, "modelfile": modelfile_content},
+                                json={"name": OLLAMA_MODEL, "modelfile": modelfile_content, "stream": False},
                             )
                             if resp.status_code == 200:
                                 print(f"✅ SUCCESS: Custom brain '{OLLAMA_MODEL}' is ready.")
                             else:
-                                print(f"⚠️ Warning: Model creation returned {resp.status_code}")
+                                print(f"⚠️ Warning: Model creation returned {resp.status_code}: {resp.text}")
                         except Exception as conn_err:
                             print(f"❌ Connection Error: Could not reach Native Ollama at {ollama_base_url}. Make sure Ollama for Mac is RUNNING! ({conn_err})")
                 
