@@ -193,6 +193,35 @@ def _enrich_mcq_text(text: str) -> str:
     return "\n".join(enriched_lines)
 
 
+def _clean_ocr_text(text: str) -> str:
+    """Remove highly noisy or garbage lines from OCR output (e.g. random UI screenshot symbols)."""
+    if not text:
+        return text
+        
+    clean_lines = []
+    for line in text.split('\n'):
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+            
+        # Drop extremely short lines with barely any letters
+        if len(line_clean) < 4 and sum(c.isalpha() for c in line_clean) < 2:
+            continue
+            
+        # Drop lines that are mostly symbols/noise (e.g., "ae atl] _—T-~")
+        alphanum = sum(c.isalnum() for c in line_clean)
+        if alphanum / len(line_clean) < 0.5:
+            continue
+            
+        # Drop lines with too many repetitive weird characters
+        if re.search(r'([^\w\s])\1{3,}', line_clean):
+            continue
+            
+        clean_lines.append(line)
+        
+    return '\n'.join(clean_lines)
+
+
 # ---------------------------------------------------------------------------
 # PDF Parser
 # ---------------------------------------------------------------------------
@@ -228,6 +257,7 @@ def _parse_pdf(file_path: str) -> ParseResult:
                     img = img.convert("L")
                     img = _auto_rotate_image(img)
                     full_ocr = pytesseract.image_to_string(img).strip()
+                    full_ocr = _clean_ocr_text(full_ocr)
                     full_ocr = _enrich_mcq_text(full_ocr)
                     if full_ocr and len(full_ocr) > 20:
                         image_texts.append(f"[FULL PAGE OCR - Page {page_num}]\n{full_ocr}")
@@ -244,21 +274,28 @@ def _parse_pdf(file_path: str) -> ParseResult:
 
         # Anti-Watermark & Repetitive Header/Footer Stripping
         if len(pages) >= 3:
-            # Check for common headers (first line exact match across first 3 pages)
+            # Check for common headers (or raw page numbers)
             h_lines = [p.text.strip().split('\n')[0] for p in pages[:3] if p.text.strip()]
-            if len(h_lines) == 3 and len(set(h_lines)) == 1 and len(h_lines[0]) > 5:
-                common_header = h_lines[0]
-                for p in pages:
-                    if p.text.strip().startswith(common_header):
-                        p.text = p.text.strip()[len(common_header):].strip()
+            if len(h_lines) == 3:
+                h_templates = [re.sub(r'\d+', '', h).strip() for h in h_lines]
+                # Strip if it's identical across 3 pages OR if the line is purely digits (page numbers)
+                if (len(set(h_templates)) == 1 and len(h_templates[0]) > 2) or all(t == "" for t in h_templates):
+                    template = h_templates[0]
+                    for p in pages:
+                        lines = p.text.strip().split('\n')
+                        if lines and re.sub(r'\d+', '', lines[0]).strip() == template:
+                            p.text = '\n'.join(lines[1:]).strip()
 
-            # Check for common footers (last line exact match across first 3 pages)
+            # Check for common footers (or raw page numbers)
             f_lines = [p.text.strip().split('\n')[-1] for p in pages[:3] if p.text.strip()]
-            if len(f_lines) == 3 and len(set(f_lines)) == 1 and len(f_lines[0]) > 5:
-                common_footer = f_lines[0]
-                for p in pages:
-                    if p.text.strip().endswith(common_footer):
-                        p.text = p.text.strip()[:-len(common_footer)].strip()
+            if len(f_lines) == 3:
+                f_templates = [re.sub(r'\d+', '', f).strip() for f in f_lines]
+                if (len(set(f_templates)) == 1 and len(f_templates[0]) > 2) or all(t == "" for t in f_templates):
+                    template = f_templates[0]
+                    for p in pages:
+                        lines = p.text.strip().split('\n')
+                        if lines and re.sub(r'\d+', '', lines[-1]).strip() == template:
+                            p.text = '\n'.join(lines[:-1]).strip()
 
         return ParseResult(
             pages=pages,
@@ -328,6 +365,7 @@ def _extract_images_ocr(fitz_page, page_num: int, min_size: int = 80) -> list:
                 img = img.convert("L")  # Grayscale
                 img = _auto_rotate_image(img)
                 ocr_text = pytesseract.image_to_string(img).strip()
+                ocr_text = _clean_ocr_text(ocr_text)
                 ocr_text = _enrich_mcq_text(ocr_text)
 
                 if ocr_text and len(ocr_text) > 15:
