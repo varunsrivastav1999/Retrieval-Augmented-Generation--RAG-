@@ -1,10 +1,71 @@
+# =============================================================================
+# i-Tips RAG — .gitignore
+# =============================================================================
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.whl
+
+# Virtual Environments
 .env
 .venv
 venv/
 ENV/
 env/
+
+# IDE
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.lnk
+
+# Docker
+*.log
+
+# Models (large binary files)
+*.bin
+*.onnx
+*.safetensors
+models/
+
+# Media files (user data — never commit)
+/media/
+external_media/
+
+# Scratch / test files
+scratch/
+tmp/
+temp/
+
+# Secrets — NEVER commit real credentials
+# (The .envs directory contains template configs for Docker;
+#  make sure no real production passwords are in there)
+
+# Coverage & Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Redis dump
+dump.rdb
