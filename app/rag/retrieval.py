@@ -18,7 +18,7 @@ def _candidate_from_chunk(chunk: DocumentChunk) -> dict:
     metadata = chunk.doc_metadata or {}
     return {
         "id": chunk.id,
-        "text": chunk.text_content,
+        "text": chunk.text_content or "",
         "score": 0.0,
         "hybrid_score": 0.0,
         "dense_score": 0.0,
