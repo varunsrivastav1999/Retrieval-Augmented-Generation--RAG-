@@ -137,6 +137,44 @@ def get_file_type(file_path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Utility Functions
+# ---------------------------------------------------------------------------
+def _auto_rotate_image(img):
+    """Detect image orientation via OSD and auto-rotate upright (solves PDF flip)."""
+    if not OCR_AVAILABLE:
+        return img
+    try:
+        osd = pytesseract.image_to_osd(img)
+        match = re.search(r'(?<=Rotate: )\d+', osd)
+        if match:
+            angle = int(match.group(0))
+            if angle != 0:
+                # pytesseract's Rotate value is counter-clockwise angle to correct orientation
+                img = img.rotate(angle, expand=True)
+    except Exception:
+        pass  # OSD fails if too little text is detected
+    return img
+
+
+def _enrich_mcq_text(text: str) -> str:
+    """Detect MCQ checkmarks and explicitly mark the correct answer."""
+    if not text:
+        return text
+    
+    # Common symbols used for marking the correct MCQ option
+    mcq_symbols = [r"✓", r"✔", r"☑", r"☒", r"◉", r"\[x\]", r"\[X\]", r"\(x\)", r"\(X\)"]
+    pattern = re.compile(f"({'|'.join(mcq_symbols)})")
+    
+    enriched_lines = []
+    for line in text.split('\n'):
+        if pattern.search(line):
+            # If the line has an MCQ tick, explicitly label it so the LLM understands it's the correct answer
+            line = f"[CORRECT ANSWER] {line}"
+        enriched_lines.append(line)
+    return "\n".join(enriched_lines)
+
+
+# ---------------------------------------------------------------------------
 # PDF Parser
 # ---------------------------------------------------------------------------
 def _parse_pdf(file_path: str) -> ParseResult:
@@ -152,6 +190,7 @@ def _parse_pdf(file_path: str) -> ParseResult:
             page_num = page_num_idx + 1
             # Text extraction
             text = fitz_page.get_text() or ""
+            text = _enrich_mcq_text(text)
 
             # Table extraction via pdfplumber
             tables = []
@@ -168,7 +207,9 @@ def _parse_pdf(file_path: str) -> ParseResult:
                     img = Image.open(io.BytesIO(pix.tobytes()))
                     # Pre-process: convert to grayscale for better OCR
                     img = img.convert("L")
+                    img = _auto_rotate_image(img)
                     full_ocr = pytesseract.image_to_string(img).strip()
+                    full_ocr = _enrich_mcq_text(full_ocr)
                     if full_ocr and len(full_ocr) > 20:
                         image_texts.append(f"[FULL PAGE OCR - Page {page_num}]\n{full_ocr}")
                 except Exception as e:
@@ -248,7 +289,9 @@ def _extract_images_ocr(fitz_page, page_num: int, min_size: int = 80) -> list:
                 img = Image.open(io.BytesIO(base_image["image"]))
                 # Pre-process for better OCR
                 img = img.convert("L")  # Grayscale
+                img = _auto_rotate_image(img)
                 ocr_text = pytesseract.image_to_string(img).strip()
+                ocr_text = _enrich_mcq_text(ocr_text)
 
                 if ocr_text and len(ocr_text) > 15:
                     image_texts.append(
@@ -280,6 +323,7 @@ def _parse_docx(file_path: str) -> ParseResult:
         # Extract paragraphs
         for para in doc.paragraphs:
             text = para.text.strip()
+            text = _enrich_mcq_text(text)
             if text:
                 # Detect page breaks (approximate)
                 if para.paragraph_format.page_break_before:
@@ -324,7 +368,9 @@ def _parse_docx(file_path: str) -> ParseResult:
                         img = Image.open(io.BytesIO(image_data))
                         if img.width >= 80 and img.height >= 80:
                             img = img.convert("L")
+                            img = _auto_rotate_image(img)
                             ocr_text = pytesseract.image_to_string(img).strip()
+                            ocr_text = _enrich_mcq_text(ocr_text)
                             if ocr_text and len(ocr_text) > 15:
                                 current_image_texts.append(f"[IMAGE OCR]\n{ocr_text}")
                     except Exception:
@@ -424,6 +470,7 @@ def _parse_pptx(file_path: str) -> ParseResult:
                 if shape.has_text_frame:
                     for paragraph in shape.text_frame.paragraphs:
                         para_text = paragraph.text.strip()
+                        para_text = _enrich_mcq_text(para_text)
                         if para_text:
                             text_parts.append(para_text)
 
@@ -543,6 +590,8 @@ def _parse_text(file_path: str) -> ParseResult:
 
         with open(file_path, "r", encoding=encoding, errors="replace") as f:
             content = f.read()
+            
+        content = _enrich_mcq_text(content)
 
         if not content.strip():
             return ParseResult(
@@ -601,7 +650,9 @@ def _parse_image(file_path: str) -> ParseResult:
         if img.mode != "L":
             img = img.convert("L")
 
+        img = _auto_rotate_image(img)
         ocr_text = pytesseract.image_to_string(img).strip()
+        ocr_text = _enrich_mcq_text(ocr_text)
         filename = os.path.basename(file_path)
 
         if not ocr_text:
