@@ -1499,50 +1499,85 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         return response_data
 
     # ------------------------------------------------------------
-    # EXTRACTIVE FAST-PATH (< 5ms)
-    # The user requested EXACT document text for maximum speed and 
-    # zero hallucination. We bypass the LLM completely.
+    # Layer 12: LLM Answer Synthesis (Ollama)
     # ------------------------------------------------------------
+    import requests
     
-    # Construct exact text answer from top chunks
-    answer_parts = []
-    for c in final_context[:3]:  # Top 3 most relevant chunks
-        citation = c.get('citation', 'Unknown Source')
-        text = c.get('text', '').strip()
-        if text:
-            answer_parts.append(f"**From {citation}:**\n> {text}")
-            
-    answer = "\n\n".join(answer_parts)
+    context_texts = []
+    for chunk in final_context:
+        citation = chunk.get('citation', '[Unknown Source]')
+        text = chunk.get('text', '')
+        context_texts.append(f"From {citation}:\n{text}")
+    context_text = "\n\n".join(context_texts)
     
-    # Layer 10: Answer Verification (Always High for Exact Extraction)
-    verification = {
-        "confidence": "high",
-        "confidence_score": 1.0,
-        "grounded_sentences": len(answer_parts),
-        "total_sentences": len(answer_parts),
-        "evidence": [{"sentence": "Exact text extraction", "source": "Direct match", "overlap_ratio": 1.0}]
-    }
-
-    # Stream instantly if requested
+    prompt = build_strict_grounding_prompt(search_query, context_text, False)
+    
     if request.stream:
-        def stream_extractive():
-            # Stream in chunks for visual effect, but it's practically instant
-            chunk_size = 50
-            for i in range(0, len(answer), chunk_size):
-                token = answer[i:i+chunk_size]
-                yield f"data: {json.dumps({'token': token})}\n\n"
+        def stream_llm():
+            payload = {
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": True,
+                "options": {
+                    "num_predict": OLLAMA_NUM_PREDICT,
+                    "temperature": 0.0,
+                }
+            }
+            answer_acc = ""
+            try:
+                response = requests.post(OLLAMA_URL, json=payload, stream=True, timeout=OLLAMA_TIMEOUT_SECONDS)
+                if response.status_code == 200:
+                    for line in response.iter_lines():
+                        if line:
+                            data = json.loads(line.decode("utf-8"))
+                            token = data.get("response", "")
+                            answer_acc += token
+                            yield f"data: {json.dumps({'token': token})}\n\n"
+                else:
+                    err = f"Ollama Error: {response.text}"
+                    yield f"data: {json.dumps({'token': err})}\n\n"
+            except requests.exceptions.Timeout:
+                err = "Ollama Timeout. The model took too long to respond."
+                yield f"data: {json.dumps({'token': err})}\n\n"
+            except requests.exceptions.RequestException as e:
+                err = f"Ollama Connection Error: {str(e)}"
+                yield f"data: {json.dumps({'token': err})}\n\n"
+                
+            # Verification and Caching after generation
+            verification = verify_answer_grounding(answer_acc, final_context)
             yield f"data: {json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification})}\n\n"
             
-            # Cache the response
             set_cached_response(
                 request.query, tenant_id, effective_top_k,
                 embedding_model, corpus_version,
-                {"answer": answer, "context": final_context, "sources": sources,
+                {"answer": answer_acc, "context": final_context, "sources": sources,
                  "grounding": grounding_result, "verification": verification},
                 scope=cache_scope,
             )
-        return StreamingResponse(stream_extractive(), media_type="text/event-stream")
+        
+        return StreamingResponse(stream_llm(), media_type="text/event-stream")
 
+    # Non-streaming fallback
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "num_predict": OLLAMA_NUM_PREDICT,
+            "temperature": 0.0,
+        }
+    }
+    answer = ""
+    try:
+        response = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT_SECONDS)
+        if response.status_code == 200:
+            answer = response.json().get("response", "")
+        else:
+            answer = f"Ollama Error: {response.text}"
+    except Exception as e:
+        answer = f"Ollama Error: {str(e)}"
+        
+    verification = verify_answer_grounding(answer, final_context)
     latency = int((time.time() - start_time) * 1000)
     
     response_data = {
