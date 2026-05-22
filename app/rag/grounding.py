@@ -251,7 +251,7 @@ def build_strict_grounding_prompt(
         "6. Do NOT include citations like 'From [Document]' in your text. Just output the answer itself.\n"
         "7. Render tables as Markdown Pipe Tables.\n"
         "8. Use bold text for key terms and bullet points for lists.\n"
-        "9. Keep answers extremely short and precise — 1 to 2 sentences maximum. Do not over-explain.\n"
+        "9. Keep answers precise. If the document provides a list of parameters, features, or steps, you MUST use bullet points to list them clearly, but keep descriptions brief.\n"
         "10. Provide ONLY the answer. Do NOT include conversational filler, greetings, or extra words.\n\n"
         "USER QUERY HANDLING:\n"
         "- The user might use broken English or non-standard terms. Focus on INTENT.\n"
