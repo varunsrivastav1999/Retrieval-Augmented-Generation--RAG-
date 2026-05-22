@@ -1434,7 +1434,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     
     while retry_count <= max_retries:
         if retry_count == 0:
-            queries_to_search = query_intel["expanded_queries"]
+            queries_to_search = query_intel["expanded_queries"][:2]  # Limit to 2 for latency
             print(f"[Retrieval] Multi-query search: {queries_to_search}")
         else:
             # CRAG: Reformulate query for retry
