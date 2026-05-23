@@ -55,12 +55,12 @@ def _generate_hyde(query: str) -> str:
         print(f"[HyDE] Failed to generate: {e}")
     return ""
 
-def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 20) -> list:
+def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 20, metadata_filters: dict = None) -> list:
     """
     Layer 3: Hybrid search using pgvector dense retrieval plus PostgreSQL full text.
-    Includes HyDE (Hypothetical Document Embeddings).
+    Includes HyDE (Hypothetical Document Embeddings) and Text-to-SQL (metadata filters).
     """
-    print(f"[Retrieval] Executing hybrid search for tenant={tenant_id!r}, query={query!r}")
+    print(f"[Retrieval] Executing hybrid search for tenant={tenant_id!r}, query={query!r}, filters={metadata_filters}")
     embedding_model = get_embedding_model_id()
     query_vector = encode_text(query)
     
@@ -74,12 +74,20 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
     candidates = {}
 
     distance_expr = DocumentChunk.embedding.cosine_distance(query_vector).label("distance")
+    
+    base_filters = [
+        DocumentChunk.tenant_id == tenant_id,
+        DocumentChunk.embedding_model == embedding_model,
+    ]
+    if metadata_filters:
+        if "file_type" in metadata_filters and metadata_filters["file_type"]:
+            base_filters.append(DocumentChunk.file_type == metadata_filters["file_type"])
+        if "page" in metadata_filters and metadata_filters["page"]:
+            base_filters.append(DocumentChunk.doc_metadata['page_num'].astext == str(metadata_filters["page"]))
+
     dense_rows = (
         db.query(DocumentChunk, distance_expr)
-        .filter(
-            DocumentChunk.tenant_id == tenant_id,
-            DocumentChunk.embedding_model == embedding_model,
-        )
+        .filter(*base_filters)
         .order_by(distance_expr)
         .limit(candidate_limit)
         .all()
@@ -96,10 +104,7 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
         hyde_distance_expr = DocumentChunk.embedding.cosine_distance(hyde_vector).label("hyde_distance")
         hyde_rows = (
             db.query(DocumentChunk, hyde_distance_expr)
-            .filter(
-                DocumentChunk.tenant_id == tenant_id,
-                DocumentChunk.embedding_model == embedding_model,
-            )
+            .filter(*base_filters)
             .order_by(hyde_distance_expr)
             .limit(candidate_limit)
             .all()
@@ -111,28 +116,40 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
             candidate["hybrid_score"] += HYDE_WEIGHT * _rrf_score(rank)
             candidate["metadata"]["hyde_rank"] = rank
 
-    lexical_rows = db.execute(
-        text(
-            "SELECT id, "
-            "ts_rank_cd("
-            "  to_tsvector('english', coalesce(text_content, '')), "
-            "  websearch_to_tsquery('english', :query)"
-            ") AS lexical_score "
-            "FROM document_chunks "
-            "WHERE tenant_id = :tenant_id "
-            "AND embedding_model = :embedding_model "
-            "AND to_tsvector('english', coalesce(text_content, '')) "
-            "    @@ websearch_to_tsquery('english', :query) "
-            "ORDER BY lexical_score DESC "
-            "LIMIT :limit"
-        ),
-        {
-            "query": query,
-            "tenant_id": tenant_id,
-            "embedding_model": embedding_model,
-            "limit": candidate_limit,
-        },
-    ).mappings().all()
+    lexical_query = (
+        "SELECT id, "
+        "ts_rank_cd("
+        "  to_tsvector('english', coalesce(text_content, '')), "
+        "  websearch_to_tsquery('english', :query)"
+        ") AS lexical_score "
+        "FROM document_chunks "
+        "WHERE tenant_id = :tenant_id "
+        "AND embedding_model = :embedding_model "
+    )
+    
+    lexical_params = {
+        "query": query,
+        "tenant_id": tenant_id,
+        "embedding_model": embedding_model,
+        "limit": candidate_limit,
+    }
+
+    if metadata_filters:
+        if "file_type" in metadata_filters and metadata_filters["file_type"]:
+            lexical_query += " AND file_type = :file_type "
+            lexical_params["file_type"] = metadata_filters["file_type"]
+        if "page" in metadata_filters and metadata_filters["page"]:
+            lexical_query += " AND doc_metadata->>'page_num' = :page "
+            lexical_params["page"] = str(metadata_filters["page"])
+
+    lexical_query += (
+        "AND to_tsvector('english', coalesce(text_content, '')) "
+        "    @@ websearch_to_tsquery('english', :query) "
+        "ORDER BY lexical_score DESC "
+        "LIMIT :limit"
+    )
+
+    lexical_rows = db.execute(text(lexical_query), lexical_params).mappings().all()
 
     if lexical_rows:
         lexical_ids = [row["id"] for row in lexical_rows]
@@ -194,7 +211,7 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
 
     return ranked[:top_k]
 
-def perform_multi_query_search(db: Session, queries: list, tenant_id: str, top_k: int = 20) -> list:
+def perform_multi_query_search(db: Session, queries: list, tenant_id: str, top_k: int = 20, metadata_filters: dict = None) -> list:
     """
     Layer 13 (Extension): Sub-Query RRF Fusion
     Runs hybrid search for multiple sub-queries independently and fuses results with RRF.
@@ -205,7 +222,7 @@ def perform_multi_query_search(db: Session, queries: list, tenant_id: str, top_k
     all_candidates = {}
     
     for q in queries:
-        results = perform_hybrid_search(db, q, tenant_id, top_k=top_k)
+        results = perform_hybrid_search(db, q, tenant_id, top_k=top_k, metadata_filters=metadata_filters)
         for rank, res in enumerate(results, start=1):
             cid = res["id"]
             if cid not in all_candidates:

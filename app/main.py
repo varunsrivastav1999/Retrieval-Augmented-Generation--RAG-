@@ -52,7 +52,9 @@ from app.rag.jobs import (
     start_ingestion_worker,
 )
 from app.rag.model_loader import get_embedding_model_id, runtime_model_info, validate_runtime_models
-from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search
+from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search, rerank_results
+from app.rag.router import query_router
+from app.rag.graph import graph_db
 from app.rag.reranker import rerank_results
 from app.rag.context import assemble_context
 from app.rag.grounding import (
@@ -62,7 +64,7 @@ from app.rag.grounding import (
     verify_answer_grounding,
 )
 from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported_file
-from app.rag.query_intelligence import intelligent_query_pipeline, reformulate_query
+from app.rag.query_intelligence import intelligent_query_pipeline, reformulate_query, text_to_sql_filters
 
 app = FastAPI(
     title="i-Tips RAG 13-Layer Microservice",
@@ -1432,24 +1434,46 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     # Layer 13: Query Intelligence (Spelling, Expansion, Decomposition)
     query_intel = intelligent_query_pipeline(search_query)
     
-    # CRAG Retry Loop
-    max_retries = 1
-    retry_count = 0
-    grounding_result = None
-    final_context = []
+    # Logical Routing
+    route = query_router.route_query(search_query)
+    print(f"[Router] Query routed to: {route.upper()}")
     
-    while retry_count <= max_retries:
-        if retry_count == 0:
-            queries_to_search = query_intel["expanded_queries"][:2]  # Limit to 2 for latency
-            print(f"[Retrieval] Multi-query search: {queries_to_search}")
-        else:
-            # CRAG: Reformulate query for retry
-            reformulated = reformulate_query(search_query)
-            queries_to_search = [reformulated]
-            print(f"[CRAG] Retrying with reformulated query: {reformulated}")
-            
-        # Layer 5+13: Sub-Query RRF Fusion
-        retrieved_chunks = perform_multi_query_search(db, queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4))
+    metadata_filters = None
+    graph_context = ""
+    
+    if route == "sql":
+        metadata_filters = text_to_sql_filters(search_query)
+        print(f"[Self-Query] SQL Filters: {metadata_filters}")
+    elif route == "graph":
+        graph_context = graph_db.query_graph(search_query, tenant_id)
+        if not graph_context:
+            print("[Router] Graph returned no results, falling back to vector.")
+            route = "vector"
+    
+    if route == "graph" and graph_context:
+        # Bypass vector search if graph provides a direct answer
+        final_context = [{"text": graph_context, "metadata": {"type": "graph", "source": "Neo4j"}}]
+        grounding_result = {"is_grounded": True, "score": 1.0, "detail": "Answered via Knowledge Graph"}
+        sources = ["Neo4j Knowledge Graph"]
+    else:
+        # CRAG Retry Loop for Vector/SQL
+        max_retries = 1
+        retry_count = 0
+        grounding_result = None
+        final_context = []
+        
+        while retry_count <= max_retries:
+            if retry_count == 0:
+                queries_to_search = query_intel["expanded_queries"][:2]  # Limit to 2 for latency
+                print(f"[Retrieval] Multi-query search: {queries_to_search}")
+            else:
+                # CRAG: Reformulate query for retry
+                reformulated = reformulate_query(search_query)
+                queries_to_search = [reformulated]
+                print(f"[CRAG] Retrying with reformulated query: {reformulated}")
+                
+            # Layer 5+13: Sub-Query RRF Fusion
+            retrieved_chunks = perform_multi_query_search(db, queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4), metadata_filters=metadata_filters)
         
         # Layer 6: Cross-Encoder Reranking
         reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)

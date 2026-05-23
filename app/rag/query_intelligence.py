@@ -15,7 +15,10 @@
 """
 
 import re
+import json
 from typing import Dict, List, Optional, Tuple
+import requests
+from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -372,4 +375,37 @@ def reformulate_query(query: str) -> str:
     reformulated = expand_query(query_lower)
     print(f"[CRAG] Reformulated query: '{query}' -> '{reformulated}'")
     return reformulated
+
+def text_to_sql_filters(query: str) -> dict:
+    """
+    Self-Query Retriever: Uses Ollama to extract metadata filters from the natural language query.
+    Extracts 'file_type' (e.g., pdf, docx, txt) and 'page' (integer) if mentioned.
+    Returns a dictionary of filters to be applied in the vector search.
+    """
+    prompt = f"""
+    You are a metadata filter extractor.
+    Extract the 'file_type' (extension) and 'page' number from this query if present.
+    Return ONLY a raw JSON object with keys "file_type" (string or null) and "page" (integer or null).
+    Do NOT include any markdown, explanation, or code blocks.
+    
+    Query: "{query}"
+    """
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0.0}
+    }
+    try:
+        response = requests.post(get_ollama_generate_url(), json=payload, timeout=5)
+        if response.status_code == 200:
+            text = response.json().get("response", "").strip()
+            if text.startswith("```json"): text = text[7:-3].strip()
+            elif text.startswith("```"): text = text[3:-3].strip()
+            filters = json.loads(text)
+            return {k: v for k, v in filters.items() if v is not None}
+    except Exception as e:
+        print(f"[Self-Query] Filter extraction failed: {e}")
+    return {}
+
 

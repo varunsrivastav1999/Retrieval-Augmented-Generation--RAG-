@@ -1,6 +1,7 @@
 volumes:
   prod_ollama_data: {}
   prod_huggingface_cache: {}
+  prod_neo4j_data: {}
 
 services:
   rag_api:
@@ -12,6 +13,7 @@ services:
     depends_on:
       - ollama
       - redis
+      - neo4j
     volumes:
       - .:/app:z
       - /your/new/absolute/path/to/external_media:/media
@@ -26,6 +28,7 @@ services:
       - ./.envs/.production/.rag
       - ./.envs/.production/.postgres
       - ./.envs/.production/.redis
+      - ./.envs/.production/.neo4j
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:1000/health/ready"]
       interval: 30s
@@ -70,3 +73,14 @@ services:
     image: redis:7-alpine
     container_name: itips_redis_prod
     command: redis-server --requirepass ${REDIS_PASSWORD:-mysecurepassword}
+
+  neo4j:
+    image: neo4j:5.17.0
+    container_name: neo4j_rag_prod
+    volumes:
+      - prod_neo4j_data:/data:z
+    environment:
+      - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-rag_password}
+    ports:
+      - "7474:7474"
+      - "7687:7687"

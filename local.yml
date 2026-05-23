@@ -3,6 +3,7 @@ volumes:
   local_redis_data: {}
   local_huggingface_cache: {}
   local_ollama_data: {}
+  local_neo4j_data: {}
 
 services:
   rag_api:
@@ -15,6 +16,7 @@ services:
       - postgres
       - redis
       - ollama
+      - neo4j
     volumes:
       - .:/app:z
       - /Users/tei-1358/Documents/i-Tips Projects/TM-2000_TVS/Dev/external_media:/media
@@ -31,6 +33,7 @@ services:
       - ./.envs/.local/.rag
       - ./.envs/.local/.postgres
       - ./.envs/.local/.redis
+      - ./.envs/.local/.neo4j
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:1000/health/ready"]
       interval: 30s
@@ -72,6 +75,17 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  neo4j:
+    image: neo4j:5.17.0
+    container_name: neo4j_rag_local
+    volumes:
+      - local_neo4j_data:/data:z
+    environment:
+      - NEO4J_AUTH=neo4j/rag_password
+    ports:
+      - "7474:7474"
+      - "7687:7687"
 
   pull-models:
     image: ollama/ollama:latest
