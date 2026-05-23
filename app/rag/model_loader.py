@@ -21,6 +21,7 @@ RERANKER_MODEL = os.getenv(
     "RAG_RERANKER_MODEL",
     "cross-encoder/ms-marco-MiniLM-L-6-v2",
 )
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
 MODEL_CACHE_DIR = os.getenv("SENTENCE_TRANSFORMERS_HOME") or os.getenv("HF_HOME")
 HF_OFFLINE = os.getenv("RAG_HF_OFFLINE", "false").lower() in {"1", "true", "yes", "on"}
 ALLOW_HASH_FALLBACK = os.getenv("RAG_ALLOW_HASH_FALLBACK", "false").lower() in {
