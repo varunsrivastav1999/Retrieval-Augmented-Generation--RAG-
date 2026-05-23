@@ -52,7 +52,7 @@ from app.rag.jobs import (
     start_ingestion_worker,
 )
 from app.rag.model_loader import get_embedding_model_id, runtime_model_info, validate_runtime_models
-from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search, rerank_results
+from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search
 from app.rag.router import query_router
 from app.rag.graph import graph_db
 from app.rag.reranker import rerank_results
