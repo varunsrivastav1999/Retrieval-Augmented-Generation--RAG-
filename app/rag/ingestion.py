@@ -203,6 +203,32 @@ def ingest_file(
         section = 0
         pending_chunks = []
         total_pages = len(parse_result.pages)
+        doc_title = os.path.basename(file_path)
+
+        # --- OPTIMIZED CONTEXTUAL RETRIEVAL ---
+        # Generate a global document context from the first few pages to prepend to chunks
+        # This solves the "lost in the middle" problem with O(1) LLM calls.
+        intro_text = ""
+        for p in parse_result.pages[:3]:
+            intro_text += p.text + "\n"
+        intro_text = intro_text[:3000].strip()
+        
+        doc_context_summary = ""
+        if intro_text:
+            prompt = f"Write a 1-sentence summary of what this document is about, focusing on main entities and topics. Document start:\n{intro_text}"
+            try:
+                import requests
+                res = requests.post(get_ollama_generate_url(), json={
+                    "model": OLLAMA_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.0}
+                }, timeout=15)
+                if res.status_code == 200:
+                    doc_context_summary = res.json().get("response", "").strip()
+                    print(f"[Contextual Retrieval] Generated Context: {doc_context_summary}")
+            except Exception as e:
+                print(f"[Contextual Retrieval] Failed to generate context: {e}")
 
         for page_idx, page in enumerate(parse_result.pages):
             # --- Layer 2: Combine all content from page ---
@@ -222,8 +248,11 @@ def ingest_file(
                 if not raw_text.strip():
                     continue
 
-                # Contextual Chunk Header: Prepend doc title and page
-                chunk_text = f"[{doc_title} | Page {page.page_num}]\n{raw_text}"
+                # Contextual Chunk Header: Prepend doc title, page, and Global Context
+                header = f"[{doc_title} | Page {page.page_num}]"
+                if doc_context_summary:
+                    header += f"\n[GLOBAL CONTEXT: {doc_context_summary}]"
+                chunk_text = f"{header}\n{raw_text}"
 
                 chunks_total += 1
                 chunk_hash = hash_chunk(chunk_text)

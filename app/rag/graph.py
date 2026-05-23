@@ -4,7 +4,7 @@ import requests
 from neo4j import GraphDatabase
 from typing import List, Dict, Any
 
-from app.rag.model_loader import extract_entities, get_ollama_generate_url
+from app.rag.model_loader import extract_entities, extract_triplets, get_ollama_generate_url
 
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
@@ -24,27 +24,25 @@ class GraphDB:
             self.driver.close()
 
     def populate_from_chunk(self, chunk_id: str, text: str, tenant_id: str):
-        """Extracts entities and creates CO_OCCURS relationships in Neo4j."""
+        """Extracts entities and relationships, and creates them in Neo4j."""
         if not self.driver:
             return
             
-        entities = extract_entities(text)
-        if len(entities) < 2:
+        triplets = extract_triplets(text)
+        if not triplets:
             return
             
         query = """
-        UNWIND $entities AS e1
-        UNWIND $entities AS e2
-        WITH e1, e2 WHERE e1 < e2
-        MERGE (n1:Entity {name: e1, tenant_id: $tenant_id})
-        MERGE (n2:Entity {name: e2, tenant_id: $tenant_id})
-        MERGE (n1)-[r:CO_OCCURS]->(n2)
+        UNWIND $triplets AS trip
+        MERGE (n1:Entity {name: trip[0], tenant_id: $tenant_id})
+        MERGE (n2:Entity {name: trip[2], tenant_id: $tenant_id})
+        MERGE (n1)-[r:RELATED_TO {verb: trip[1]}]->(n2)
         ON CREATE SET r.weight = 1
         ON MATCH SET r.weight = r.weight + 1
         """
         try:
             with self.driver.session() as session:
-                session.run(query, entities=entities, tenant_id=tenant_id)
+                session.run(query, triplets=triplets, tenant_id=tenant_id)
         except Exception as e:
             print(f"[GraphDB] Error populating graph: {e}")
 
@@ -54,7 +52,7 @@ class GraphDB:
         You are a Neo4j Cypher expert. Convert the following natural language query into a Cypher query.
         The graph schema is:
         - Nodes: Entity (properties: name, tenant_id)
-        - Relationships: CO_OCCURS (properties: weight)
+        - Relationships: RELATED_TO (properties: verb, weight)
         
         Natural language query: {query}
         

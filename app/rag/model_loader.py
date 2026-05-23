@@ -423,3 +423,25 @@ def extract_entities(text: str) -> List[str]:
         return list(set(entities))
     except Exception:
         return []
+
+def extract_triplets(text: str) -> List[tuple]:
+    """Offline Knowledge Graph: Extract (Subject, Verb, Object) triplets using dependency parsing."""
+    nlp = get_spacy_model()
+    if not nlp or not text:
+        return []
+    try:
+        doc = nlp(text[:10000]) # Limit chunk to 10k chars for fast dependency parsing
+        triplets = []
+        for sent in doc.sents:
+            subjects = [tok for tok in sent if ("subj" in tok.dep_)]
+            objects = [tok for tok in sent if ("obj" in tok.dep_)]
+            verbs = [tok for tok in sent if tok.pos_ == "VERB"]
+            
+            if subjects and objects and verbs:
+                verb = verbs[0].lemma_
+                subj = subjects[0].text
+                obj = objects[0].text
+                triplets.append((subj, verb, obj))
+        return list(set(triplets))
+    except Exception:
+        return []

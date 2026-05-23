@@ -1433,73 +1433,73 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
 
     # Layer 13: Query Intelligence (Spelling, Expansion, Decomposition)
     query_intel = intelligent_query_pipeline(search_query)
-    
-    # Logical Routing
-    route = query_router.route_query(search_query)
-    print(f"[Router] Query routed to: {route.upper()}")
-    
-    metadata_filters = None
-    graph_context = ""
-    
-    if route == "sql":
-        metadata_filters = text_to_sql_filters(search_query)
-        print(f"[Self-Query] SQL Filters: {metadata_filters}")
-    elif route == "graph":
-        graph_context = graph_db.query_graph(search_query, tenant_id)
-        if not graph_context:
-            print("[Router] Graph returned no results, falling back to vector.")
-            route = "vector"
-    
-    if route == "graph" and graph_context:
-        # Bypass vector search if graph provides a direct answer
-        final_context = [{"text": graph_context, "metadata": {"type": "graph", "source": "Neo4j"}}]
-        grounding_result = {"is_grounded": True, "score": 1.0, "detail": "Answered via Knowledge Graph"}
-        sources = ["Neo4j Knowledge Graph"]
-    else:
-        # CRAG Retry Loop for Vector/SQL
-        max_retries = 1
-        retry_count = 0
-        grounding_result = None
-        final_context = []
-        
-        while retry_count <= max_retries:
-            if retry_count == 0:
-                queries_to_search = query_intel["expanded_queries"][:2]  # Limit to 2 for latency
-                print(f"[Retrieval] Multi-query search: {queries_to_search}")
-            else:
-                # CRAG: Reformulate query for retry
-                reformulated = reformulate_query(search_query)
-                queries_to_search = [reformulated]
-                print(f"[CRAG] Retrying with reformulated query: {reformulated}")
-                
-            # Layer 5+13: Sub-Query RRF Fusion
-            retrieved_chunks = perform_multi_query_search(db, queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4), metadata_filters=metadata_filters)
-        
-        # Layer 6: Cross-Encoder Reranking
-        reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
-        
-        # Layer 7+8: MMR + Context Assembly with Window Expansion
-        final_context = assemble_context(search_query, reranked_chunks, db=db)
-        sources = _context_sources(final_context)
 
-        # Layer 9: HALLUCINATION GUARD
-        grounding_result = compute_grounding_score(search_query, final_context)
-        print(f"[Grounding] Try {retry_count+1}: {grounding_result['detail']}")
-
-        score = grounding_result.get("score", 0.0)
-        
-        if grounding_result["is_grounded"] or score == 0.0:
-            # If grounded, or completely irrelevant (score 0), don't retry
-            break
+    # --- FAST MULTI-AGENT STATE MACHINE ---
+    class AgentState:
+        def __init__(self):
+            self.current_state = "route"
+            self.queries_to_search = [search_query]
+            self.metadata_filters = None
+            self.graph_context = ""
+            self.final_context = []
+            self.grounding_result = None
+            self.retry_count = 0
+            self.sources = []
+            self.answer = ""
             
-        if 0.0 < score < 0.25:
-            # Gray zone: answer might be there under different terms
-            print("[CRAG] Grounding score in gray zone. Triggering corrective retry.")
-            retry_count += 1
-        else:
-            break
+    agent = AgentState()
+    
+    while agent.current_state not in ["generate", "end"]:
+        
+        if agent.current_state == "route":
+            route = query_router.route_query(search_query)
+            print(f"[Agent:Router] Routed to: {route.upper()}")
+            if route == "sql":
+                agent.metadata_filters = text_to_sql_filters(search_query)
+            elif route == "graph":
+                agent.graph_context = graph_db.query_graph(search_query, tenant_id)
+                if agent.graph_context:
+                    agent.final_context = [{"text": agent.graph_context, "metadata": {"type": "graph", "source": "Neo4j"}}]
+                    agent.grounding_result = {"is_grounded": True, "score": 1.0, "detail": "Answered via Graph"}
+                    agent.sources = ["Neo4j Knowledge Graph"]
+                    agent.current_state = "generate"
+                    continue
+                else:
+                    route = "vector"
+            
+            agent.queries_to_search = query_intel["expanded_queries"][:2]
+            agent.current_state = "retrieve"
+            
+        elif agent.current_state == "retrieve":
+            print(f"[Agent:Retriever] Searching: {agent.queries_to_search}")
+            retrieved_chunks = perform_multi_query_search(db, agent.queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4), metadata_filters=agent.metadata_filters)
+            reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
+            agent.final_context = assemble_context(search_query, reranked_chunks, db=db)
+            agent.sources = _context_sources(agent.final_context)
+            agent.current_state = "grade"
+            
+        elif agent.current_state == "grade":
+            agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
+            score = agent.grounding_result.get("score", 0.0)
+            print(f"[Agent:Evaluator] Try {agent.retry_count+1} Score: {score}")
+            
+            if agent.grounding_result["is_grounded"] or score == 0.0 or agent.retry_count >= 1:
+                agent.current_state = "generate" if agent.final_context else "end"
+            else:
+                agent.current_state = "rewrite"
+                
+        elif agent.current_state == "rewrite":
+            print("[Agent:Rewriter] Rewriting query for retry...")
+            reformulated = reformulate_query(search_query)
+            agent.queries_to_search = [reformulated]
+            agent.retry_count += 1
+            agent.current_state = "retrieve"
 
-    if not grounding_result["is_grounded"] or not final_context:
+    final_context = agent.final_context
+    sources = agent.sources
+    grounding_result = agent.grounding_result
+    
+    if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
         # BLOCKED — no relevant content in documents
         latency = int((time.time() - start_time) * 1000)
         
