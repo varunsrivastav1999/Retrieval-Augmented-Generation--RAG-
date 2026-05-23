@@ -1,7 +1,7 @@
 import os
 import requests
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, cast, String
 
 from app.database import DocumentChunk
 from app.rag.model_loader import encode_text, get_embedding_model_id, encode_image_text_query, extract_entities
@@ -83,7 +83,7 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
         if "file_type" in metadata_filters and metadata_filters["file_type"]:
             base_filters.append(DocumentChunk.file_type == metadata_filters["file_type"])
         if "page" in metadata_filters and metadata_filters["page"]:
-            base_filters.append(DocumentChunk.doc_metadata['page_num'].astext == str(metadata_filters["page"]))
+            base_filters.append(cast(DocumentChunk.doc_metadata['page_num'], String) == str(metadata_filters["page"]))
 
     dense_rows = (
         db.query(DocumentChunk, distance_expr)

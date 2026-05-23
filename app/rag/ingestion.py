@@ -23,6 +23,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
+from sqlalchemy import func, cast, String
 from sqlalchemy.exc import IntegrityError
 
 from app.database import DocumentChunk, SessionLocal
@@ -472,7 +473,7 @@ def _build_raptor_index(db, tenant_id: str, doc_id: str, embedding_model: str, d
             DocumentChunk.tenant_id == tenant_id,
             DocumentChunk.doc_id == doc_id,
             DocumentChunk.embedding_model == embedding_model,
-            DocumentChunk.doc_metadata['is_parent'].astext == "true"
+            cast(DocumentChunk.doc_metadata['is_parent'], String) == '"true"'
         ).all()
         
         if len(parent_chunks) < 5:
