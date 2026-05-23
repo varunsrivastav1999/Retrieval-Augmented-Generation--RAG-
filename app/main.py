@@ -1545,6 +1545,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         def stream_llm():
             payload = {
                 "model": OLLAMA_MODEL,
+                "system": "",
                 "prompt": prompt,
                 "stream": True,
                 "options": {
@@ -1619,6 +1620,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     # Non-streaming fallback
     payload = {
         "model": OLLAMA_MODEL,
+        "system": "",
         "prompt": prompt,
         "stream": False,
         "options": {
