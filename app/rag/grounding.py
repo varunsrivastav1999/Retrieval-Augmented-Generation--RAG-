@@ -1,6 +1,6 @@
 """
 =============================================================================
- i-Tips RAG: Layers 9 & 10 — Hallucination Guard & Answer Verification
+ Advanced RAG: Layers 9 & 10 — Hallucination Guard & Answer Verification
 =============================================================================
  Layer 9:  Pre-generation grounding check — refuse to answer if no relevant
            content exists in the documents.
@@ -238,7 +238,7 @@ def build_strict_grounding_prompt(
 
     return (
         "═══════════════════════════════════════════════════════════\n"
-        "  SYSTEM: i-Tips Technical Intelligence Agent\n"
+        "  SYSTEM: Technical Intelligence Agent\n"
         "  MODE: STRICT DOCUMENT GROUNDING — ZERO HALLUCINATION\n"
         "═══════════════════════════════════════════════════════════\n\n"
         "CRITICAL RULES:\n"
