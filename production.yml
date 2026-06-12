@@ -61,7 +61,10 @@ services:
     volumes:
       - prod_huggingface_cache:/models/huggingface:ro
       - prod_media:/media
-      - ./:/app:ro
+      - type: bind
+        source: ./
+        target: /app
+        read_only: true
     environment:
       - HF_HOME=/models/huggingface
       - SENTENCE_TRANSFORMERS_HOME=/models/huggingface/sentence-transformers
@@ -106,7 +109,10 @@ services:
     restart: unless-stopped
     volumes:
       - prod_pgvector_data:/var/lib/postgresql/data
-      - ./scripts/db/init:/docker-entrypoint-initdb.d:ro
+      - type: bind
+        source: ./scripts/db/init
+        target: /docker-entrypoint-initdb.d
+        read_only: true
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-rag_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-rag_password}
@@ -227,7 +233,10 @@ services:
     volumes:
       - prod_ollama_data:/root/.ollama
       - prod_huggingface_cache:/models/huggingface
-      - ./:/app:ro
+      - type: bind
+        source: ./
+        target: /app
+        read_only: true
     environment:
       - OLLAMA_HOST=http://ollama:11434
       - HF_HOME=/models/huggingface
@@ -305,7 +314,10 @@ services:
         condition: service_healthy
     volumes:
       - prod_backup_data:/backup
-      - ./scripts/backup:/scripts/backup:ro
+      - type: bind
+        source: ./scripts/backup
+        target: /scripts/backup
+        read_only: true
     environment:
       - PGHOST=postgres
       - PGUSER=${POSTGRES_USER:-rag_user}
