@@ -45,12 +45,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Pre-download models (baked into builder layer)
 RUN --mount=type=cache,target=/root/.cache/huggingface \
-    python -c "
-from sentence_transformers import SentenceTransformer, CrossEncoder
-SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-SentenceTransformer('sentence-transformers/clip-ViT-B-32')
-CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-"
+    python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); SentenceTransformer('sentence-transformers/clip-ViT-B-32'); CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
 
 # Download spaCy model
 RUN python -m spacy download en_core_web_sm
