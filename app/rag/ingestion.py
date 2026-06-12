@@ -28,7 +28,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.database import DocumentChunk, SessionLocal
 from app.rag.jobs import complete_ingestion_job, fail_ingestion_job, update_ingestion_job
-from app.rag.model_loader import encode_text, encode_texts, get_embedding_model_id, extract_entities, encode_image, get_ollama_generate_url, OLLAMA_MODEL
+from app.rag.model_loader import encode_text, encode_texts, get_embedding_model_id, extract_entities, encode_image, get_ollama_generate_url, OLLAMA_MODEL, RAG_EMBEDDING_QUANTIZE
 from app.rag.graph import graph_db
 from app.rag.parsers import ParseResult, get_file_type, is_supported_file, parse_file
 from PIL import Image
@@ -395,9 +395,17 @@ def _process_chunk_batch(
     vectors = encode_texts(texts)
     inserted = 0
 
-    # Try batch commit first for speed
+    quantized_batch = []
+    if RAG_EMBEDDING_QUANTIZE == "int8":
+        from app.rag.quantization import quantize_vector_batch
+        q_bytes, q_scale, q_zp = quantize_vector_batch(vectors)
+        import json, base64
+        for qb in q_bytes:
+            b64 = base64.b64encode(qb).decode("ascii")
+            quantized_batch.append(json.dumps({"data": b64, "scale": q_scale, "zp": q_zp}))
+
     for i, c in enumerate(pending_chunks):
-        doc_chunk = DocumentChunk(
+        kw = dict(
             tenant_id=tenant_id,
             doc_id=doc_id,
             chunk_hash=c["hash"],
@@ -417,17 +425,18 @@ def _process_chunk_batch(
             embedding=vectors[i],
             file_type=file_type,
         )
-        db.add(doc_chunk)
+        if quantized_batch:
+            kw["quantized_embedding"] = quantized_batch[i]
+        db.add(DocumentChunk(**kw))
 
     try:
         db.commit()
         inserted = len(pending_chunks)
     except Exception:
         db.rollback()
-        # Fallback: insert one-by-one
         for i, c in enumerate(pending_chunks):
             try:
-                single_chunk = DocumentChunk(
+                single_kw = dict(
                     tenant_id=tenant_id,
                     doc_id=doc_id,
                     chunk_hash=c["hash"],
@@ -447,11 +456,13 @@ def _process_chunk_batch(
                     embedding=vectors[i],
                     file_type=file_type,
                 )
-                db.add(single_chunk)
+                if quantized_batch:
+                    single_kw["quantized_embedding"] = quantized_batch[i]
+                db.add(DocumentChunk(**single_kw))
                 db.commit()
                 inserted += 1
             except IntegrityError:
-                db.rollback()  # Skip duplicates
+                db.rollback()
             except Exception as e:
                 db.rollback()
                 print(f"[Ingest] Single chunk error: {e}")
@@ -495,8 +506,8 @@ def _build_raptor_index(db, tenant_id: str, doc_id: str, embedding_model: str, d
             clusters[label].append(parent_chunks[i].text_content)
             
         for cluster_id, texts in clusters.items():
-            combined_text = "\\n\\n---\\n\\n".join(texts[:3]) # Limit to top 3 to avoid context overflow
-            prompt = f"Summarize the following document sections into a single concise paragraph. Keep key entities and concepts.\\n\\n{combined_text}"
+            combined_text = "\n\n---\n\n".join(texts[:3])
+            prompt = f"Summarize the following document sections into a single concise paragraph. Keep key entities and concepts.\n\n{combined_text}"
             
             payload = {
                 "model": OLLAMA_MODEL,
@@ -507,7 +518,7 @@ def _build_raptor_index(db, tenant_id: str, doc_id: str, embedding_model: str, d
             res = requests.post(get_ollama_generate_url(), json=payload, timeout=30)
             if res.status_code == 200:
                 summary = res.json().get("response", "").strip()
-                summary_text = f"[RAPTOR SUMMARY | {doc_title} | Cluster {cluster_id}]\\n{summary}"
+                summary_text = f"[RAPTOR SUMMARY | {doc_title} | Cluster {cluster_id}]\n{summary}"
                 summary_hash = hash_chunk(summary_text)
                 
                 # Check duplicate

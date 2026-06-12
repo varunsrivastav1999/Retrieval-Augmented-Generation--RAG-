@@ -55,8 +55,22 @@ tmp/
 temp/
 
 # Secrets — NEVER commit real credentials
-# (The .envs directory contains template configs for Docker;
-#  make sure no real production passwords are in there)
+.envs/.production/*.local
+.envs/.local/*.local
+.envs/.production/.rag
+.envs/.production/.postgres
+.envs/.production/.redis
+.envs/.production/.neo4j
+!*.example
+
+# Backup files
+backups/
+.backups/
+*.backup
+*.dump
+
+# Database initialization (sensitive vars)
+scripts/db/init/*.local
 
 # Coverage & Testing
 .coverage

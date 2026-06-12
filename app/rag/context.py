@@ -2,6 +2,8 @@ import os
 from app.database import DocumentChunk
 from app.rag.model_loader import cosine_similarity, encode_text, encode_texts, get_embedding_model_id
 
+ENABLE_CONTEXT_EXPANSION = os.getenv("RAG_ENABLE_CONTEXT_EXPANSION", "false").lower() in {"1", "true", "yes", "on"}
+
 def apply_mmr(query: str, chunks: list, diversity: float = 0.5) -> list:
     """
     Layer 5: Context Assembly - Apply MMR (Max Marginal Relevance)
@@ -56,7 +58,7 @@ def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
     expanded_ids = set()
     
     for i, chunk in enumerate(mmr_filtered):
-        if False: # Disabled for ultra-low latency to prevent massive context dumps
+        if ENABLE_CONTEXT_EXPANSION:
             metadata = chunk.get("metadata", {})
             doc_id = metadata.get("source")
             section = metadata.get("section")
@@ -97,7 +99,6 @@ def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
     return final_context
 
 def _candidate_from_chunk(chunk) -> dict:
-    # Minimal version of the helper from retrieval.py
     return {
         "id": chunk.id,
         "text": chunk.text_content,
@@ -105,5 +106,6 @@ def _candidate_from_chunk(chunk) -> dict:
             "source": chunk.doc_id,
             "section": chunk.section,
             "page_num": (chunk.doc_metadata or {}).get("page_num"),
-        }
+        },
+        "quantized_embedding": chunk.quantized_embedding if hasattr(chunk, "quantized_embedding") else None,
     }

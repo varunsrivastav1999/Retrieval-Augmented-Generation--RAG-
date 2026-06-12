@@ -19,6 +19,12 @@ from pgvector.sqlalchemy import Vector
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://rag_user:rag_password@postgres:5432/rag_db")
 EMBEDDING_DIM = int(os.getenv("RAG_EMBEDDING_DIM", "384"))
+RAG_USE_HALFVEC = os.getenv("RAG_USE_HALFVEC", "false").lower() in {"1", "true", "yes", "on"}
+try:
+    from pgvector.sqlalchemy import Halfvec as _Halfvec
+    VECTOR_TYPE = _Halfvec if RAG_USE_HALFVEC else Vector
+except ImportError:
+    VECTOR_TYPE = Vector
 LEGACY_EMBEDDING_MODEL = os.getenv(
     "RAG_LEGACY_EMBEDDING_MODEL",
     "sentence-transformers/all-MiniLM-L6-v2",
@@ -52,7 +58,7 @@ class DocumentChunk(Base):
     section = Column(Integer)
     doc_metadata = Column(JSON)
     embedding_model = Column(String, default=LEGACY_EMBEDDING_MODEL, nullable=False, index=True)
-    embedding = Column(Vector(EMBEDDING_DIM))
+    embedding = Column(VECTOR_TYPE(EMBEDDING_DIM))
     created_at = Column(DateTime, default=utcnow, nullable=False)
     # --- NEW columns for 12-layer architecture ---
     file_type = Column(String, default="pdf", nullable=True, index=True)
@@ -60,6 +66,7 @@ class DocumentChunk(Base):
     confidence_score = Column(Float, nullable=True)
     # --- NEW columns for Multi-modal / Vision ---
     image_embedding = Column(Vector(512), nullable=True)
+    quantized_embedding = Column(Text, nullable=True)
 
 
 class IngestionJob(Base):
@@ -130,6 +137,10 @@ def _run_schema_migrations():
         _execute_best_effort(
             conn,
             "ALTER TABLE document_chunks ADD COLUMN image_embedding vector(512)"
+        )
+        _execute_best_effort(
+            conn,
+            "ALTER TABLE document_chunks ADD COLUMN quantized_embedding text"
         )
         _execute_best_effort(
             conn,

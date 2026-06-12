@@ -1,38 +1,51 @@
+# =============================================================================
+# i-Tips RAG — Production Environment (EDIT THIS FILE WITH YOUR SECRETS)
+# =============================================================================
+# NEVER commit this file to version control with real passwords.
+# On first deploy, replace all CHANGE_ME_* values with real secrets.
+# =============================================================================
+
 # General
-# ------------------------------------------------------------------------------
 USE_DOCKER=yes
 RAG_ENV=production
-RAG_CORS_ORIGINS=*
+RAG_CORS_ORIGINS=https://your-domain.com
 
-# Database (Native System PostgreSQL with pgvector)
-# ------------------------------------------------------------------------------
-DATABASE_URL=postgresql://tvs_ds_admin:tvsnuke2025@172.17.0.1:5432/rag_db
+# Database (pgvector)
+DATABASE_URL=postgresql://rag_user:CHANGE_ME_PASSWORD@postgres:5432/rag_db
 
-# Redis (Native System Redis)
-# ------------------------------------------------------------------------------
-REDIS_URL=redis://172.17.0.1:6379/0
+# Redis
+REDIS_URL=redis://:CHANGE_ME_REDIS_PASSWORD@redis:6379/0
 
 # Media
-# ------------------------------------------------------------------------------
 MEDIA_PATH=/media
 
 # Ollama
-# ------------------------------------------------------------------------------
 OLLAMA_URL=http://ollama:11434/api/generate
 OLLAMA_MODEL=itips-brain
+OLLAMA_TIMEOUT_SECONDS=300
+OLLAMA_NUM_PREDICT=1024
 
 # GPU
-# ------------------------------------------------------------------------------
-USE_GPU=true
 RAG_MODEL_DEVICE=
 
 # Hugging Face models
-# ------------------------------------------------------------------------------
 RAG_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 RAG_RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
-RAG_HF_OFFLINE=false
+RAG_HF_OFFLINE=true
 RAG_ALLOW_HASH_FALLBACK=false
 RAG_ALLOW_RERANKER_FALLBACK=false
 RAG_REQUIRE_REAL_MODELS=true
 RAG_PRELOAD_MODELS_ON_STARTUP=true
 RAG_ENABLE_INGESTION_WORKER=true
+
+# Performance Tuning
+RAG_DEFAULT_TOP_K=12
+RAG_MAX_TOP_K=50
+RAG_BROAD_QUERY_TOP_K=16
+RAG_INGESTION_WORKER_POLL_SECONDS=3
+RAG_CACHE_SEMANTIC_THRESHOLD=0.85
+RAG_EMBEDDING_QUANTIZE=int8
+RAG_USE_HALFVEC=true
+
+# Context Expansion
+RAG_ENABLE_CONTEXT_EXPANSION=true

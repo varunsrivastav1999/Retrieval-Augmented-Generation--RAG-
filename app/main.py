@@ -33,7 +33,7 @@ import threading
 import time
 from fastapi import Body, HTTPException, Depends, File, Query, UploadFile
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -44,6 +44,7 @@ import redis
 import json
 import hashlib
 
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from app.database import DocumentChunk, IngestionJob, SessionLocal, init_db, get_db
 from app.rag.jobs import (
     create_ingestion_job,
@@ -71,6 +72,15 @@ app = FastAPI(
     description="World's best zero-hallucination RAG with unlimited file support, sub-5ms exact extraction, and Layer 13 Query Intelligence.",
     version="3.0.0",
 )
+
+# ── Prometheus Metrics ────────────────────────────────────────────────────────
+RAG_QUERY_TOTAL = Counter("rag_queries_total", "Total queries processed", ["tenant", "status"])
+RAG_QUERY_LATENCY = Histogram("rag_query_latency_seconds", "Query latency in seconds",
+    ["tenant", "fast_path"], buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0))
+RAG_INGESTION_TOTAL = Counter("rag_ingestion_total", "Total files ingested", ["file_type"])
+RAG_CACHE_HITS = Counter("rag_cache_hits_total", "Total cache hits", ["type"])
+RAG_GROUNDING_BLOCKED = Counter("rag_grounding_blocked_total", "Queries blocked by grounding guard")
+RAG_LLM_CALLS = Counter("rag_llm_calls_total", "Total Ollama LLM calls", ["operation"])
 
 # Serve local JS libraries (Chart.js, marked.js) for offline use
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -166,16 +176,9 @@ def _cache_key(
     return f"rag_cache:{query_hash}"
 
 
-import math
-from app.rag.model_loader import encode_text
+from app.rag.model_loader import cosine_similarity, encode_text
 
-def _cosine_sim(v1, v2):
-    dot_product = sum(a * b for a, b in zip(v1, v2))
-    norm_a = math.sqrt(sum(a * a for a in v1))
-    norm_b = math.sqrt(sum(b * b for b in v2))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot_product / (norm_a * norm_b)
+CACHE_SEMANTIC_THRESHOLD = float(os.getenv("RAG_CACHE_SEMANTIC_THRESHOLD", "0.85"))
 
 def get_cached_response(
     query: str,
@@ -187,7 +190,7 @@ def get_cached_response(
 ):
     if not redis_client: return None
     try:
-        # Layer 11: Semantic Query Cache
+        # Layer 11: Semantic Query Cache — aggressive matching (0.85 threshold)
         query_vector = encode_text(query)
         index_key = f"semantic_index:{tenant_id}:{embedding_model}:{corpus_version}"
         
@@ -198,12 +201,12 @@ def get_cached_response(
             best_sim = 0.0
             
             for item in index:
-                sim = _cosine_sim(query_vector, item["embedding"])
+                sim = cosine_similarity(query_vector, item["embedding"])
                 if sim > best_sim:
                     best_sim = sim
                     best_match = item
                     
-            if best_match and best_sim > 0.92:
+            if best_match and best_sim > CACHE_SEMANTIC_THRESHOLD:
                 print(f"[Cache] Semantic HIT (sim={best_sim:.3f}) for query={query!r}")
                 cached = redis_client.get(best_match["cache_key"])
                 if cached:
@@ -360,6 +363,7 @@ class QueryRequest(BaseModel):
     include_scan: bool = True
     force_reindex: bool = False
     stream: bool = False
+    fast_path: bool = Field(False, description="Sub-5ms fast path: skip HyDE, BM25, Vision, Cross-encoder reranker")
 
 
 class IngestRequest(BaseModel):
@@ -679,6 +683,11 @@ def list_supported_formats():
 def live_health():
     return {"status": "ok"}
 
+
+@app.get("/metrics")
+def prometheus_metrics():
+    """Prometheus metrics endpoint for monitoring and auto-scaling."""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/health/ready")
 def ready_health(db: Session = Depends(get_db)):
@@ -1385,6 +1394,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     If information is NOT in documents → returns "not available" (ZERO hallucination).
     """
     start_time = time.time()
+    request_start = start_time
     tenant_id = validate_tenant_id(request.tenant_id)
     embedding_model = get_embedding_model_id()
     broad_query = _is_broad_query(request.query)
@@ -1434,70 +1444,82 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     # Layer 13: Query Intelligence (Spelling, Expansion, Decomposition)
     query_intel = intelligent_query_pipeline(search_query)
 
-    # --- FAST MULTI-AGENT STATE MACHINE ---
-    class AgentState:
-        def __init__(self):
-            self.current_state = "route"
-            self.queries_to_search = [search_query]
-            self.metadata_filters = None
-            self.graph_context = ""
-            self.final_context = []
-            self.grounding_result = None
-            self.retry_count = 0
-            self.sources = []
-            self.answer = ""
-            
-    agent = AgentState()
-    
-    while agent.current_state not in ["generate", "end"]:
-        
-        if agent.current_state == "route":
-            route = query_router.route_query(search_query)
-            print(f"[Agent:Router] Routed to: {route.upper()}")
-            if route == "sql":
-                agent.metadata_filters = text_to_sql_filters(search_query)
-            elif route == "graph":
-                agent.graph_context = graph_db.query_graph(search_query, tenant_id)
-                if agent.graph_context:
-                    agent.final_context = [{"text": agent.graph_context, "metadata": {"type": "graph", "source": "Neo4j"}}]
-                    agent.grounding_result = {"is_grounded": True, "score": 1.0, "detail": "Answered via Graph"}
-                    agent.sources = ["Neo4j Knowledge Graph"]
-                    agent.current_state = "generate"
-                    continue
-                else:
-                    route = "vector"
-            
-            agent.queries_to_search = query_intel["expanded_queries"][:2]
-            agent.current_state = "retrieve"
-            
-        elif agent.current_state == "retrieve":
-            print(f"[Agent:Retriever] Searching: {agent.queries_to_search}")
-            retrieved_chunks = perform_multi_query_search(db, agent.queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4), metadata_filters=agent.metadata_filters)
-            reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
-            agent.final_context = assemble_context(search_query, reranked_chunks, db=db)
-            agent.sources = _context_sources(agent.final_context)
-            agent.current_state = "grade"
-            
-        elif agent.current_state == "grade":
-            agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
-            score = agent.grounding_result.get("score", 0.0)
-            print(f"[Agent:Evaluator] Try {agent.retry_count+1} Score: {score}")
-            
-            if agent.grounding_result["is_grounded"] or score == 0.0 or agent.retry_count >= 1:
-                agent.current_state = "generate" if agent.final_context else "end"
-            else:
-                agent.current_state = "rewrite"
+    # --- FAST PATH (sub-5ms): single dense HNSW search, skip all LLM calls ---
+    if request.fast_path:
+        retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
+        final_context = retrieved_chunks[:effective_top_k]
+        for c in final_context:
+            c["rerank_score"] = c.get("dense_score", 0.0)
+        sources = _context_sources(final_context)
+        grounding_result = compute_grounding_score(search_query, final_context)
+        # Skip the full state machine
+        state_machine_used = False
+    else:
+        state_machine_used = True
+        # --- FULL AGENTIC STATE MACHINE (multi-query, HyDE, BM25, reranker, CRAG) ---
+        class AgentState:
+            def __init__(self):
+                self.current_state = "route"
+                self.queries_to_search = [search_query]
+                self.metadata_filters = None
+                self.graph_context = ""
+                self.final_context = []
+                self.grounding_result = None
+                self.retry_count = 0
+                self.sources = []
+                self.answer = ""
                 
-        elif agent.current_state == "rewrite":
-            print("[Agent:Rewriter] Rewriting query for retry...")
-            reformulated = reformulate_query(search_query)
-            agent.queries_to_search = [reformulated]
-            agent.retry_count += 1
-            agent.current_state = "retrieve"
+        agent = AgentState()
+        
+        while agent.current_state not in ["generate", "end"]:
+            
+            if agent.current_state == "route":
+                route = query_router.route_query(search_query)
+                print(f"[Agent:Router] Routed to: {route.upper()}")
+                if route == "sql":
+                    agent.metadata_filters = text_to_sql_filters(search_query)
+                elif route == "graph":
+                    agent.graph_context = graph_db.query_graph(search_query, tenant_id)
+                    if agent.graph_context:
+                        agent.final_context = [{"text": agent.graph_context, "metadata": {"type": "graph", "source": "Neo4j"}}]
+                        agent.grounding_result = {"is_grounded": True, "score": 1.0, "detail": "Answered via Graph"}
+                        agent.sources = ["Neo4j Knowledge Graph"]
+                        agent.current_state = "generate"
+                        continue
+                    else:
+                        route = "vector"
+                
+                agent.queries_to_search = query_intel["expanded_queries"][:2]
+                agent.current_state = "retrieve"
+                
+            elif agent.current_state == "retrieve":
+                print(f"[Agent:Retriever] Searching: {agent.queries_to_search}")
+                retrieved_chunks = perform_multi_query_search(db, agent.queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4), metadata_filters=agent.metadata_filters)
+                reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
+                agent.final_context = assemble_context(search_query, reranked_chunks, db=db)
+                agent.sources = _context_sources(agent.final_context)
+                agent.current_state = "grade"
+                
+            elif agent.current_state == "grade":
+                agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
+                score = agent.grounding_result.get("score", 0.0)
+                print(f"[Agent:Evaluator] Try {agent.retry_count+1} Score: {score}")
+                
+                if agent.grounding_result["is_grounded"] or agent.retry_count >= 1:
+                    agent.current_state = "generate" if agent.final_context else "end"
+                else:
+                    agent.current_state = "rewrite"
+                    
+            elif agent.current_state == "rewrite":
+                print("[Agent:Rewriter] Rewriting query for retry...")
+                reformulated = reformulate_query(search_query)
+                agent.queries_to_search = [reformulated]
+                agent.retry_count += 1
+                agent.current_state = "retrieve"
 
-    final_context = agent.final_context
-    sources = agent.sources
-    grounding_result = agent.grounding_result
+        final_context = agent.final_context
+        sources = agent.sources
+        grounding_result = agent.grounding_result
     
     if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
         # BLOCKED — no relevant content in documents
@@ -1531,15 +1553,13 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     # ------------------------------------------------------------
     # Layer 12: LLM Answer Synthesis (Ollama)
     # ------------------------------------------------------------
-    import requests
-    
     context_texts = []
     for chunk in final_context:
         text = chunk.get('text', '')
         context_texts.append(text)
     context_text = "\n\n---\n\n".join(context_texts)
     
-    prompt = build_strict_grounding_prompt(search_query, context_text, False)
+    prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
     
     if request.stream:
         def stream_llm():
@@ -1675,6 +1695,14 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         {key: value for key, value in response_data.items() if key != "ingest"},
         scope=cache_scope,
     )
+
+    # Record Prometheus metrics
+    latency = time.time() - request_start
+    status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
+    RAG_QUERY_TOTAL.labels(tenant=tenant_id, status=status).inc()
+    RAG_QUERY_LATENCY.labels(tenant=tenant_id, fast_path=str(request.fast_path)).observe(latency)
+    if grounding_result and not grounding_result.get("is_grounded"):
+        RAG_GROUNDING_BLOCKED.inc()
     
     return response_data
 

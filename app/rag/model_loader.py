@@ -43,6 +43,9 @@ if HF_OFFLINE:
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
+RAG_EMBEDDING_QUANTIZE = os.getenv("RAG_EMBEDDING_QUANTIZE", "none").lower()
+RAG_USE_HALFVEC = os.getenv("RAG_USE_HALFVEC", "false").lower() in {"1", "true", "yes", "on"}
+
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 
 
@@ -184,10 +187,6 @@ def _model_appears_cached(model_name: str) -> bool:
 
 
 def get_ollama_generate_url() -> str:
-    # Try multiple addresses to bypass Mac Docker networking issues
-    potential_hosts = ["host.docker.internal", "172.17.0.1", "localhost", "127.0.0.1"]
-    
-    # Check if we've already found a working one
     base_url = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434/api/generate")
     return base_url
 
@@ -297,6 +296,8 @@ def runtime_model_info() -> dict:
         "using_embedding_fallback": embedding_id.startswith("fallback:"),
         "using_reranker_fallback": reranker_id.startswith("fallback:"),
         "requires_real_models": REQUIRE_REAL_MODELS,
+        "quantization": RAG_EMBEDDING_QUANTIZE,
+        "use_halfvec": RAG_USE_HALFVEC,
     }
 
 
@@ -306,11 +307,16 @@ def _as_vector(value: Any) -> List[float]:
     return [float(item) for item in value]
 
 
-def encode_text(text: str) -> List[float]:
-    return _as_vector(get_embedding_model().encode(text))
+def encode_text(text: str, quantize: bool = False) -> List[float]:
+    vec = _as_vector(get_embedding_model().encode(text))
+    if quantize and RAG_EMBEDDING_QUANTIZE == "int8":
+        from app.rag.quantization import quantize_embedding, dequantize_embedding
+        q_bytes, scale, zp = quantize_embedding(vec)
+        vec = dequantize_embedding(q_bytes, scale, zp, len(vec))
+    return vec
 
 
-def encode_texts(texts: Iterable[str]) -> List[List[float]]:
+def encode_texts(texts: Iterable[str], quantize: bool = False) -> List[List[float]]:
     text_list = list(texts)
     if not text_list:
         return []
@@ -318,7 +324,12 @@ def encode_texts(texts: Iterable[str]) -> List[List[float]]:
     encoded = get_embedding_model().encode(text_list)
     if hasattr(encoded, "tolist"):
         encoded = encoded.tolist()
-    return [_as_vector(vector) for vector in encoded]
+    vecs = [_as_vector(vector) for vector in encoded]
+    if quantize and RAG_EMBEDDING_QUANTIZE == "int8" and vecs:
+        from app.rag.quantization import quantize_vector_batch, dequantize_embedding
+        q_bytes, scale, zp = quantize_vector_batch(vecs)
+        vecs = [dequantize_embedding(qb, scale, zp, len(v)) for qb, v in zip(q_bytes, vecs)]
+    return vecs
 
 
 def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:

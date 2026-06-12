@@ -1,3 +1,9 @@
+# =============================================================================
+# i-Tips RAG — Local Development Environment
+# =============================================================================
+# Uses Docker-based infrastructure with relaxed security for dev speed.
+# =============================================================================
+
 # General
 # ------------------------------------------------------------------------------
 USE_DOCKER=yes
@@ -25,7 +31,6 @@ OLLAMA_NUM_PREDICT=512
 
 # GPU
 # ------------------------------------------------------------------------------
-USE_GPU=true
 RAG_MODEL_DEVICE=
 
 # Hugging Face models
@@ -35,6 +40,20 @@ RAG_RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 RAG_HF_OFFLINE=false
 RAG_ALLOW_HASH_FALLBACK=true
 RAG_ALLOW_RERANKER_FALLBACK=true
-RAG_REQUIRE_REAL_MODELS=true
+RAG_REQUIRE_REAL_MODELS=false
 RAG_PRELOAD_MODELS_ON_STARTUP=true
 RAG_ENABLE_INGESTION_WORKER=true
+
+# Performance Tuning
+# ------------------------------------------------------------------------------
+RAG_DEFAULT_TOP_K=12
+RAG_MAX_TOP_K=50
+RAG_BROAD_QUERY_TOP_K=16
+RAG_INGESTION_WORKER_POLL_SECONDS=3
+RAG_CACHE_SEMANTIC_THRESHOLD=0.85
+RAG_EMBEDDING_QUANTIZE=none
+RAG_USE_HALFVEC=false
+
+# Context Expansion
+# ------------------------------------------------------------------------------
+RAG_ENABLE_CONTEXT_EXPANSION=false

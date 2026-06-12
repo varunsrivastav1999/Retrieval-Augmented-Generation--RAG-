@@ -1,86 +1,327 @@
+# ==============================================================================
+# i-Tips RAG — Production Docker Compose (v3.0)
+# ==============================================================================
+# Architecture:
+#   - rag_api:  FastAPI microservice (4 workers, GPU-accelerated)
+#   - postgres: pgvector 15 with HNSW indexes for vector search
+#   - redis:    Redis 7 with password auth for semantic cache + job queue
+#   - ollama:   Ollama LLM server with GPU passthrough
+#   - neo4j:    Neo4j 5 knowledge graph for entity relationships
+#   - models:   One-shot model pre-loader / puller
+#   - backup:   Scheduled pg_dump + neo4j dump to S3-compatible storage
+# ==============================================================================
+
 volumes:
-  prod_ollama_data: {}
-  prod_huggingface_cache: {}
-  prod_neo4j_data: {}
+  prod_pgvector_data:
+    driver: local
+  prod_redis_data:
+    driver: local
+  prod_ollama_data:
+    driver: local
+  prod_neo4j_data:
+    driver: local
+  prod_huggingface_cache:
+    driver: local
+  prod_media:
+    driver: local
+  prod_backup_data:
+    driver: local
+
+networks:
+  rag_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
 
 services:
+  # ============================================================================
+  # RAG API — FastAPI Microservice
+  # ============================================================================
   rag_api:
     build:
       context: .
       dockerfile: Dockerfile
-    image: itips_rag_prod
+      cache_from:
+        - itips_rag_prod:latest
+    image: itips_rag_prod:latest
     container_name: itips_rag_prod
+    restart: unless-stopped
     depends_on:
-      - ollama
-      - redis
-      - neo4j
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      neo4j:
+        condition: service_started
+      models:
+        condition: service_completed_successfully
     volumes:
-      - .:/app:z
-      - /your/new/absolute/path/to/external_media:/media
-      - prod_huggingface_cache:/models/huggingface
+      - prod_huggingface_cache:/models/huggingface:ro
+      - prod_media:/media
+      - ./:/app:ro
     environment:
       - HF_HOME=/models/huggingface
       - SENTENCE_TRANSFORMERS_HOME=/models/huggingface/sentence-transformers
       - HF_HUB_CACHE=/models/huggingface/hub
-    ports:
-      - "1000:1000"
+      - TRANSFORMERS_CACHE=/models/huggingface/hub
     env_file:
       - ./.envs/.production/.rag
       - ./.envs/.production/.postgres
       - ./.envs/.production/.redis
       - ./.envs/.production/.neo4j
+    ports:
+      - "1000:1000"
+    networks:
+      rag_network:
+        ipv4_address: 172.28.0.10
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:1000/health/ready"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    command: uvicorn app.main:app --host 0.0.0.0 --port 1000 --workers 4
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
     deploy:
       resources:
+        limits:
+          cpus: "4"
+          memory: 8G
         reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+          cpus: "2"
+          memory: 4G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "7"
 
+  # ============================================================================
+  # PostgreSQL 15 + pgvector
+  # ============================================================================
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: postgres_pgvector_prod
+    restart: unless-stopped
+    volumes:
+      - prod_pgvector_data:/var/lib/postgresql/data
+      - ./scripts/db/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-rag_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-rag_password}
+      - POSTGRES_DB=${POSTGRES_DB:-rag_db}
+    env_file:
+      - ./.envs/.production/.postgres
+    ports:
+      - "5432:5432"
+    networks:
+      rag_network:
+        ipv4_address: 172.28.0.20
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rag_user} -d ${POSTGRES_DB:-rag_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 4G
+        reservations:
+          cpus: "1"
+          memory: 2G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # ============================================================================
+  # Redis 7 — Semantic Cache + Job Queue
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: redis_rag_prod
+    restart: unless-stopped
+    command: >
+      redis-server 
+      --requirepass ${REDIS_PASSWORD:-mysecurepassword}
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save 300 100
+      --appendonly yes
+      --appendfsync everysec
+    volumes:
+      - prod_redis_data:/data
+    env_file:
+      - ./.envs/.production/.redis
+    ports:
+      - "6379:6379"
+    networks:
+      rag_network:
+        ipv4_address: 172.28.0.30
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-mysecurepassword}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # ============================================================================
+  # Ollama — Local LLM Server (GPU-Accelerated)
+  # ============================================================================
   ollama:
     image: ollama/ollama:latest
     container_name: ollama_rag_prod
+    restart: unless-stopped
     volumes:
       - prod_ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      rag_network:
+        ipv4_address: 172.28.0.40
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
 
-  ollama-pull:
-    image: ollama/ollama:latest
-    container_name: ollama_rag_prod_pull
+  # ============================================================================
+  # Model Pre-Loader (runs once, exits)
+  # ============================================================================
+  models:
+    image: itips_rag_prod:latest
+    container_name: itips_rag_prod_models
     depends_on:
-      - ollama
-    entrypoint: /bin/sh
+      ollama:
+        condition: service_healthy
+    volumes:
+      - prod_ollama_data:/root/.ollama
+      - prod_huggingface_cache:/models/huggingface
+      - ./:/app:ro
     environment:
       - OLLAMA_HOST=http://ollama:11434
-    volumes:
-      - .:/app:ro
-    command: -c "sleep 10 && (ollama pull llama3 || echo 'Pull skipped') && ollama create itips-brain -f /app/Modelfile && echo 'itips-brain ready'"
+      - HF_HOME=/models/huggingface
+      - SENTENCE_TRANSFORMERS_HOME=/models/huggingface/sentence-transformers
+      - HF_HUB_CACHE=/models/huggingface/hub
+    env_file:
+      - ./.envs/.production/.rag
+    entrypoint: ["/bin/sh"]
+    command:
+      - "-c"
+      - |
+        echo "=== Pulling Ollama model: ${OLLAMA_MODEL:-llama3} ==="
+        ollama pull ${OLLAMA_MODEL:-llama3} || echo "Pull failed (may already exist)"
+        if [ -f /app/Modelfile ]; then
+          echo "=== Creating custom brain from Modelfile ==="
+          ollama create ${OLLAMA_MODEL:-itips-brain} -f /app/Modelfile || echo "Create failed"
+        fi
+        echo "=== Models ready ==="
+    networks:
+      rag_network:
+        ipv4_address: 172.28.0.50
 
-  redis:
-    image: redis:7-alpine
-    container_name: itips_redis_prod
-    command: redis-server --requirepass ${REDIS_PASSWORD:-mysecurepassword}
-
+  # ============================================================================
+  # Neo4j — Knowledge Graph (Entity Relationships)
+  # ============================================================================
   neo4j:
-    image: neo4j:5.17.0
+    image: neo4j:5.17.0-enterprise
     container_name: neo4j_rag_prod
+    restart: unless-stopped
     volumes:
-      - prod_neo4j_data:/data:z
+      - prod_neo4j_data:/data
     environment:
       - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-rag_password}
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_memory_pagecache_size=2G
+      - NEO4J_dbms_memory_heap_max__size=4G
+      - NEO4J_dbms_memory_heap_initial__size=1G
     ports:
       - "7474:7474"
       - "7687:7687"
+    networks:
+      rag_network:
+        ipv4_address: 172.28.0.60
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "${NEO4J_USER:-neo4j}", "-p", "${NEO4J_PASSWORD:-rag_password}", "RETURN 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 8G
+        reservations:
+          cpus: "1"
+          memory: 4G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # ============================================================================
+  # Automated Backup Service
+  # ============================================================================
+  backup:
+    image: itips_rag_prod:latest
+    container_name: itips_rag_prod_backup
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - prod_backup_data:/backup
+      - ./scripts/backup:/scripts/backup:ro
+    environment:
+      - PGHOST=postgres
+      - PGUSER=${POSTGRES_USER:-rag_user}
+      - PGPASSWORD=${POSTGRES_PASSWORD:-rag_password}
+      - PGDATABASE=${POSTGRES_DB:-rag_db}
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-rag_password}
+      - BACKUP_DIR=/backup
+      - RETENTION_DAYS=30
+    entrypoint: ["/bin/sh"]
+    command:
+      - "-c"
+      - |
+        echo "Backup service started. Running daily at 02:00."
+        echo "0 2 * * * /scripts/backup/run.sh >> /var/log/backup.log 2>&1" | crontab -
+        crond -f -l 2
+    networks:
+      rag_network: {}

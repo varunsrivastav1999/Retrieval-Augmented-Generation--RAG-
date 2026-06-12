@@ -1,9 +1,20 @@
+# ==============================================================================
+# i-Tips RAG — Local Development Docker Compose (v3.0)
+# ==============================================================================
+# Key differences from production.yml:
+#   - Source code mounted with :z for hot-reload
+#   - GPU optional (auto-detected: MPS on Mac, CUDA on Linux)
+#   - Weaker resource limits (laptop-friendly)
+#   - Relaxed security (no Redis password, debug mode)
+# ==============================================================================
+
 volumes:
   local_pgvector_data: {}
   local_redis_data: {}
-  local_huggingface_cache: {}
   local_ollama_data: {}
   local_neo4j_data: {}
+  local_huggingface_cache: {}
+  local_media: {}
 
 services:
   rag_api:
@@ -12,15 +23,22 @@ services:
       dockerfile: Dockerfile
     image: itips_rag_local
     container_name: itips_rag_local
+    restart: unless-stopped
     depends_on:
-      - postgres
-      - redis
-      - ollama
-      - neo4j
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      neo4j:
+        condition: service_started
+      pull-models:
+        condition: service_completed_successfully
     volumes:
       - .:/app:z
-      - /Users/tei-1358/Documents/i-Tips Projects/TM-2000_TVS/Dev/external_media:/media
-      - local_huggingface_cache:/models/huggingface
+      - local_huggingface_cache:/models/huggingface:ro
+      - local_media:/media
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -39,46 +57,74 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
-    command: uvicorn app.main:app --host 0.0.0.0 --port 1000 --reload
+      start_period: 60s
+    command: uvicorn app.main:app --host 0.0.0.0 --port 1000 --reload --log-level debug
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
 
   postgres:
     image: pgvector/pgvector:pg15
     container_name: postgres_pgvector_local
+    restart: unless-stopped
     volumes:
       - local_pgvector_data:/var/lib/postgresql/data:z
+      - ./scripts/db/init:/docker-entrypoint-initdb.d:ro
     environment:
       - POSTGRES_USER=rag_user
       - POSTGRES_PASSWORD=rag_password
       - POSTGRES_DB=rag_db
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_user -d rag_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   redis:
-    image: redis:6-alpine
+    image: redis:7-alpine
     container_name: redis_rag_local
+    restart: unless-stopped
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - local_redis_data:/data:z
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   ollama:
     image: ollama/ollama:latest
     container_name: ollama_rag_local
+    restart: unless-stopped
     volumes:
       - local_ollama_data:/root/.ollama
-      - .:/app:ro
     ports:
       - "11434:11434"
     healthcheck:
       test: ["CMD", "ollama", "list"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
 
   neo4j:
     image: neo4j:5.17.0
     container_name: neo4j_rag_local
+    restart: unless-stopped
     volumes:
       - local_neo4j_data:/data:z
     environment:
@@ -86,16 +132,32 @@ services:
     ports:
       - "7474:7474"
       - "7687:7687"
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "rag_password", "RETURN 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   pull-models:
     image: ollama/ollama:latest
     container_name: ollama_rag_local_pull
-    volumes:
-      - local_ollama_data:/root/.ollama
-    environment:
-      - OLLAMA_HOST=ollama
-    entrypoint: /bin/sh
-    command: -c "sleep 5 && ollama pull llama3"
     depends_on:
       ollama:
         condition: service_healthy
+    volumes:
+      - local_ollama_data:/root/.ollama
+      - .:/app:ro
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: /bin/sh
+    command:
+      - "-c"
+      - |
+        echo "=== Pulling Ollama model: ${OLLAMA_MODEL:-llama3} ==="
+        ollama pull ${OLLAMA_MODEL:-llama3} || echo "Pull skipped (already exists)"
+        if [ -f /app/Modelfile ]; then
+          echo "=== Creating custom brain from Modelfile ==="
+          ollama create ${OLLAMA_MODEL:-itips-brain} -f /app/Modelfile || echo "Create skipped"
+        fi
+        echo "=== Models ready ==="

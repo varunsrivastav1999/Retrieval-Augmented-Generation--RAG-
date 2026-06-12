@@ -33,3 +33,4 @@ spacy==3.7.4
 # 5. NLP Entity Extraction: spacy en_core_web_sm (Downloaded via direct link below)
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
 neo4j==5.17.0
+prometheus-client==0.20.0

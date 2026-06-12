@@ -1,4 +1,8 @@
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=rag_password
+# =============================================================================
+# i-Tips RAG — Neo4j Production Credentials
+# =============================================================================
+# =============================================================================
 
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=CHANGE_ME_NEO4J_PASSWORD
 NEO4J_URI=bolt://neo4j:7687
