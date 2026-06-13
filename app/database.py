@@ -60,7 +60,7 @@ class DocumentChunk(Base):
     embedding_model = Column(String, default=LEGACY_EMBEDDING_MODEL, nullable=False, index=True)
     embedding = Column(VECTOR_TYPE(EMBEDDING_DIM))
     created_at = Column(DateTime, default=utcnow, nullable=False)
-    # --- NEW columns for 12-layer architecture ---
+    # --- NEW columns for 17-layer architecture ---
     file_type = Column(String, default="pdf", nullable=True, index=True)
     parent_chunk_id = Column(Integer, nullable=True, index=True)
     confidence_score = Column(Float, nullable=True)

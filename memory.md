@@ -1,4 +1,4 @@
-# Enterprise Level RAG: 13-Layer Architecture — System Memory
+# Enterprise Level RAG: 17-Layer Architecture — System Memory
 
 > This file documents the complete architecture, APIs, configuration, and operational knowledge
 > of the Enterprise Level RAG microservice. Updated: 2026-05-22.
@@ -7,26 +7,30 @@
 
 ## 🏗️ Architecture Overview
 
-### 13-Layer Intelligence Pipeline
+### 17-Layer Intelligence Pipeline
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│                  Enterprise Level RAG 13-Layer Engine v3.0                    │
-│                                                                    │
-│  ANY FILE ──► Layer 1:  Universal Document Parser                  │
-│              Layer 2:  Smart OCR & Table/Image Extraction          │
-│              Layer 3:  Semantic Parent-Child Chunking               │
-│              Layer 4:  Batch Embedding (32/batch, GPU-accelerated)  │
-│  QUERY   ──► Layer 13: Query Intelligence (Spelling, Expansion)    │
-│              Layer 5:  Hybrid Search (HNSW + BM25 + Trigram)       │
-│              Layer 6:  Cross-Encoder Reranking                      │
-│              Layer 7:  Max Marginal Relevance (MMR)                 │
-│              Layer 8:  Contextual Window Expansion                  │
-│              Layer 9:  🛡️ Hallucination Guard (ZERO general answers) │
-│              Layer 10: ✅ Extractive Fast-Path (< 5ms Exact Text)    │
-│              Layer 11: Semantic Query Cache (Redis SHA-256)         │
-│              Layer 12: Real-Time Token Streaming                    │
-│                                                                    │
+│      Enterprise Level RAG 17-Layer Engine v4.0              │
+│                                                            │
+│  ANY FILE ──► Layer 1:  Universal Document Parser            │
+│              Layer 2:  Smart OCR & Table/Image Extraction    │
+│              Layer 3:  Semantic Parent-Child Chunking         │
+│              Layer 4:  Batch Embedding (32/batch, GPU)        │
+│              Layer 5:  RAPTOR Hierarchical Summarization      │
+│  QUERY   ──► Layer 6:  Hybrid Search (HNSW + BM25 + Trigram) │
+│              Layer 7:  ColBERT Late-Interaction Reranking     │
+│              Layer 8:  Max Marginal Relevance (MMR)           │
+│              Layer 9:  Contextual Window Expansion            │
+│              Layer 10: Agentic Router (Multi-tool)            │
+│              Layer 11: Query Intelligence (Spelling, Expand)  │
+│              Layer 12: 🛡️ Hallucination Guard                  │
+│              Layer 13: Extractive Fast-Path (< 5ms)           │
+│              Layer 14: Semantic Query Cache (Redis)           │
+│              Layer 15: Active RAG (FLARE self-reflection)     │
+│              Layer 16: GraphRAG (Neo4j)                       │
+│              Layer 17: Real-Time Token Streaming              │
+│                                                            │
 └────┬──────────┬──────────┬──────────┬──────────────────────────────┘
      │          │          │          │
 ┌────▼───┐ ┌───▼────┐ ┌──▼──────┐ ┌─▼─────────┐
@@ -71,7 +75,7 @@
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/v1/query` | Query knowledge base with 12-layer pipeline |
+| `POST` | `/api/v1/query` | Query knowledge base with 17-layer pipeline |
 
 **Query Request Body:**
 ```json
@@ -116,7 +120,7 @@
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RAG_EMBEDDING_MODEL` | `BAAI/bge-large-en-v1.5` | Embedding model (1024d, SOTA open-source) |
-| `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranker |
+| `RAG_RERANKER_MODEL` | `colbert-ir/colbertv2.0` | ColBERT late-interaction reranker |
 | `RAG_EMBEDDING_DIM` | `1024` | Embedding vector dimension |
 | `RAG_MODEL_DEVICE` | auto-detect | Force device: `mps`, `cuda`, `cpu` |
 
@@ -219,18 +223,21 @@ volumes:
 ## 🔧 Project Structure
 
 ```
-i-tips-rag/
+enterprise-level-rag/
 ├── app/
-│   ├── main.py              # FastAPI app, APIs, dashboard
+│   ├── main.py              # FastAPI app, APIs, dashboard, Active RAG
 │   ├── database.py           # SQLAlchemy models, pgvector, migrations
 │   └── rag/
-│       ├── parsers.py        # Layer 1: Universal document parser
-│       ├── ingestion.py      # Layers 1-4: File ingestion pipeline
-│       ├── retrieval.py      # Layer 5: Hybrid search (HNSW + BM25)
-│       ├── reranker.py       # Layer 6: Cross-encoder reranking
-│       ├── context.py        # Layers 7-8: MMR + context expansion
-│       ├── grounding.py           # Layers 9-10: Hallucination guard
-│       ├── query_intelligence.py  # Layer 13: Spelling, expansion, decomposition
+│       ├── parsers.py        # Layer 1-2: Universal document parser & OCR
+│       ├── ingestion.py      # Layers 3-4: Chunking + batch embedding
+│       ├── raptor.py         # Layer 5: RAPTOR hierarchical summarization
+│       ├── retrieval.py      # Layer 6: Hybrid search (HNSW + BM25)
+│       ├── reranker.py       # Layer 7: ColBERT late-interaction reranking
+│       ├── context.py        # Layers 8-9: MMR + context expansion
+│       ├── router.py         # Layer 10: Agentic multi-tool routing
+│       ├── query_intelligence.py  # Layer 11: Spelling, expansion, decomposition
+│       ├── grounding.py           # Layer 12: Hallucination guard
+│       ├── graph.py               # Layer 16: GraphRAG (Neo4j)
 │       ├── model_loader.py        # Model management, device detection
 │       └── jobs.py                # Background worker, auto-scanner
 ├── Dockerfile

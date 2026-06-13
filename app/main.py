@@ -1,27 +1,32 @@
 """
 =============================================================================
- Enterprise Level RAG: 13-Layer Production Microservice — v3.0
+ Enterprise Level RAG: 17-Layer Production Microservice — v4.0
 =============================================================================
  World's Best Retrieval-Augmented Generation engine.
  Open Source (MIT) | Zero Hallucination | Sub-5ms Exact Text | 30+ Formats
  
- 13 Layers:
+ 17 Layers:
    1. Universal Document Parser (PDF/DOCX/XLSX/PPTX/CSV/TXT/IMG/VIDEO)
    2. Smart OCR & Table/Image Extraction
    3. Semantic Parent-Child Chunking
    4. Batch Embedding (offline, GPU-accelerated)
-  13. Query Intelligence (Spelling, Expansion, Decomposition)
-   5. Hybrid Search (HNSW + BM25 + Trigram)
-   6. Cross-Encoder Reranking
-   7. Max Marginal Relevance (MMR)
-   8. Contextual Window Expansion
-   9. Hallucination Guard (ZERO general answers)
-  10. Extractive Fast-Path (< 5ms exact document text)
-  11. Semantic Query Cache (Redis)
-  12. Real-Time Token Streaming
-  
+   5. RAPTOR Hierarchical Summarization
+   6. Hybrid Search (HNSW + BM25 + Trigram)
+   7. ColBERT Late-Interaction Reranking
+   8. Max Marginal Relevance (MMR)
+   9. Contextual Window Expansion
+  10. Agentic Router (Keyword + LLM multi-tool)
+  11. Query Intelligence (Spelling, Expansion, Decomposition)
+  12. Hallucination Guard (ZERO general answers)
+  13. Extractive Fast-Path (< 5ms exact document text)
+  14. Semantic Query Cache (Redis)
+  15. Active RAG (FLARE self-reflection)
+  16. GraphRAG (Neo4j)
+  17. Real-Time Token Streaming
+   
  Microservice design — no file limit, zero error, 100% offline.
 =============================================================================
+"""====
 """
 
 import os
@@ -68,9 +73,9 @@ from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported_file
 from app.rag.query_intelligence import intelligent_query_pipeline, reformulate_query, text_to_sql_filters
 
 app = FastAPI(
-    title="Enterprise Level RAG 13-Layer Microservice",
-    description="World's best zero-hallucination RAG with unlimited file support, sub-5ms exact extraction, and Layer 13 Query Intelligence.",
-    version="3.0.0",
+    title="Enterprise Level RAG 17-Layer Microservice",
+    description="World's best zero-hallucination RAG with unlimited file support, sub-5ms exact extraction, ColBERT reranking, RAPTOR indexing, and Active RAG.",
+    version="4.0.0",
 )
 
 # ── Prometheus Metrics ────────────────────────────────────────────────────────
@@ -264,7 +269,7 @@ def get_corpus_version(db: Session, tenant_id: str, embedding_model: str) -> str
 
 @app.on_event("startup")
 def on_startup():
-    print("🚀 [STARTUP] Enterprise Level RAG 12-Layer Microservice starting...")
+    print("🚀 [STARTUP] Enterprise Level RAG 17-Layer Microservice starting...")
     global ingestion_worker_thread
     try:
         init_db()
@@ -777,8 +782,8 @@ def root_ui():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Enterprise Level RAG | 12-Layer Production Hub</title>
-        <meta name="description" content="Enterprise Level RAG 12-Layer Production Intelligence Hub — World-class Retrieval-Augmented Generation with zero hallucination.">
+        <title>Enterprise Level RAG | 17-Layer Production Hub</title>
+        <meta name="description" content="Enterprise Level RAG 17-Layer Production Intelligence Hub — World-class Retrieval-Augmented Generation with zero hallucination.">
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
         <script src="/static/js/marked.min.js"></script>
@@ -1015,7 +1020,7 @@ def root_ui():
         <div class="header">
             <h1>Enterprise Level RAG Production Hub</h1>
             <p>Enterprise-Grade Knowledge Intelligence Engine</p>
-            <div class="layer-badge">12-LAYER ARCHITECTURE &bull; ZERO HALLUCINATION &bull; 100% OFFLINE</div>
+            <div class="layer-badge">17-LAYER ARCHITECTURE &bull; ZERO HALLUCINATION &bull; 100% OFFLINE</div>
         </div>
 
         <!-- API Status Dashboard -->
@@ -1314,7 +1319,7 @@ def root_ui():
                 const groundingBar = document.getElementById('groundingBar');
 
                 askSpinner.style.display = 'block';
-                answerBox.innerHTML = '<span class="placeholder">Searching knowledge base (12-layer pipeline)...</span>';
+                answerBox.innerHTML = '<span class="placeholder">Searching knowledge base (17-layer pipeline)...</span>';
                 chartArea.innerHTML = '';
                 sourcesArea.innerHTML = '';
                 latencyBar.style.display = 'none';
@@ -1382,7 +1387,7 @@ def root_ui():
 @app.post("/api/v1/query", response_model=QueryResponse)
 def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     """
-    12-Layer RAG Query Pipeline (Strict Document Grounding):
+    17-Layer RAG Query Pipeline (Strict Document Grounding):
     
     Layer 5:  Hybrid Retrieval (ANN via pgvector + BM25)
     Layer 6:  Cross-Encoder Reranking
@@ -1799,5 +1804,5 @@ if __name__ == "__main__":
         print(f"[RAG Native] Loading environment from {env_path}")
         load_dotenv(env_path)
     
-    print("[RAG Native] Starting Enterprise Level RAG 13-Layer Microservice natively...")
+    print("[RAG Native] Starting Enterprise Level RAG 17-Layer Microservice natively...")
     uvicorn.run(app, host="0.0.0.0", port=1000)

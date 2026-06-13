@@ -10,7 +10,7 @@ FROM python:3.11-slim AS builder
 
 # Labels
 LABEL maintainer="Varun Srivastava <varunsrivastav1999>"
-LABEL description="Enterprise Level RAG 13-Layer Engine — Zero-Hallucination RAG"
+LABEL description="Enterprise Level RAG 17-Layer Engine — Zero-Hallucination RAG"
 LABEL version="3.0.0"
 LABEL org.opencontainers.image.source="https://github.com/varunsrivastav1999/Retrieval-Augmented-Generation--RAG-"
 LABEL org.opencontainers.image.licenses="MIT"
