@@ -359,7 +359,9 @@ def ingest_file(
             chunks_inserted += inserted
             
         # --- RAPTOR: Hierarchical Summarization ---
-        _build_raptor_index(db, tenant_id, file_path, embedding_model, doc_title, file_type)
+        from app.rag.raptor import build_raptor_tree
+        # Build global tenant-level tree
+        build_raptor_tree(db, tenant_id, max_levels=3, n_clusters=10)
 
         if job_id:
             complete_ingestion_job(job_id, chunks_total, chunks_inserted)
@@ -468,85 +470,6 @@ def _process_chunk_batch(
                 print(f"[Ingest] Single chunk error: {e}")
 
     return inserted
-
-
-def _build_raptor_index(db, tenant_id: str, doc_id: str, embedding_model: str, doc_title: str, file_type: str):
-    """
-    RAPTOR: Clusters parent chunks and summarizes them to build a hierarchical index.
-    """
-    try:
-        from sklearn.cluster import KMeans
-        import numpy as np
-        import requests
-        
-        # Get all parent chunks for this document
-        parent_chunks = db.query(DocumentChunk).filter(
-            DocumentChunk.tenant_id == tenant_id,
-            DocumentChunk.doc_id == doc_id,
-            DocumentChunk.embedding_model == embedding_model,
-            cast(DocumentChunk.doc_metadata['is_parent'], String) == '"true"'
-        ).all()
-        
-        if len(parent_chunks) < 5:
-            return  # Not enough chunks to cluster
-            
-        embeddings = []
-        for c in parent_chunks:
-            # Need to extract embedding array
-            embeddings.append(c.embedding)
-            
-        X = np.array(embeddings)
-        n_clusters = max(2, min(5, len(parent_chunks) // 5))
-        
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init="auto").fit(X)
-        labels = kmeans.labels_
-        
-        clusters = {i: [] for i in range(n_clusters)}
-        for i, label in enumerate(labels):
-            clusters[label].append(parent_chunks[i].text_content)
-            
-        for cluster_id, texts in clusters.items():
-            combined_text = "\n\n---\n\n".join(texts[:3])
-            prompt = f"Summarize the following document sections into a single concise paragraph. Keep key entities and concepts.\n\n{combined_text}"
-            
-            payload = {
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": 0.0}
-            }
-            res = requests.post(get_ollama_generate_url(), json=payload, timeout=30)
-            if res.status_code == 200:
-                summary = res.json().get("response", "").strip()
-                summary_text = f"[RAPTOR SUMMARY | {doc_title} | Cluster {cluster_id}]\n{summary}"
-                summary_hash = hash_chunk(summary_text)
-                
-                # Check duplicate
-                if not db.query(DocumentChunk.id).filter_by(chunk_hash=summary_hash).first():
-                    vector = encode_text(summary_text)
-                    summary_chunk = DocumentChunk(
-                        tenant_id=tenant_id,
-                        doc_id=doc_id,
-                        chunk_hash=summary_hash,
-                        text_content=summary_text,
-                        section=999,
-                        embedding_model=embedding_model,
-                        embedding=vector,
-                        file_type=file_type,
-                        doc_metadata={
-                            "type": "raptor_summary",
-                            "source": doc_id,
-                            "cluster_id": cluster_id,
-                            "file_type": file_type,
-                            "is_parent": False
-                        }
-                    )
-                    db.add(summary_chunk)
-                    db.commit()
-                    
-    except Exception as e:
-        print(f"[RAPTOR] Failed to build index for {doc_id}: {e}")
-        db.rollback()
 
 # ---------------------------------------------------------------------------
 # Legacy compatibility — redirect PDF ingestion to universal pipeline

@@ -34,3 +34,5 @@ spacy==3.7.4
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
 neo4j==5.17.0
 prometheus-client==0.20.0
+ragatouille==0.0.8
+umap-learn==0.5.5

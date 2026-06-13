@@ -13,7 +13,7 @@ class Router:
                "sql" (metadata/stats questions).
     """
 
-    TIERS = {"vector", "graph", "sql"}
+    TIERS = {"vector", "graph", "sql", "raptor"}
 
     # --- Tier 1: Keyword patterns (O(1), no LLM needed) ---
     GRAPH_PATTERNS = [
@@ -26,8 +26,13 @@ class Router:
         r"\b(?:file\s*(?:type|format|count)|document\s*(?:count|list|type))\b",
         r"\b(?:metadata|statistics|summary|overview|total)\b",
     ]
+    RAPTOR_PATTERNS = [
+        r"\b(?:overall\s+theme|global\s+summary|general\s+overview|high-level\s+summary|entire\s+dataset)\b",
+        r"\b(?:what\s+is\s+(?:this|the)\s+corpus\s+about)\b",
+    ]
     _GRAPH_RE = re.compile("|".join(GRAPH_PATTERNS), re.IGNORECASE)
     _SQL_RE = re.compile("|".join(SQL_PATTERNS), re.IGNORECASE)
+    _RAPTOR_RE = re.compile("|".join(RAPTOR_PATTERNS), re.IGNORECASE)
 
     def _route_keyword(self, query: str) -> str | None:
         """Instant keyword routing — returns route or None if ambiguous."""
@@ -35,6 +40,8 @@ class Router:
             return "graph"
         if self._SQL_RE.search(query):
             return "sql"
+        if self._RAPTOR_RE.search(query):
+            return "raptor"
         return None  # ambiguous → fall through to LLM
 
     def _route_llm(self, query: str) -> str:
@@ -42,7 +49,7 @@ class Router:
         prompt = (
             "You are a highly intelligent query router. "
             "Classify into exactly ONE: 'graph' (entity relationships), "
-            "'sql' (metadata/file counts), or 'vector' (document content).\n\n"
+            "'sql' (metadata/file counts), 'raptor' (global summary/themes of all files), or 'vector' (specific document content).\n\n"
             f"Query: {query}\n\nCategory:"
         )
         payload = {

@@ -67,6 +67,8 @@ class DocumentChunk(Base):
     # --- NEW columns for Multi-modal / Vision ---
     image_embedding = Column(Vector(768), nullable=True)
     quantized_embedding = Column(Text, nullable=True)
+    # --- NEW columns for RAPTOR ---
+    raptor_level = Column(Integer, default=0, nullable=False, index=True)
 
 
 class IngestionJob(Base):
@@ -126,6 +128,7 @@ def _run_schema_migrations():
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding_model varchar"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS created_at timestamp"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS file_type varchar"))
+        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS raptor_level integer DEFAULT 0"))
         _execute_best_effort(
             conn,
             "ALTER TABLE document_chunks ADD COLUMN parent_chunk_id INTEGER"

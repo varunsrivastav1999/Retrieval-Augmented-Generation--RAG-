@@ -19,7 +19,7 @@ CLIP_MODEL = os.getenv(
 )
 RERANKER_MODEL = os.getenv(
     "RAG_RERANKER_MODEL",
-    "BAAI/bge-reranker-v2-m3",
+    "colbert-ir/colbertv2.0",
 )
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 MODEL_CACHE_DIR = os.getenv("SENTENCE_TRANSFORMERS_HOME") or os.getenv("HF_HOME")
@@ -88,6 +88,11 @@ class LexicalReranker:
 
     def predict(self, pairs: Sequence[Sequence[str]], **_: Any) -> List[float]:
         return [self._score(query, text) for query, text in pairs]
+        
+    def rerank(self, query: str, documents: List[str], k: int=10) -> List[dict]:
+        scores = self.predict([(query, d) for d in documents])
+        results = [{"content": doc, "score": score, "rank": i+1} for i, (doc, score) in enumerate(zip(documents, scores))]
+        return sorted(results, key=lambda x: x["score"], reverse=True)[:k]
 
     def _score(self, query: str, text: str) -> float:
         query_terms = _TOKEN_RE.findall((query or "").lower())
@@ -234,23 +239,28 @@ def get_reranker_model() -> Any:
         return LexicalReranker()
 
     try:
-        from sentence_transformers import CrossEncoder
+        if "colbert" in RERANKER_MODEL.lower():
+            from ragatouille import RAGPretrainedModel
+            print(f"[RAG Reranker] Loading ColBERT Late-Interaction model: {RERANKER_MODEL}")
+            return RAGPretrainedModel.from_pretrained(RERANKER_MODEL)
+        else:
+            from sentence_transformers import CrossEncoder
 
-        kwargs = {}
-        tokenizer_args = {}
-        automodel_args = {}
-        if MODEL_CACHE_DIR:
-            tokenizer_args["cache_dir"] = MODEL_CACHE_DIR
-            automodel_args["cache_dir"] = MODEL_CACHE_DIR
-        kwargs["device"] = get_optimal_device()
-        if HF_OFFLINE:
-            tokenizer_args["local_files_only"] = True
-            automodel_args["local_files_only"] = True
-        if tokenizer_args:
-            kwargs["tokenizer_args"] = tokenizer_args
-        if automodel_args:
-            kwargs["automodel_args"] = automodel_args
-        return CrossEncoder(RERANKER_MODEL, **kwargs)
+            kwargs = {}
+            tokenizer_args = {}
+            automodel_args = {}
+            if MODEL_CACHE_DIR:
+                tokenizer_args["cache_dir"] = MODEL_CACHE_DIR
+                automodel_args["cache_dir"] = MODEL_CACHE_DIR
+            kwargs["device"] = get_optimal_device()
+            if HF_OFFLINE:
+                tokenizer_args["local_files_only"] = True
+                automodel_args["local_files_only"] = True
+            if tokenizer_args:
+                kwargs["tokenizer_args"] = tokenizer_args
+            if automodel_args:
+                kwargs["automodel_args"] = automodel_args
+            return CrossEncoder(RERANKER_MODEL, **kwargs)
     except Exception as exc:
         if not ALLOW_RERANKER_FALLBACK:
             raise RuntimeError(

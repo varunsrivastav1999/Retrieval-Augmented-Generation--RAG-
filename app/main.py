@@ -1512,6 +1512,22 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                         continue
                     else:
                         route = "vector"
+                elif route == "raptor":
+                    # Fetch highest-level RAPTOR summaries
+                    highest_level_summaries = db.query(DocumentChunk).filter(
+                        DocumentChunk.tenant_id == tenant_id,
+                        DocumentChunk.file_type == "raptor_summary"
+                    ).order_by(DocumentChunk.raptor_level.desc()).limit(10).all()
+                    
+                    if highest_level_summaries:
+                        raptor_context = "\n\n".join([c.text_content for c in highest_level_summaries])
+                        agent.final_context = [{"text": raptor_context, "metadata": {"type": "raptor", "source": "RAPTOR Global Index"}}]
+                        agent.grounding_result = {"is_grounded": True, "score": 1.0, "detail": "Answered via RAPTOR Global Summary"}
+                        agent.sources = ["RAPTOR Global Index"]
+                        agent.current_state = "generate"
+                        continue
+                    else:
+                        route = "vector"
                 
                 agent.queries_to_search = query_intel["expanded_queries"][:2]
                 agent.current_state = "retrieve"

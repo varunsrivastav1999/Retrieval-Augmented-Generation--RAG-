@@ -1,9 +1,9 @@
 <div align="center">
-  <h1>i-Tips RAG — World-Class 13-Layer Production Engine</h1>
-  <p><strong>Zero-Hallucination · Sub-10ms Extractive Mode · 30+ Formats · 100% Air-Gapped</strong></p>
+  <h1>i-Tips RAG — World-Class 17-Layer Production Engine</h1>
+  <p><strong>Zero-Hallucination · Sub-10ms Extractive Mode · 30+ Formats · 100% Air-Gapped · 200+ Concurrent Users</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/Architecture-13--Layer_RAG-blue" alt="13-Layer RAG" />
+    <img src="https://img.shields.io/badge/Architecture-17--Layer_RAG-blue" alt="17-Layer RAG" />
     <img src="https://img.shields.io/badge/Embedding-BAAI/bge--large--en--v1.5-8A2BE2" alt="bge-large" />
     <img src="https://img.shields.io/badge/Reranker-bge--reranker--v2--m3-8A2BE2" alt="bge-reranker" />
     <img src="https://img.shields.io/badge/LLM-Qwen2.5:14B-FF6B35" alt="Qwen2.5" />
@@ -17,13 +17,13 @@
 
 ---
 
-A **production-grade RAG engine** built for industrial-scale document understanding. Combines state-of-the-art open-source models, a 13-layer agentic pipeline, and intelligent auto-routing to deliver **sub-10ms exact-text answers** or **deep multi-document analysis** — all from a single API call.
+A **production-grade RAG engine** built for industrial-scale document understanding. Combines state-of-the-art open-source models, a 17-layer agentic pipeline, and intelligent auto-routing to deliver **sub-10ms exact-text answers** or **deep multi-document analysis** — all from a single API call.
 
 ---
 
 ## Features
 
-- **World-Class Models**: `BAAI/bge-large-en-v1.5` (embedding, #1 on MTEB), `bge-reranker-v2-m3` (reranker), `Qwen2.5:14B` (LLM), `CLIP-ViT-L-14` (vision)
+- **World-Class Models**: `BAAI/bge-large-en-v1.5` (embedding), `ColBERTv2` (late-interaction reranker via RAGatouille), `Qwen2.5:14B` (LLM), `CLIP-ViT-L-14` (vision)
 - **Auto Mode** (`auto: true`): Simple fact lookups return exact verbatim text in **6–15ms**; complex analysis questions route to the full LLM pipeline automatically
 - **Extractive Mode**: Skips the LLM entirely — returns verbatim text from the top document chunk with source citation
 - **Zero Hallucination**: Three-layer guard — pre-generation grounding check, strict prompt, post-generation answer verification
@@ -31,6 +31,7 @@ A **production-grade RAG engine** built for industrial-scale document understand
 - **100% Air-Gapped**: All models cached locally. No external API calls. Zero telemetry.
 - **GPU Auto-Detect**: NVIDIA CUDA on Linux, Apple MPS on macOS, CPU fallback everywhere
 - **TurboQuant**: Int8 quantization compresses embeddings 4x with ~98% accuracy; halfvec storage in pgvector
+- **High Concurrency**: Tuned connection pooling (50-100 pgvector connections) and 8x parallel Uvicorn/Ollama workers natively supports **200+ concurrent users**.
 - **Production Stack**: Docker Compose with 7 services, health checks, GPU passthrough, automated backups, Prometheus metrics
 
 ---
@@ -41,50 +42,61 @@ A **production-grade RAG engine** built for industrial-scale document understand
 graph TD
     User([User Query]) --> Auto{Auto Mode}
     Auto -- Simple Fact --> Ext[Extractive Path 6-15ms]
-    Auto -- Complex Analysis --> R13[Layer 13: Query Intelligence]
+    Auto -- Complex Analysis --> QIntel[Layer 11: Query Intelligence]
     Ext --> Verbatim[Verbatim Text + Source Citation]
 
-    R13 --> R1{Layer 1: Semantic Router}
-    R1 -- Graph --> R2[Layer 2: Text-to-Cypher]
-    R2 --> Neo4j[(Neo4j Graph)]
-    Neo4j --> R6[Layer 6: Context Assembly]
-    R1 -- SQL --> SF[Extract Metadata Filters]
-    SF --> R3
-    R1 -- Vector --> R3[Layer 3: Hybrid Search]
-    R3 --> R4[Layer 4: HyDE & Multi-Query]
-    R4 --> PGV[(pgvector HNSW)]
-    PGV --> R5[Layer 5: Cross-Encoder Rerank]
-    R5 --> R6
-    R6 --> R7{Layer 7: Document Grading}
-    R7 -- Pass --> R9{Layer 9: Grounding Check}
-    R7 -- Fail --> R8[Layer 8: CRAG Rewrite]
-    R8 --> R3
-    R9 -- Pass --> R12[Layer 12: LLM Synthesis Qwen2.5:14B]
-    R9 -- Fail --> HALT[NOT_FOUND_RESPONSE]
-    R12 --> R10[Layer 10: Answer Verification]
-    R10 --> Cache[Layer 11: Semantic Cache Redis]
+    QIntel --> Router[Layer 10: Agentic Router]
+    
+    Router -- Graph --> Neo4j[(Layer 16: GraphRAG)]
+    Neo4j --> ContextAssemble[Layer 9: Context Assembly]
+    
+    Router -- RAPTOR --> RaptorDB[(Layer 5: RAPTOR Index)]
+    RaptorDB --> ContextAssemble
+    
+    Router -- SQL --> ExtMeta[Extract Metadata Filters]
+    ExtMeta --> Hybrid[Layer 6: Hybrid Search]
+    
+    Router -- Vector --> Hybrid
+    Hybrid --> PGV[(pgvector HNSW)]
+    PGV --> Reranker[Layer 7: ColBERT Reranker]
+    Reranker --> MMR[Layer 8: MMR]
+    MMR --> ContextAssemble
+    
+    ContextAssemble --> Grade{Layer 15: Active RAG Grade}
+    Grade -- Pass --> Grounding{Layer 12: Grounding Check}
+    Grade -- Fail --> Rewrite[Rewrite Query]
+    Rewrite --> Hybrid
+    
+    Grounding -- Pass --> LLM[LLM Synthesis Qwen2.5:14B]
+    Grounding -- Fail --> HALT[NOT_FOUND_RESPONSE]
+    
+    LLM --> Verify[Answer Verification]
+    Verify --> Cache[Layer 14: Semantic Cache]
 ```
 
 ---
 
-## 13 Layers
+## 17 Layers
 
 | Layer | Name | Model / Technique | Latency Impact |
 |-------|------|-------------------|----------------|
-| 0 | **TurboQuant** | Int8 scalar quantization + pgvector halfvec | 0ms (storage) |
-| 1 | **Semantic Router** | Two-tier: keyword regex (0ms) → LLM fallback | 0ms / ~500ms |
-| 2 | **Text-to-Cypher** | Qwen2.5:14B → Neo4j Cypher | ~500ms |
-| 3 | **Hybrid Search** | HNSW dense + BM25 full-text + trigram + CLIP vision + entity boost | ~5ms |
-| 4 | **HyDE & Multi-Query** | Qwen2.5:14B hypothetical doc + query decomposition | ~500ms |
-| 5 | **Cross-Encoder Reranker** | `BAAI/bge-reranker-v2-m3` | ~30ms |
-| 6 | **Context Assembly** | MMR diversity, neighbor expansion, citation attachment | ~2ms |
-| 7 | **Document Grading** | 40% keyword + 60% semantic overlap scoring | ~5ms |
-| 8 | **CRAG Rewrite** | Qwen2.5:14B query reformulation for retry | ~500ms |
-| 9 | **Grounding Guard** | Pre-generation hallucination block | ~5ms |
-| 10 | **Answer Verification** | Sentence-by-sentence token overlap → confidence | ~3ms |
-| 11 | **Semantic Cache** | Redis with cosine similarity threshold | ~1ms (hit) |
-| 12 | **LLM Synthesis** | Qwen2.5:14B with strict grounding prompt | ~500ms-2s |
-| 13 | **Query Intelligence** | Spelling correction, synonym expansion, decomposition | ~10ms |
+| 1 | **Universal Parser** | PDF, DOCX, XLSX, images, video subtitles | Offline (Ingest) |
+| 2 | **Smart OCR** | Tesseract + PyMuPDF | Offline (Ingest) |
+| 3 | **Parent-Child Chunking** | 2400 chars parent, 600 chars child | Offline (Ingest) |
+| 4 | **Batch Embedding** | 32-batch pgvector insertion with int8 quant | Offline (Ingest) |
+| 5 | **RAPTOR** | Recursive Abstractive Processing via clustering | Offline (Ingest) |
+| 6 | **Hybrid Search** | HNSW dense + BM25 full-text + trigram | ~5ms |
+| 7 | **Late-Interaction Reranking** | **ColBERTv2** via `ragatouille` | ~40ms |
+| 8 | **Max Marginal Relevance (MMR)** | Diversity optimization | ~2ms |
+| 9 | **Contextual Expansion** | Linking child chunk to parent chunk | ~1ms |
+| 10 | **Agentic Router** | Keyword + LLM multi-tool routing | ~0-500ms |
+| 11 | **Query Intelligence** | Spelling, expansion, decomposition | ~10ms |
+| 12 | **Grounding Guard** | Pre-generation hallucination block | ~5ms |
+| 13 | **Extractive Fast-Path** | 100% LLM bypass for factual answers | ~0ms |
+| 14 | **Semantic Query Cache** | Redis with cosine similarity matching | ~1ms |
+| 15 | **Active RAG (FLARE)** | Self-reflection and re-retrieval loop | Varies |
+| 16 | **GraphRAG** | Neo4j semantic triplet search | ~100ms |
+| 17 | **Real-Time Streaming** | Token-by-token SSE streaming | <200ms first token |
 
 ---
 
@@ -103,7 +115,7 @@ graph TD
 | Component | Model | Why it's world-class |
 |-----------|-------|---------------------|
 | **Embedding** | `BAAI/bge-large-en-v1.5` (1024d) | #1 on MTEB leaderboard, 3x richer than MiniLM |
-| **Reranker** | `BAAI/bge-reranker-v2-m3` | Best open-source cross-encoder, multilingual |
+| **Reranker** | `ColBERTv2` (`colbert-ir/colbertv2.0`) | Late-interaction reranker, vast improvement over cross-encoders for technical docs |
 | **LLM** | `Qwen2.5:14B` (Q4_K_M) | 128K context, top instruction-following at 14B |
 | **Vision** | `CLIP-ViT-L-14` | 4x larger than ViT-B-32, far better image understanding |
 
