@@ -76,6 +76,7 @@ services:
       - ./.envs/.production/.neo4j
     ports:
       - "1000:1000"
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "1000", "--workers", "8"]
     networks:
       rag_network:
         ipv4_address: 172.28.0.10
@@ -200,6 +201,8 @@ services:
     restart: unless-stopped
     environment:
       - OLLAMA_CONTEXT_LENGTH=32768
+      - OLLAMA_NUM_PARALLEL=8
+      - OLLAMA_MAX_QUEUE=512
     volumes:
       - prod_ollama_data:/root/.ollama
     ports:
