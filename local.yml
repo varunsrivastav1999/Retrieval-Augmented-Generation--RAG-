@@ -104,7 +104,7 @@ services:
     container_name: ollama_rag_local
     restart: unless-stopped
     environment:
-      - OLLAMA_CONTEXT_LENGTH=32768
+      - OLLAMA_CONTEXT_LENGTH=8192
     volumes:
       - local_ollama_data:/root/.ollama
     ports:

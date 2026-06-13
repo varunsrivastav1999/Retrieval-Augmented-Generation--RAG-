@@ -90,7 +90,6 @@ RUN ollama serve &>/tmp/ollama-srv.log & \
 ENV HF_HOME=/models/huggingface
 ENV SENTENCE_TRANSFORMERS_HOME=/models/huggingface/sentence-transformers
 ENV HF_HUB_CACHE=/models/huggingface/hub
-ENV TRANSFORMERS_CACHE=/models/huggingface/hub
 
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /bin/bash appuser

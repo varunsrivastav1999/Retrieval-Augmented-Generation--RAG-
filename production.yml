@@ -65,7 +65,6 @@ services:
       - HF_HOME=/models/huggingface
       - SENTENCE_TRANSFORMERS_HOME=/models/huggingface/sentence-transformers
       - HF_HUB_CACHE=/models/huggingface/hub
-      - TRANSFORMERS_CACHE=/models/huggingface/hub
     env_file:
       - ./.envs/.production/.rag
       - ./.envs/.production/.postgres
@@ -197,7 +196,7 @@ services:
     container_name: ollama_rag_prod
     restart: unless-stopped
     environment:
-      - OLLAMA_CONTEXT_LENGTH=32768
+      - OLLAMA_CONTEXT_LENGTH=8192
       - OLLAMA_NUM_PARALLEL=8
       - OLLAMA_MAX_QUEUE=512
     volumes:
