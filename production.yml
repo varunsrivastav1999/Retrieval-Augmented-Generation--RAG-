@@ -42,8 +42,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      cache_from:
-        - itips_rag_prod:latest
     image: itips_rag_prod:latest
     container_name: itips_rag_prod
     restart: unless-stopped
