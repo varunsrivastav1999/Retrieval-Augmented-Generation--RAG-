@@ -247,10 +247,10 @@ services:
       - "-c"
       - |
         echo "=== Pulling Ollama model: ${OLLAMA_MODEL:-llama3} ==="
-        ollama pull ${OLLAMA_MODEL:-llama3} || echo "Pull failed (may already exist)"
+        curl -s -X POST http://ollama:11434/api/pull -d "{\"name\": \"${OLLAMA_MODEL:-llama3}\"}" || echo "Pull failed (may already exist)"
         if [ -f /app/Modelfile ]; then
           echo "=== Creating custom brain from Modelfile ==="
-          ollama create ${OLLAMA_MODEL:-itips-brain} -f /app/Modelfile || echo "Create failed"
+          curl -s -X POST http://ollama:11434/api/create -d "{\"name\": \"${OLLAMA_MODEL:-itips-brain}\", \"modelfile\": \"$(cat /app/Modelfile | sed 's/\"/\\\"/g' | tr '\n' '\\n')\"}" || echo "Create failed"
         fi
         echo "=== Models ready ==="
     networks:
@@ -268,9 +268,9 @@ services:
       - prod_neo4j_data:/data
     environment:
       - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-rag_password}
-      - NEO4J_dbms_memory_pagecache_size=2G
-      - NEO4J_dbms_memory_heap_max__size=4G
-      - NEO4J_dbms_memory_heap_initial__size=1G
+      - NEO4J_server_memory_pagecache_size=2G
+      - NEO4J_server_memory_heap_max__size=4G
+      - NEO4J_server_memory_heap_initial__size=1G
     ports:
       - "7474:7474"
       - "7687:7687"

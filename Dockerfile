@@ -64,6 +64,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender1 \
     libgl1-mesa-dri \
     curl \
+    cron \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 

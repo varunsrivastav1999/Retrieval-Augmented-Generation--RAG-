@@ -11,10 +11,10 @@ RAG_ENV=production
 RAG_CORS_ORIGINS=https://your-domain.com
 
 # Database (pgvector)
-DATABASE_URL=postgresql://rag_user:CHANGE_ME_PASSWORD@postgres:5432/rag_db
+DATABASE_URL=postgresql://rag_user:rag_password@postgres:5432/rag_db
 
 # Redis
-REDIS_URL=redis://:CHANGE_ME_REDIS_PASSWORD@redis:6379/0
+REDIS_URL=redis://:mysecurepassword@redis:6379/0
 
 # Media
 MEDIA_PATH=/media
