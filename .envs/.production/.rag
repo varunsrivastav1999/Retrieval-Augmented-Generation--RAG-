@@ -8,7 +8,7 @@
 # General
 USE_DOCKER=yes
 RAG_ENV=production
-RAG_CORS_ORIGINS=https://your-domain.com
+RAG_CORS_ORIGINS=*
 
 # Database (pgvector)
 DATABASE_URL=postgresql://rag_user:rag_password@postgres:5432/rag_db
