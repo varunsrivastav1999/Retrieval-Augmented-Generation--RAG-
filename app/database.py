@@ -129,25 +129,13 @@ def _run_schema_migrations():
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS created_at timestamp"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS file_type varchar"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS raptor_level integer DEFAULT 0"))
+        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS parent_chunk_id INTEGER"))
+        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS confidence_score FLOAT"))
+        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS image_embedding vector(512)"))
+        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS quantized_embedding text"))
         _execute_best_effort(
             conn,
-            "ALTER TABLE document_chunks ADD COLUMN parent_chunk_id INTEGER"
-        )
-        _execute_best_effort(
-            conn,
-            "ALTER TABLE document_chunks ADD COLUMN confidence_score FLOAT"
-        )
-        _execute_best_effort(
-            conn,
-            "ALTER TABLE document_chunks ADD COLUMN image_embedding vector(512)"
-        )
-        _execute_best_effort(
-            conn,
-            "ALTER TABLE document_chunks ADD COLUMN quantized_embedding text"
-        )
-        _execute_best_effort(
-            conn,
-            "CREATE INDEX ON document_chunks USING hnsw (image_embedding vector_cosine_ops)"
+            "CREATE INDEX IF NOT EXISTS ix_document_chunks_image_hnsw ON document_chunks USING hnsw (image_embedding vector_cosine_ops)"
         )
         conn.execute(text("ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS force_reindex boolean"))
         conn.execute(text("ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS file_type varchar"))
