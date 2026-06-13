@@ -23,6 +23,7 @@ RERANKER_MODEL = os.getenv(
 )
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 MODEL_CACHE_DIR = os.getenv("HF_HOME")
+ST_CACHE_DIR = os.getenv("SENTENCE_TRANSFORMERS_HOME")
 HF_OFFLINE = os.getenv("RAG_HF_OFFLINE", "false").lower() in {"1", "true", "yes", "on"}
 ALLOW_HASH_FALLBACK = os.getenv("RAG_ALLOW_HASH_FALLBACK", "false").lower() in {
     "1",
@@ -135,8 +136,7 @@ def get_optimal_device() -> str:
 
 def _model_kwargs() -> dict:
     kwargs = {}
-    if MODEL_CACHE_DIR:
-        kwargs["cache_folder"] = MODEL_CACHE_DIR
+    # Do not manually pass cache_folder, let sentence-transformers use SENTENCE_TRANSFORMERS_HOME
     
     device = get_optimal_device()
     kwargs["device"] = device
@@ -175,12 +175,13 @@ def _model_appears_cached(model_name: str) -> bool:
 
     org, _, name = model_name.partition("/")
     hf_safe_name = f"models--{org}--{name}" if name else f"models--{model_name}"
+    st_safe_name = model_name.replace("/", "_")
     candidates = [
-        os.path.join(MODEL_CACHE_DIR, model_name),
-        os.path.join(MODEL_CACHE_DIR, hf_safe_name),
-        os.path.join(MODEL_CACHE_DIR, "hub", hf_safe_name),
-        os.path.join(os.path.dirname(MODEL_CACHE_DIR), "hub", hf_safe_name),
+        os.path.join(MODEL_CACHE_DIR, "hub", hf_safe_name) if MODEL_CACHE_DIR else "",
+        os.path.join(ST_CACHE_DIR, st_safe_name) if ST_CACHE_DIR else "",
+        os.path.join(MODEL_CACHE_DIR, model_name) if MODEL_CACHE_DIR else "",
     ]
+    candidates = [c for c in candidates if c]
     for candidate in candidates:
         if glob(os.path.join(candidate, "snapshots", "*")):
             return True
@@ -249,9 +250,7 @@ def get_reranker_model() -> Any:
             kwargs = {}
             tokenizer_args = {}
             automodel_args = {}
-            if MODEL_CACHE_DIR:
-                tokenizer_args["cache_dir"] = MODEL_CACHE_DIR
-                automodel_args["cache_dir"] = MODEL_CACHE_DIR
+            # Do not manually pass cache_dir, let HuggingFace use HF_HOME
             kwargs["device"] = get_optimal_device()
             if HF_OFFLINE:
                 tokenizer_args["local_files_only"] = True
