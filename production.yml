@@ -261,14 +261,13 @@ services:
   # Neo4j — Knowledge Graph (Entity Relationships)
   # ============================================================================
   neo4j:
-    image: neo4j:5.17.0-enterprise
+    image: neo4j:5.17.0
     container_name: neo4j_rag_prod
     restart: unless-stopped
     volumes:
       - prod_neo4j_data:/data
     environment:
       - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-rag_password}
-      - NEO4J_PLUGINS=["apoc"]
       - NEO4J_dbms_memory_pagecache_size=2G
       - NEO4J_dbms_memory_heap_max__size=4G
       - NEO4J_dbms_memory_heap_initial__size=1G
