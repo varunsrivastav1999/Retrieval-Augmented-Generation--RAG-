@@ -20,8 +20,6 @@ volumes:
     driver: local
   prod_neo4j_data:
     driver: local
-  prod_huggingface_cache:
-    driver: local
   prod_media:
     driver: local
   prod_backup_data:
@@ -58,7 +56,6 @@ services:
       models:
         condition: service_completed_successfully
     volumes:
-      - prod_huggingface_cache:/models/huggingface:ro
       - prod_media:/media
       - type: bind
         source: ./
@@ -245,7 +242,6 @@ services:
         condition: service_healthy
     volumes:
       - prod_ollama_data:/root/.ollama
-      - prod_huggingface_cache:/models/huggingface
       - type: bind
         source: ./
         target: /app

@@ -13,7 +13,6 @@ volumes:
   local_redis_data: {}
   local_ollama_data: {}
   local_neo4j_data: {}
-  local_huggingface_cache: {}
   local_media: {}
 
 services:
@@ -37,7 +36,6 @@ services:
         condition: service_completed_successfully
     volumes:
       - .:/app:z
-      - local_huggingface_cache:/models/huggingface:ro
       - local_media:/media
     extra_hosts:
       - "host.docker.internal:host-gateway"
