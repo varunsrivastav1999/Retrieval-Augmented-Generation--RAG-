@@ -19,7 +19,7 @@ CLIP_MODEL = os.getenv(
 )
 RERANKER_MODEL = os.getenv(
     "RAG_RERANKER_MODEL",
-    "colbert-ir/colbertv2.0",
+    "BAAI/bge-reranker-v2-m3",
 )
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 MODEL_CACHE_DIR = os.getenv("SENTENCE_TRANSFORMERS_HOME") or os.getenv("HF_HOME")
