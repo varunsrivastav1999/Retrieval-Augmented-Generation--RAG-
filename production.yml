@@ -43,6 +43,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: itips_rag_prod:latest
+    pull_policy: build
     container_name: itips_rag_prod
     restart: unless-stopped
     depends_on:
@@ -225,8 +226,13 @@ services:
   # Model Pre-Loader (runs once, exits)
   # ============================================================================
   models:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: itips_rag_prod:latest
+    pull_policy: build
     container_name: itips_rag_prod_models
+    user: root
     depends_on:
       ollama:
         condition: service_healthy
@@ -301,7 +307,11 @@ services:
   # Automated Backup Service
   # ============================================================================
   backup:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: itips_rag_prod:latest
+    pull_policy: build
     container_name: itips_rag_prod_backup
     restart: unless-stopped
     depends_on:
@@ -330,7 +340,14 @@ services:
       - "-c"
       - |
         echo "Backup service started. Running daily at 02:00."
-        echo "0 2 * * * /scripts/backup/run.sh >> /var/log/backup.log 2>&1" | crontab -
-        crond -f -l 2
+        while true; do
+          current_hour=$(date +%H)
+          current_min=$(date +%M)
+          if [ "$current_hour" = "02" ] && [ "$current_min" = "00" ]; then
+            /scripts/backup/run.sh >> /var/log/rag/backup.log 2>&1
+            sleep 60
+          fi
+          sleep 30
+        done
     networks:
       rag_network: {}
