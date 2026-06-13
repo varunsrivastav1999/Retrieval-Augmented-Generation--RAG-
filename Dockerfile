@@ -51,7 +51,7 @@ RUN --mount=type=cache,target=/models/huggingface/hub \
 RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
 
 # Download Ollama binary (used by models service for auto-pull at startup)
-RUN curl -fsSL https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64 -o /usr/local/bin/ollama && \
+RUN curl -fsSL https://github.com/ollama/ollama/releases/download/v0.3.14/ollama-linux-amd64 -o /usr/local/bin/ollama && \
     chmod +x /usr/local/bin/ollama
 
 # ---- Stage 2: Runtime --------------------------------------------------------
