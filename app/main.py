@@ -26,7 +26,6 @@
    
  Microservice design — no file limit, zero error, 100% offline.
 =============================================================================
-"""====
 """
 
 import os
