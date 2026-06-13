@@ -1,5 +1,5 @@
 # ==============================================================================
-# i-Tips RAG — Local Development Docker Compose (v3.0)
+# Enterprise Level RAG — Local Development Docker Compose (v3.0)
 # ==============================================================================
 # Key differences from production.yml:
 #   - Source code mounted with :z for hot-reload

@@ -1,6 +1,6 @@
 """
 =============================================================================
- i-Tips RAG: Layer 1 — Universal Document Parser
+ Enterprise Level RAG: Layer 1 — Universal Document Parser
 =============================================================================
  Supports: PDF, DOCX, XLSX, PPTX, CSV, TXT, Images, Video (subtitles)
  All parsing is 100% offline — no API calls, no cloud services.

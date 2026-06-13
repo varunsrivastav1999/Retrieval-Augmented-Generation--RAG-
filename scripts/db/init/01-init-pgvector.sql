@@ -1,5 +1,5 @@
 -- =============================================================================
--- i-Tips RAG — Database Initialization
+-- Enterprise Level RAG — Database Initialization
 -- =============================================================================
 -- Runs once on first container start via docker-entrypoint-initdb.d
 -- Creates extensions, indexes, and any required schema migrations.

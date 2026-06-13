@@ -1,6 +1,6 @@
-# Contributing to i-Tips RAG
+# Contributing to Enterprise Level RAG
 
-Thank you for your interest in contributing to the **i-Tips RAG 13-Layer Engine** — the world's most accurate offline RAG system! 🚀
+Thank you for your interest in contributing to the **Enterprise Level RAG 17-Layer Engine** — the world's most accurate offline RAG system! 🚀
 
 ## Getting Started
 
@@ -45,20 +45,24 @@ python app/main.py
 
 ## Architecture
 
-The project follows a **13-Layer Pipeline** architecture. See [`memory.md`](memory.md) for complete documentation.
+The project follows a **17-Layer Pipeline** architecture. See [`memory.md`](memory.md) for complete documentation.
 
 ### Key Modules
 
 | Module | Layer(s) | Purpose |
 |--------|----------|---------|
-| `app/rag/parsers.py` | 1-2 | Universal document parsing (30+ formats) |
-| `app/rag/ingestion.py` | 3-4 | Chunking + batch embedding |
-| `app/rag/query_intelligence.py` | 13 | Spelling correction, query expansion |
-| `app/rag/retrieval.py` | 5 | Hybrid search (HNSW + BM25) |
-| `app/rag/reranker.py` | 6 | Cross-encoder reranking |
-| `app/rag/context.py` | 7-8 | MMR diversity + context window expansion |
-| `app/rag/grounding.py` | 9-10 | Zero hallucination guard |
-| `app/main.py` | 11-12 | Cache, streaming, API, dashboard |
+| `app/rag/parsers.py` | 1-2 | Universal document parsing (30+ formats) & OCR |
+| `app/rag/ingestion.py` | 3-4 | Parent-child chunking & batch embedding |
+| `app/rag/raptor.py` | 5 | Recursive Abstractive Processing via clustering |
+| `app/rag/retrieval.py` | 6 | Hybrid search (HNSW + BM25 + Trigram) |
+| `app/rag/reranker.py` | 7 | Late-interaction reranking (ColBERTv2) |
+| `app/rag/context.py` | 8-9 | MMR diversity + context window expansion |
+| `app/rag/router.py` | 10 | Keyword + LLM multi-tool agentic routing |
+| `app/rag/query_intelligence.py` | 11 | Spelling correction, expansion, decomposition |
+| `app/rag/grounding.py` | 12 | Zero hallucination guard (pre-generation block) |
+| `app/main.py` | 13-15 | Extractive fast-path, Semantic Cache, Active RAG |
+| `app/rag/graph.py` | 16 | GraphRAG Neo4j semantic triplet search |
+| `app/main.py` | 17 | Real-time SSE token streaming, API, dashboard |
 | `app/rag/jobs.py` | — | Background worker + auto-scanner |
 
 ## How to Contribute
@@ -118,4 +122,4 @@ The project follows a **13-Layer Pipeline** architecture. See [`memory.md`](memo
 
 ---
 
-**Thank you for making i-Tips RAG better for everyone!** 🙏
+**Thank you for making Enterprise Level RAG better for everyone!** 🙏

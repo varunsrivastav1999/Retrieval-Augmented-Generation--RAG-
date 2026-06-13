@@ -1,7 +1,7 @@
-# i-Tips RAG: 13-Layer Architecture — System Memory
+# Enterprise Level RAG: 13-Layer Architecture — System Memory
 
 > This file documents the complete architecture, APIs, configuration, and operational knowledge
-> of the i-Tips RAG microservice. Updated: 2026-05-22.
+> of the Enterprise Level RAG microservice. Updated: 2026-05-22.
 
 ---
 
@@ -11,7 +11,7 @@
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│                  i-Tips RAG 13-Layer Engine v3.0                    │
+│                  Enterprise Level RAG 13-Layer Engine v3.0                    │
 │                                                                    │
 │  ANY FILE ──► Layer 1:  Universal Document Parser                  │
 │              Layer 2:  Smart OCR & Table/Image Extraction          │

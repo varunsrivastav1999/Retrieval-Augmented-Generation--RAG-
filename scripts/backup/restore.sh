@@ -1,6 +1,6 @@
 #!/bin/sh
 # =============================================================================
-# i-Tips RAG — Restore from Backup
+# Enterprise Level RAG — Restore from Backup
 # =============================================================================
 # Usage:
 #   ./scripts/backup/restore.sh [pg|neo4j|all] <backup_file>

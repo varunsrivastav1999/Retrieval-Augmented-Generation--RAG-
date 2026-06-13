@@ -1,5 +1,5 @@
 -- =============================================================================
--- i-Tips RAG — PostgreSQL Performance Tuning
+-- Enterprise Level RAG — PostgreSQL Performance Tuning
 -- =============================================================================
 -- These settings optimize pgvector for low-latency HNSW queries.
 -- Applied at the session/connection level so existing clusters are unaffected.

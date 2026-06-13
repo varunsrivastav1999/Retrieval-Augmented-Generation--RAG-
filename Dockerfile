@@ -1,5 +1,5 @@
 # ==============================================================================
-# i-Tips RAG — Multi-Stage Production Dockerfile
+# Enterprise Level RAG — Multi-Stage Production Dockerfile
 # ==============================================================================
 # Stage 1: Builder - Install system deps, compile wheels, download models
 # Stage 2: Runtime - Minimal image with only runtime dependencies
@@ -10,7 +10,7 @@ FROM python:3.11-slim AS builder
 
 # Labels
 LABEL maintainer="Varun Srivastava <varunsrivastav1999>"
-LABEL description="i-Tips RAG 13-Layer Engine — Zero-Hallucination RAG"
+LABEL description="Enterprise Level RAG 13-Layer Engine — Zero-Hallucination RAG"
 LABEL version="3.0.0"
 LABEL org.opencontainers.image.source="https://github.com/varunsrivastav1999/Retrieval-Augmented-Generation--RAG-"
 LABEL org.opencontainers.image.licenses="MIT"

@@ -1,6 +1,6 @@
 """
 =============================================================================
- i-Tips RAG: 13-Layer Production Microservice — v3.0
+ Enterprise Level RAG: 13-Layer Production Microservice — v3.0
 =============================================================================
  World's Best Retrieval-Augmented Generation engine.
  Open Source (MIT) | Zero Hallucination | Sub-5ms Exact Text | 30+ Formats
@@ -68,7 +68,7 @@ from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported_file
 from app.rag.query_intelligence import intelligent_query_pipeline, reformulate_query, text_to_sql_filters
 
 app = FastAPI(
-    title="i-Tips RAG 13-Layer Microservice",
+    title="Enterprise Level RAG 13-Layer Microservice",
     description="World's best zero-hallucination RAG with unlimited file support, sub-5ms exact extraction, and Layer 13 Query Intelligence.",
     version="3.0.0",
 )
@@ -264,7 +264,7 @@ def get_corpus_version(db: Session, tenant_id: str, embedding_model: str) -> str
 
 @app.on_event("startup")
 def on_startup():
-    print("🚀 [STARTUP] i-Tips RAG 12-Layer Microservice starting...")
+    print("🚀 [STARTUP] Enterprise Level RAG 12-Layer Microservice starting...")
     global ingestion_worker_thread
     try:
         init_db()
@@ -777,8 +777,8 @@ def root_ui():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>i-Tips RAG | 12-Layer Production Hub</title>
-        <meta name="description" content="i-Tips RAG 12-Layer Production Intelligence Hub — World-class Retrieval-Augmented Generation with zero hallucination.">
+        <title>Enterprise Level RAG | 12-Layer Production Hub</title>
+        <meta name="description" content="Enterprise Level RAG 12-Layer Production Intelligence Hub — World-class Retrieval-Augmented Generation with zero hallucination.">
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
         <script src="/static/js/marked.min.js"></script>
@@ -1013,7 +1013,7 @@ def root_ui():
     </head>
     <body>
         <div class="header">
-            <h1>i-Tips RAG Production Hub</h1>
+            <h1>Enterprise Level RAG Production Hub</h1>
             <p>Enterprise-Grade Knowledge Intelligence Engine</p>
             <div class="layer-badge">12-LAYER ARCHITECTURE &bull; ZERO HALLUCINATION &bull; 100% OFFLINE</div>
         </div>
@@ -1799,5 +1799,5 @@ if __name__ == "__main__":
         print(f"[RAG Native] Loading environment from {env_path}")
         load_dotenv(env_path)
     
-    print("[RAG Native] Starting i-Tips RAG 13-Layer Microservice natively...")
+    print("[RAG Native] Starting Enterprise Level RAG 13-Layer Microservice natively...")
     uvicorn.run(app, host="0.0.0.0", port=1000)

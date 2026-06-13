@@ -1,6 +1,6 @@
 """
 =============================================================================
- i-Tips RAG: Background Ingestion Worker & Auto-Scanner
+ Enterprise Level RAG: Background Ingestion Worker & Auto-Scanner
 =============================================================================
  - Universal file worker (all formats, not just PDF)
  - Auto-scan /media for ALL supported file types

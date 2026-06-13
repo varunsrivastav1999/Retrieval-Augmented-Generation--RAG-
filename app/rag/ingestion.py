@@ -1,6 +1,6 @@
 """
 =============================================================================
- i-Tips RAG: Layers 1-4 — Universal File Ingestion Engine
+ Enterprise Level RAG: Layers 1-4 — Universal File Ingestion Engine
 =============================================================================
  Layer 1: Universal Document Parser (PDF, DOCX, XLSX, PPTX, CSV, TXT, IMG, VIDEO)
  Layer 2: Smart OCR & Table/Image Extraction

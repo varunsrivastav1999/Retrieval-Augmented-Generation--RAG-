@@ -1,6 +1,6 @@
 """
 =============================================================================
- i-Tips RAG: Layer 13 — Query Intelligence Engine
+ Enterprise Level RAG: Layer 13 — Query Intelligence Engine
 =============================================================================
  World-Best RAG Techniques:
   1. Query Expansion — automatically adds synonyms & related terms

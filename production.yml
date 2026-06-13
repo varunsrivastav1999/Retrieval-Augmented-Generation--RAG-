@@ -1,5 +1,5 @@
 # ==============================================================================
-# i-Tips RAG — Production Docker Compose (v3.0)
+# Enterprise Level RAG — Production Docker Compose (v3.0)
 # ==============================================================================
 # Architecture:
 #   - rag_api:  FastAPI microservice (4 workers, GPU-accelerated)

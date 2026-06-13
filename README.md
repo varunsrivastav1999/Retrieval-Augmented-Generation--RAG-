@@ -1,5 +1,6 @@
 <div align="center">
-  <h1>i-Tips RAG — World-Class 17-Layer Production Engine</h1>
+  <h1>Enterprise Level RAG — World-Class 17-Layer Production Engine</h1>
+  <p><strong>Developed & Owned by: Varun Srivastav</strong></p>
   <p><strong>Zero-Hallucination · Sub-10ms Extractive Mode · 30+ Formats · 100% Air-Gapped · 200+ Concurrent Users</strong></p>
 
   <p>

@@ -1,6 +1,6 @@
 #!/bin/sh
 # =============================================================================
-# i-Tips RAG — Automated Backup Script
+# Enterprise Level RAG — Automated Backup Script
 # =============================================================================
 # Backups:
 #   1. PostgreSQL full dump (pg_dump)
