@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsm6 \
     libxext6 \
     libxrender-dev \
-    libgl1-mesa-dri \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -41,14 +41,18 @@ WORKDIR /app
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install -r requirements.txt
 
 # Pre-download models (baked into builder layer)
-RUN --mount=type=cache,target=/root/.cache/huggingface \
-    python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); SentenceTransformer('sentence-transformers/clip-ViT-B-32'); CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
+RUN --mount=type=cache,target=/models/huggingface/hub \
+    python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-large-en-v1.5'); SentenceTransformer('sentence-transformers/clip-ViT-L-14'); CrossEncoder('BAAI/bge-reranker-v2-m3')"
 
 # Download spaCy model (direct pip install — spacy download generates broken URLs)
 RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
+
+# Download Ollama binary (used by models service for auto-pull at startup)
+RUN curl -fsSL https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64 -o /usr/local/bin/ollama && \
+    chmod +x /usr/local/bin/ollama
 
 # ---- Stage 2: Runtime --------------------------------------------------------
 FROM python:3.11-slim AS runtime
@@ -62,9 +66,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsm6 \
     libxext6 \
     libxrender1 \
-    libgl1-mesa-dri \
+    libgl1 \
     curl \
-    cron \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -74,6 +77,15 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy model cache from builder
 COPY --from=builder /models /models
+
+# Pre-download Ollama LLM model (baked into image — zero runtime/download at startup)
+RUN ollama serve &>/tmp/ollama-srv.log & \
+    for i in $(seq 1 30); do ollama list 2>/dev/null && break; sleep 1; done && \
+    ollama pull qwen2.5:14b && \
+    pkill ollama 2>/dev/null; true && \
+    mkdir -p /models/ollama/blobs /models/ollama/manifests && \
+    cp -r /root/.ollama/models/blobs/* /models/ollama/blobs/ && \
+    cp -r /root/.ollama/models/manifests/* /models/ollama/manifests/
 
 # Set model cache environment
 ENV HF_HOME=/models/huggingface

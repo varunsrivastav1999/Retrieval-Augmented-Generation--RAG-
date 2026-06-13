@@ -102,9 +102,11 @@ services:
       start_period: 5s
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.3.14
     container_name: ollama_rag_local
     restart: unless-stopped
+    environment:
+      - OLLAMA_CONTEXT_LENGTH=32768
     volumes:
       - local_ollama_data:/root/.ollama
     ports:
@@ -120,6 +122,11 @@ services:
         limits:
           cpus: "4"
           memory: 8G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   neo4j:
     image: neo4j:5.17.0
@@ -140,7 +147,7 @@ services:
       start_period: 30s
 
   pull-models:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.3.14
     container_name: ollama_rag_local_pull
     depends_on:
       ollama:
@@ -154,10 +161,7 @@ services:
     command:
       - "-c"
       - |
-        echo "=== Pulling Ollama model: ${OLLAMA_MODEL:-llama3} ==="
-        ollama pull ${OLLAMA_MODEL:-llama3} || echo "Pull skipped (already exists)"
-        if [ -f /app/Modelfile ]; then
-          echo "=== Creating custom brain from Modelfile ==="
-          ollama create ${OLLAMA_MODEL:-itips-brain} -f /app/Modelfile || echo "Create skipped"
-        fi
+        echo "=== Pulling Ollama model: ${OLLAMA_MODEL:-qwen2.5:14b} ==="
+        ollama pull ${OLLAMA_MODEL:-qwen2.5:14b} || echo "Pull skipped (already exists)"
+        echo "=== Skipping Modelfile (using pulled model: ${OLLAMA_MODEL:-qwen2.5:14b}) ==="
         echo "=== Models ready ==="

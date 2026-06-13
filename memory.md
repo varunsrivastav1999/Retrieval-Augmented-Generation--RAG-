@@ -109,15 +109,15 @@
 | `DATABASE_URL` | `postgresql://rag_user:rag_password@postgres:5432/rag_db` | PostgreSQL with pgvector |
 | `REDIS_URL` | `redis://redis:6379/0` | Redis for semantic caching |
 | `OLLAMA_URL` | `http://ollama:11434/api/generate` | Ollama LLM endpoint |
-| `OLLAMA_MODEL` | `llama3` | LLM model name |
+| `OLLAMA_MODEL` | `qwen2.5:14b` | LLM model name |
 | `MEDIA_PATH` | `/media` | Shared volume for auto-scan |
 
 ### Models
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RAG_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Embedding model (384d) |
-| `RAG_RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker |
-| `RAG_EMBEDDING_DIM` | `384` | Embedding vector dimension |
+| `RAG_EMBEDDING_MODEL` | `BAAI/bge-large-en-v1.5` | Embedding model (1024d, SOTA open-source) |
+| `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranker |
+| `RAG_EMBEDDING_DIM` | `1024` | Embedding vector dimension |
 | `RAG_MODEL_DEVICE` | auto-detect | Force device: `mps`, `cuda`, `cpu` |
 
 ### Performance

@@ -110,7 +110,7 @@ MEDIA_PATH = os.getenv("MEDIA_PATH", "/media")
 
 # Connecting directly to the independent Ollama container inside this repository
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3") # Set to whichever model you have pulled in Ollama
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b") # Best for RAG — world-class reasoning, 128K context
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "1024"))
 RAG_ENV = os.getenv("RAG_ENV", "local").lower()
@@ -364,6 +364,8 @@ class QueryRequest(BaseModel):
     force_reindex: bool = False
     stream: bool = False
     fast_path: bool = Field(False, description="Sub-5ms fast path: skip HyDE, BM25, Vision, Cross-encoder reranker")
+    extractive: bool = Field(False, description="Exact mode: skip LLM, return verbatim text from top chunk instead of generated answer")
+    auto: bool = Field(True, description="Auto-mode: simple facts get 10ms extractive, complex analysis gets full LLM pipeline")
 
 
 class IngestRequest(BaseModel):
@@ -1417,6 +1419,28 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             "skipped": queue_result["skipped"],
         }
 
+    # --- Auto mode: simple fact → 10ms extractive, complex analysis → full LLM ---
+    if request.auto and not request.fast_path and not request.extractive:
+        q_lower = request.query.strip().lower()
+        is_analysis = bool(re.search(
+            r"(?:compare|contrast|difference|analysis|analyze|predict|trend|pattern|"
+            r"relationship|correlation|impact|effect|cause|explain|why\s+|"
+            r"how\s+(?:does|do|can|would)|summarize|overview|troubleshoot|diagnos|"
+            r"list\s+all|every|all\s+the)", q_lower
+        ))
+        if is_analysis:
+            print("[Auto] Complex analysis → full LLM pipeline")
+        else:
+            is_simple = (
+                bool(re.search(r"(?:^what\s+is|^who\s+is|^when\s+|^where\s+|^which\s+|"
+                               r"^how\s+to|^define\s+|^meaning\s+|^list\s+|^show\s+)", q_lower))
+                or (len(q_lower.split()) <= 5)
+            )
+            if is_simple:
+                request.fast_path = True
+                request.extractive = True
+                print("[Auto] Simple fact → fast+extractive (target: <10ms)")
+
     corpus_version = get_corpus_version(db, tenant_id, embedding_model)
     search_query = _retrieval_query(request)
     cache_scope = {
@@ -1548,6 +1572,48 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 yield f"data: {json.dumps({'done': True, 'sources': [], 'grounding': grounding_result, 'verification': response_data['verification']})}\n\n"
             return StreamingResponse(stream_not_found(), media_type="text/event-stream")
 
+        return response_data
+
+    # ------------------------------------------------------------
+    # Extractive Mode: skip LLM, return verbatim text from top chunk
+    # ------------------------------------------------------------
+    if request.extractive:
+        answer = ""
+        if final_context:
+            best = final_context[0]
+            text = best.get("text", "")
+            source_name = "unknown"
+            if best.get("metadata"):
+                src = best["metadata"].get("source", "")
+                if src:
+                    source_name = os.path.basename(str(src))
+            page = best.get("metadata", {}).get("page_num")
+            page_str = f", Page {page}" if page else ""
+            if len(text) > 4000:
+                text = text[:4000] + "..."
+            answer = f"[{source_name}{page_str}]\n{text}"
+        verification = verify_answer_grounding(answer, final_context) if answer else {"confidence": "low", "confidence_score": 0.0, "grounded_sentences": 0, "total_sentences": 0, "evidence": []}
+        latency = int((time.time() - start_time) * 1000)
+        response_data = {
+            "answer": answer,
+            "context": final_context,
+            "sources": sources,
+            "latency_ms": latency,
+            "ingest": ingest_summary,
+            "grounding": grounding_result,
+            "verification": verification,
+        }
+        if not request.fast_path:
+            set_cached_response(
+                request.query, tenant_id, effective_top_k,
+                embedding_model, corpus_version,
+                {key: value for key, value in response_data.items() if key != "ingest"},
+                scope=cache_scope,
+            )
+        latency = time.time() - request_start
+        status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
+        RAG_QUERY_TOTAL.labels(tenant=tenant_id, status=status).inc()
+        RAG_QUERY_LATENCY.labels(tenant=tenant_id, fast_path=str(request.fast_path)).observe(latency)
         return response_data
 
     # ------------------------------------------------------------

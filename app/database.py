@@ -18,7 +18,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from pgvector.sqlalchemy import Vector
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://rag_user:rag_password@postgres:5432/rag_db")
-EMBEDDING_DIM = int(os.getenv("RAG_EMBEDDING_DIM", "384"))
+EMBEDDING_DIM = int(os.getenv("RAG_EMBEDDING_DIM", "1024"))
 RAG_USE_HALFVEC = os.getenv("RAG_USE_HALFVEC", "false").lower() in {"1", "true", "yes", "on"}
 try:
     from pgvector.sqlalchemy import Halfvec as _Halfvec
@@ -65,7 +65,7 @@ class DocumentChunk(Base):
     parent_chunk_id = Column(Integer, nullable=True, index=True)
     confidence_score = Column(Float, nullable=True)
     # --- NEW columns for Multi-modal / Vision ---
-    image_embedding = Column(Vector(512), nullable=True)
+    image_embedding = Column(Vector(768), nullable=True)
     quantized_embedding = Column(Text, nullable=True)
 
 

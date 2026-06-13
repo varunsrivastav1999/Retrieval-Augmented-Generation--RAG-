@@ -7,21 +7,21 @@ from functools import lru_cache
 from typing import Any, Iterable, List, Sequence, Optional
 
 
-EMBEDDING_DIM = int(os.getenv("RAG_EMBEDDING_DIM", "384"))
+EMBEDDING_DIM = int(os.getenv("RAG_EMBEDDING_DIM", "1024"))
 RAG_ENV = os.getenv("RAG_ENV", "local").lower()
 EMBEDDING_MODEL = os.getenv(
     "RAG_EMBEDDING_MODEL",
-    "sentence-transformers/all-MiniLM-L6-v2",
+    "BAAI/bge-large-en-v1.5",
 )
 CLIP_MODEL = os.getenv(
     "RAG_CLIP_MODEL",
-    "sentence-transformers/clip-ViT-B-32"
+    "sentence-transformers/clip-ViT-L-14"
 )
 RERANKER_MODEL = os.getenv(
     "RAG_RERANKER_MODEL",
-    "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "BAAI/bge-reranker-v2-m3",
 )
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 MODEL_CACHE_DIR = os.getenv("SENTENCE_TRANSFORMERS_HOME") or os.getenv("HF_HOME")
 HF_OFFLINE = os.getenv("RAG_HF_OFFLINE", "false").lower() in {"1", "true", "yes", "on"}
 ALLOW_HASH_FALLBACK = os.getenv("RAG_ALLOW_HASH_FALLBACK", "false").lower() in {
@@ -187,7 +187,7 @@ def _model_appears_cached(model_name: str) -> bool:
 
 
 def get_ollama_generate_url() -> str:
-    base_url = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434/api/generate")
+    base_url = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
     return base_url
 
 @lru_cache(maxsize=1)

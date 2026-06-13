@@ -190,9 +190,11 @@ services:
   # Ollama — Local LLM Server (GPU-Accelerated)
   # ============================================================================
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.3.14
     container_name: ollama_rag_prod
     restart: unless-stopped
+    environment:
+      - OLLAMA_CONTEXT_LENGTH=32768
     volumes:
       - prod_ollama_data:/root/.ollama
     ports:
@@ -246,12 +248,10 @@ services:
     command:
       - "-c"
       - |
-        echo "=== Pulling Ollama model: ${OLLAMA_MODEL:-llama3} ==="
-        curl -s -X POST http://ollama:11434/api/pull -d "{\"name\": \"${OLLAMA_MODEL:-llama3}\"}" || echo "Pull failed (may already exist)"
-        if [ -f /app/Modelfile ]; then
-          echo "=== Creating custom brain from Modelfile ==="
-          curl -s -X POST http://ollama:11434/api/create -d "{\"name\": \"${OLLAMA_MODEL:-itips-brain}\", \"modelfile\": \"$(cat /app/Modelfile | sed 's/\"/\\\"/g' | tr '\n' '\\n')\"}" || echo "Create failed"
-        fi
+        echo "=== Restoring baked-in Ollama model to shared volume ==="
+        mkdir -p /root/.ollama/models/blobs /root/.ollama/models/manifests
+        cp -rn /models/ollama/blobs/* /root/.ollama/models/blobs/ 2>/dev/null || true
+        cp -rn /models/ollama/manifests/* /root/.ollama/models/manifests/ 2>/dev/null || true
         echo "=== Models ready ==="
     networks:
       rag_network:

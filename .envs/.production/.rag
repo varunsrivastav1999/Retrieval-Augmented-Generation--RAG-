@@ -2,7 +2,7 @@
 # i-Tips RAG — Production Environment (EDIT THIS FILE WITH YOUR SECRETS)
 # =============================================================================
 # NEVER commit this file to version control with real passwords.
-# On first deploy, replace all CHANGE_ME_* values with real secrets.
+# On first deploy, replace default passwords with real secrets.
 # =============================================================================
 
 # General
@@ -21,16 +21,18 @@ MEDIA_PATH=/media
 
 # Ollama
 OLLAMA_URL=http://ollama:11434/api/generate
-OLLAMA_MODEL=itips-brain
+OLLAMA_MODEL=qwen2.5:14b
 OLLAMA_TIMEOUT_SECONDS=300
 OLLAMA_NUM_PREDICT=1024
 
-# GPU
+# GPU (auto: CUDA on Linux NVIDIA, MPS on Apple Silicon, CPU fallback in Docker)
 RAG_MODEL_DEVICE=
 
 # Hugging Face models
-RAG_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
-RAG_RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+RAG_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
+RAG_EMBEDDING_DIM=1024
+RAG_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+RAG_CLIP_MODEL=sentence-transformers/clip-ViT-L-14
 RAG_HF_OFFLINE=true
 RAG_ALLOW_HASH_FALLBACK=false
 RAG_ALLOW_RERANKER_FALLBACK=false

@@ -46,7 +46,7 @@ def quantize_embedding(vector: List[float]) -> Tuple[bytes, float, float]:
     return bytes(q), s, zp
 
 
-def dequantize_embedding(quantized: bytes, scale: float, zero_point: float, dim: int = 384) -> List[float]:
+def dequantize_embedding(quantized: bytes, scale: float, zero_point: float, dim: int = 1024) -> List[float]:
     result = [0.0] * dim
     n = min(len(quantized), dim)
     for i in range(n):

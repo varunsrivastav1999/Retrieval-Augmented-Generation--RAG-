@@ -1,4 +1,4 @@
-FROM llama3
+FROM qwen2.5:14b
 
 # ==========================================
 # Production Trained Brain: Industrial RAG
