@@ -47,8 +47,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN --mount=type=cache,target=/root/.cache/huggingface \
     python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); SentenceTransformer('sentence-transformers/clip-ViT-B-32'); CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
 
-# Download spaCy model
-RUN python -m spacy download en_core_web_sm
+# Download spaCy model (direct pip install — spacy download generates broken URLs)
+RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
 
 # ---- Stage 2: Runtime --------------------------------------------------------
 FROM python:3.11-slim AS runtime
