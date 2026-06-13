@@ -50,10 +50,6 @@ RUN --mount=type=cache,target=/models/huggingface/hub \
 # Download spaCy model (direct pip install — spacy download generates broken URLs)
 RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
 
-# Download Ollama binary (used by models service for auto-pull at startup)
-RUN curl -fsSL https://github.com/ollama/ollama/releases/download/v0.3.14/ollama-linux-amd64 -o /usr/local/bin/ollama && \
-    chmod +x /usr/local/bin/ollama
-
 # ---- Stage 2: Runtime --------------------------------------------------------
 FROM python:3.11-slim AS runtime
 
@@ -77,6 +73,9 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy model cache from builder
 COPY --from=builder /models /models
+
+# Install Ollama binary (official install script — handles OS/arch detection)
+RUN curl -fsSL https://ollama.com/install.sh | sh
 
 # Pre-download Ollama LLM model (baked into image — zero runtime/download at startup)
 RUN ollama serve &>/tmp/ollama-srv.log & \
