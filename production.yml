@@ -341,9 +341,9 @@ services:
       - |
         echo "Backup service started. Running daily at 02:00."
         while true; do
-          current_hour=$(date +%H)
-          current_min=$(date +%M)
-          if [ "$current_hour" = "02" ] && [ "$current_min" = "00" ]; then
+          current_hour=$$(date +%H)
+          current_min=$$(date +%M)
+          if [ "$$current_hour" = "02" ] && [ "$$current_min" = "00" ]; then
             /scripts/backup/run.sh >> /var/log/rag/backup.log 2>&1
             sleep 60
           fi
