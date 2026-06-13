@@ -43,9 +43,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
     pip install -r requirements.txt
 
-# Pre-download models (baked into builder layer)
-RUN --mount=type=cache,target=/models/huggingface/hub \
-    python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-large-en-v1.5'); SentenceTransformer('sentence-transformers/clip-ViT-L-14'); CrossEncoder('BAAI/bge-reranker-v2-m3')"
+# Pre-download models (baked into image layer — NOT a cache mount)
+RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-large-en-v1.5'); SentenceTransformer('sentence-transformers/clip-ViT-L-14'); CrossEncoder('BAAI/bge-reranker-v2-m3')"
 
 # Download spaCy model (direct pip install — spacy download generates broken URLs)
 RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
@@ -102,8 +101,8 @@ WORKDIR /app
 # Copy application code
 COPY --chown=appuser:appuser . .
 
-# Create required directories
-RUN mkdir -p /media /var/log/rag && chown -R appuser:appuser /media /var/log/rag
+# Create required directories and fix model cache permissions
+RUN mkdir -p /media /var/log/rag && chown -R appuser:appuser /media /var/log/rag /models
 
 # Switch to non-root user
 USER appuser
