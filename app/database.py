@@ -196,12 +196,7 @@ def _run_schema_migrations():
         )
         conn.commit()
 
-        # Drop the old 'simple' dictionary index if it exists, then recreate
-        # with 'english' to match the retrieval queries and enable stemming.
-        _execute_best_effort(
-            conn,
-            "DROP INDEX IF EXISTS ix_document_chunks_text_search",
-        )
+        # Recreate with 'english' to match the retrieval queries and enable stemming.
         _execute_best_effort(
             conn,
             "CREATE INDEX IF NOT EXISTS ix_document_chunks_text_search "
