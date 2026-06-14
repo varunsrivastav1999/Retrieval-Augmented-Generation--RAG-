@@ -843,6 +843,27 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 request.fast_path = True
                 print("[Auto] Simple fact → fast retrieval + LLM stream")
 
+        # Conversational Bypass
+        is_greeting = bool(re.match(r"^(hi|hello|hey|greetings|how are you|good morning|good afternoon)(?:\s+|$|[!.,?])", q_lower))
+        if is_greeting:
+            answer = "Hello! I'm your Enterprise Q&A Assistant. Please ask me a question about your uploaded documents!"
+            grounding_result = {"is_grounded": True, "score": 1.0, "detail": "Conversational Greeting"}
+            response_data = {
+                "answer": answer,
+                "context": [],
+                "sources": [],
+                "latency_ms": int((time.time() - start_time) * 1000),
+                "ingest": ingest_summary,
+                "grounding": grounding_result,
+                "verification": {"confidence": "high", "confidence_score": 1.0, "grounded_sentences": 1, "total_sentences": 1, "evidence": []},
+            }
+            if request.stream:
+                def stream_greeting():
+                    yield f"data: {json.dumps({'token': answer})}\n\n"
+                    yield f"data: {json.dumps({'done': True, 'sources': [], 'grounding': grounding_result, 'verification': response_data['verification']})}\n\n"
+                return StreamingResponse(stream_greeting(), media_type="text/event-stream")
+            return response_data
+
     corpus_version = get_corpus_version(db, tenant_id, embedding_model)
     search_query = _retrieval_query(request)
     cache_scope = {
