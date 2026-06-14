@@ -174,10 +174,21 @@
         }
 
         .input-pill .plus-icon {
-            font-size: 1.5rem;
-            color: var(--placeholder-color);
-            margin-right: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: var(--input-bg);
+            border: 1px solid var(--input-border);
+            color: var(--text-color);
             cursor: pointer;
+            margin-right: 15px;
+            transition: all 0.2s;
+        }
+        .input-pill .plus-icon:hover {
+            background: rgba(255, 255, 255, 0.1);
         }
 
         .input-pill input {
@@ -201,25 +212,23 @@
             gap: 15px;
         }
 
-        .pro-dropdown {
-            color: var(--placeholder-color);
-            font-size: 0.9rem;
-            font-weight: 500;
-            cursor: pointer;
+        .send-icon {
             display: flex;
             align-items: center;
-            gap: 5px;
-        }
-
-        .mic-icon, .send-icon {
-            color: var(--placeholder-color);
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: var(--text-color);
+            color: var(--bg-color);
             cursor: pointer;
-            font-size: 1.2rem;
+            transition: transform 0.2s;
         }
         
         .send-icon:hover {
-            color: var(--accent-color);
+            transform: scale(1.05);
         }
+        .send-icon svg { width: 20px; height: 20px; }
 
         /* Info Hover Icon */
         .info-container {
@@ -386,10 +395,11 @@
 
         <div class="input-wrapper">
             <div class="input-pill">
-                <span class="plus-icon" onclick="document.getElementById('fileInput').click()">+</span>
+                <div class="plus-icon" onclick="document.getElementById('fileInput').click()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+                </div>
                 <input type="text" id="queryInput" placeholder="Ask RAG" onkeypress="if(event.key === 'Enter') askQuery()">
                 <div class="input-actions">
-                    <div class="pro-dropdown">Pro <span>▼</span></div>
                     <div class="health-indicator-wrapper">
                         <div class="health-dot" id="sysHealthDot"></div>
                         <div class="health-panel">
@@ -400,7 +410,9 @@
                             <div class="health-item"><span>Models:</span> <span id="h_models">...</span></div>
                         </div>
                     </div>
-                    <span class="send-icon" onclick="askQuery()">▶</span>
+                    <div class="send-icon" onclick="askQuery()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+                    </div>
                 </div>
             </div>
         </div>
