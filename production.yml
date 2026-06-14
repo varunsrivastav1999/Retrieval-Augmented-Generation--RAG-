@@ -192,9 +192,9 @@ services:
     container_name: ollama_rag_prod
     restart: unless-stopped
     environment:
-      - OLLAMA_CONTEXT_LENGTH=8192
-      - OLLAMA_NUM_PARALLEL=8
-      - OLLAMA_MAX_QUEUE=512
+      - OLLAMA_CONTEXT_LENGTH=4096
+      - OLLAMA_NUM_PARALLEL=2
+      - OLLAMA_MAX_QUEUE=128
     volumes:
       - prod_ollama_data:/root/.ollama
     ports:
