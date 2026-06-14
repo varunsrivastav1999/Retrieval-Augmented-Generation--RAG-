@@ -450,7 +450,9 @@
         <div class="input-wrapper">
             <div class="input-pill">
                 <div class="plus-icon" onclick="document.getElementById('fileInput').click()">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/>
+                    </svg>
                 </div>
                 <input type="text" id="queryInput" placeholder="Ask RAG" onkeypress="if(event.key === 'Enter') askQuery()">
                 <div class="input-actions">
@@ -512,12 +514,19 @@
             const aiRow = document.createElement('div');
             aiRow.className = 'message-row ai';
             aiRow.innerHTML = `
+                <div class="ai-avatar" style="margin-right: 15px; color: var(--accent-color); margin-top: 10px;">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12.0001 22C12.0001 16.4772 7.52292 12 2.00006 12C7.52292 12 12.0001 7.52285 12.0001 2C12.0001 7.52285 16.4772 12 21.9999 12C16.4772 12 12.0001 16.4772 12.0001 22Z"/>
+                    </svg>
+                </div>
                 <div class="message-bubble">
                     <div class="markdown-body" id="text_${aiId}"></div>
                 </div>
                 
                 <div class="info-container" id="info_${aiId}" style="display:none;">
-                    <div class="info-icon">ℹ️</div>
+                    <div class="info-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" height="18px" viewBox="0 0 24 24" width="18px" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>
+                    </div>
                     <div class="info-panel" id="panel_${aiId}">
                         <h4>RAG Pipeline Details</h4>
                         <p id="latency_${aiId}">Latency: --</p>
