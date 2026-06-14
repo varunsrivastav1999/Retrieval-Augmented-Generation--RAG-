@@ -80,7 +80,7 @@ def build_raptor_tree(db: Session, tenant_id: str, max_levels: int = 3, n_cluste
         if n_components < 2:
             break
             
-        reducer = umap.UMAP(n_components=n_components, random_state=42)
+        reducer = umap.UMAP(n_components=n_components, random_state=42, memory=None)
         try:
             X_reduced = reducer.fit_transform(X)
         except Exception as e:
