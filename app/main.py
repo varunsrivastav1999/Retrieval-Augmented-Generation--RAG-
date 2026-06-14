@@ -759,10 +759,10 @@ def ready_health(db: Session = Depends(get_db)):
         checks["ollama"] = f"degraded: {exc}"
 
     try:
-        validate_runtime_models()
+        checks["models_info"] = runtime_model_info()
         checks["models"] = "ready"
     except Exception as exc:
-        checks["models"] = f"syncing: {exc}"
+        checks["models"] = f"info_error: {exc}"
 
     payload = {"status": "ok" if status_code == 200 else "unready", "checks": checks}
     if status_code != 200:
