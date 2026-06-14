@@ -314,6 +314,58 @@
         .markdown-body a { color: var(--accent-color); }
         .markdown-body ul, .markdown-body ol { margin-left: 20px; margin-bottom: 10px; }
         .markdown-body p { margin-bottom: 10px; }
+
+        /* Health Indicator */
+        .health-indicator-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .health-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: #6b7280; /* default gray */
+            cursor: pointer;
+            box-shadow: 0 0 5px rgba(0,0,0,0.2);
+            transition: background-color 0.3s;
+        }
+
+        .health-dot.ok { background-color: #10b981; box-shadow: 0 0 8px rgba(16,185,129,0.4); }
+        .health-dot.warning { background-color: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,0.4); }
+        .health-dot.error { background-color: #ef4444; box-shadow: 0 0 8px rgba(239,68,68,0.4); }
+
+        .health-panel {
+            position: absolute;
+            bottom: 30px;
+            right: -20px;
+            width: 220px;
+            background: var(--info-bg);
+            border: 1px solid var(--input-border);
+            border-radius: 12px;
+            padding: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            display: none;
+            z-index: 200;
+            font-size: 0.85rem;
+            color: var(--text-color);
+        }
+
+        .health-indicator-wrapper:hover .health-panel {
+            display: block;
+            animation: fadeIn 0.2s ease;
+        }
+
+        .health-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+        .health-item span:first-child { color: var(--placeholder-color); }
+        .health-item span.status-ok { color: #10b981; }
+        .health-item span.status-warn { color: #f59e0b; }
+        .health-item span.status-err { color: #ef4444; }
     </style>
 </head>
 <body data-theme="dark">
@@ -338,7 +390,16 @@
                 <input type="text" id="queryInput" placeholder="Ask RAG" onkeypress="if(event.key === 'Enter') askQuery()">
                 <div class="input-actions">
                     <div class="pro-dropdown">Pro <span>▼</span></div>
-                    <span class="mic-icon">🎙️</span>
+                    <div class="health-indicator-wrapper">
+                        <div class="health-dot" id="sysHealthDot"></div>
+                        <div class="health-panel">
+                            <h4 style="margin-bottom:8px; color: var(--accent-color);">System Health</h4>
+                            <div class="health-item"><span>Database:</span> <span id="h_db">...</span></div>
+                            <div class="health-item"><span>Redis:</span> <span id="h_redis">...</span></div>
+                            <div class="health-item"><span>Ollama:</span> <span id="h_ollama">...</span></div>
+                            <div class="health-item"><span>Models:</span> <span id="h_models">...</span></div>
+                        </div>
+                    </div>
                     <span class="send-icon" onclick="askQuery()">▶</span>
                 </div>
             </div>
@@ -492,6 +553,62 @@
                 }, 3000);
             }
         }
+
+        async function checkHealth() {
+            try {
+                const res = await fetch('/health/ready');
+                const data = await res.json();
+                const checks = data.checks || {};
+                
+                let issues = 0;
+                let fails = 0;
+                
+                const updateStatus = (id, val) => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    if (val === 'ok' || val === 'ready') {
+                        el.textContent = 'OK';
+                        el.className = 'status-ok';
+                    } else if (val && val.startsWith('degraded')) {
+                        el.textContent = 'WARN';
+                        el.className = 'status-warn';
+                        issues++;
+                    } else if (val) {
+                        el.textContent = 'ERR';
+                        el.className = 'status-err';
+                        fails++;
+                    } else {
+                        el.textContent = '--';
+                    }
+                };
+
+                updateStatus('h_db', checks.database);
+                updateStatus('h_redis', checks.redis);
+                updateStatus('h_ollama', checks.ollama);
+                updateStatus('h_models', checks.models);
+
+                const dot = document.getElementById('sysHealthDot');
+                dot.className = 'health-dot';
+                if (fails > 0 || data.status !== 'ok') {
+                    dot.classList.add('error');
+                } else if (issues > 0) {
+                    dot.classList.add('warning');
+                } else {
+                    dot.classList.add('ok');
+                }
+            } catch (e) {
+                const dot = document.getElementById('sysHealthDot');
+                dot.className = 'health-dot error';
+                ['h_db', 'h_redis', 'h_ollama', 'h_models'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) { el.textContent = 'DISC'; el.className = 'status-err'; }
+                });
+            }
+        }
+
+        // Run once on load and every 10 seconds
+        checkHealth();
+        setInterval(checkHealth, 10000);
     </script>
     <input type="file" id="fileInput" multiple style="display: none;" onchange="uploadFiles()">
 </body>
