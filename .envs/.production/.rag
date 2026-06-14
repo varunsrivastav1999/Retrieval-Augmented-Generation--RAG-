@@ -25,8 +25,8 @@ OLLAMA_MODEL=qwen2.5:14b
 OLLAMA_TIMEOUT_SECONDS=300
 OLLAMA_NUM_PREDICT=1024
 
-# GPU (auto: CUDA on Linux NVIDIA, MPS on Apple Silicon, CPU fallback in Docker)
-RAG_MODEL_DEVICE=
+# GPU — set to cpu to offload embedding/reranker to CPU, leave GPU for Ollama
+RAG_MODEL_DEVICE=cpu
 
 # Hugging Face models
 RAG_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
