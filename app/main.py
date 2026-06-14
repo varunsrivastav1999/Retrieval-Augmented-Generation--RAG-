@@ -841,8 +841,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             )
             if is_simple:
                 request.fast_path = True
-                request.extractive = True
-                print("[Auto] Simple fact → fast+extractive (target: <10ms)")
+                print("[Auto] Simple fact → fast retrieval + LLM stream")
 
     corpus_version = get_corpus_version(db, tenant_id, embedding_model)
     search_query = _retrieval_query(request)
