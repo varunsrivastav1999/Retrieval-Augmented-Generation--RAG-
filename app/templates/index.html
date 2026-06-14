@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ask RAG</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="/static/js/marked.min.js"></script>
     <style>
@@ -74,10 +75,15 @@
             display: flex;
             flex-direction: column;
             align-items: center;
+            justify-content: center;
             width: 100%;
             max-width: 900px;
             margin: 0 auto;
             position: relative;
+        }
+
+        .main-container.chatting {
+            justify-content: flex-end;
         }
 
         .hero {
@@ -85,13 +91,13 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 60vh;
             text-align: center;
             animation: fadeIn 1s ease;
+            width: 100%;
         }
 
         .hero h1 {
-            font-size: 3rem;
+            font-size: clamp(2rem, 5vw, 3rem);
             font-weight: 400;
             margin-bottom: 30px;
             background: -webkit-linear-gradient(45deg, #a8c7fa, #d3e3fd);
@@ -119,7 +125,6 @@
             display: none;
             flex-direction: column;
             gap: 20px;
-            margin-bottom: 120px;
         }
 
         .message-row {
@@ -132,11 +137,17 @@
         }
 
         .message-bubble {
-            max-width: 80%;
+            max-width: 90%;
             padding: 15px 20px;
             border-radius: 20px;
             font-size: 1.05rem;
             line-height: 1.5;
+        }
+        
+        @media (max-width: 600px) {
+            .message-bubble { max-width: 100%; font-size: 1rem; }
+            .top-nav { padding: 10px; }
+            .hero h1 { margin-bottom: 20px; }
         }
 
         .message-row.user .message-bubble {
@@ -157,11 +168,13 @@
 
         /* Input Area */
         .input-wrapper {
-            position: absolute;
-            bottom: 40px;
             width: 100%;
             max-width: 800px;
-            padding: 0 20px;
+            padding: 20px;
+            margin: 0 auto;
+            flex-shrink: 0;
+            position: relative;
+            z-index: 10;
         }
 
         .input-pill {
@@ -439,8 +452,9 @@
 
             input.value = '';
             
-            // Hide hero, show chat
+            // Hide hero, show chat, shift layout
             document.getElementById('heroArea').style.display = 'none';
+            document.querySelector('.main-container').classList.add('chatting');
             const chatArea = document.getElementById('chatArea');
             chatArea.style.display = 'flex';
 
