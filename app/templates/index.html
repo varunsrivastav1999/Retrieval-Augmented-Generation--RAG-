@@ -44,6 +44,7 @@
             background-image: var(--radial-gradient);
             color: var(--text-color);
             height: 100vh;
+            height: 100dvh;
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -54,6 +55,7 @@
             display: flex;
             justify-content: flex-end;
             padding: 20px;
+            flex-shrink: 0;
         }
 
         .theme-toggle {
@@ -80,6 +82,7 @@
             max-width: 900px;
             margin: 0 auto;
             position: relative;
+            min-height: 0;
         }
 
         .main-container.chatting {
@@ -145,6 +148,7 @@
             display: none;
             flex-direction: column;
             gap: 20px;
+            min-height: 0;
         }
 
         .message-row {

@@ -1089,6 +1089,12 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                     for line in response.iter_lines():
                         if line:
                             data = json.loads(line.decode("utf-8"))
+                            
+                            if "error" in data:
+                                err_msg = f"\n\n**Ollama Error:** {data['error']}"
+                                yield f"data: {json.dumps({'token': err_msg})}\n\n"
+                                break
+                                
                             token = data.get("response", "")
                             
                             if not prefix_stripped:
