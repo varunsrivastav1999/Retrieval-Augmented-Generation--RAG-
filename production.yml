@@ -54,7 +54,7 @@ services:
       neo4j:
         condition: service_started
       models:
-        condition: service_completed_successfully
+        condition: service_started
     volumes:
       - prod_media:/media
       - type: bind
@@ -255,7 +255,7 @@ services:
         cp -rn /models/ollama/blobs/* /root/.ollama/models/blobs/ 2>/dev/null || true
         cp -rn /models/ollama/manifests/* /root/.ollama/models/manifests/ 2>/dev/null || true
         echo "=== Ensuring Ollama pulls the active model over network ==="
-        curl -s -X POST http://ollama:11434/api/pull -d "{\"name\": \"$${OLLAMA_MODEL}\"}"
+        curl -s -X POST http://ollama:11434/api/pull -d "{\"name\": \"$${OLLAMA_MODEL}\", \"stream\": false}"
         echo "=== Models ready ==="
     networks:
       rag_network:

@@ -17,7 +17,7 @@ echo "🔍 Auto-Detecting Hardware..."
 if command -v nvidia-smi &> /dev/null || [ -e /dev/nvidia0 ] || grep -qi nvidia /proc/driver/nvidia/version 2>/dev/null; then
     echo "✅ CUDA (NVIDIA GPU) detected!"
     echo "🚀 Starting $ENV environment with Docker GPU Passthrough..."
-    docker compose -f $COMPOSE_FILE -f docker-gpu.yml up --build -d
+    docker compose -f $COMPOSE_FILE -f docker-gpu.yml up --build -d --remove-orphans
 
 # 2. Detect MPS (Apple Silicon)
 elif [[ $(uname -m) == 'arm64' && $(uname -s) == 'Darwin' ]]; then
@@ -25,12 +25,12 @@ elif [[ $(uname -m) == 'arm64' && $(uname -s) == 'Darwin' ]]; then
     echo "⚠️  Note: Docker on Mac does not support native MPS passthrough yet."
     echo "   The containers will run on CPU. To utilize MPS fully, run 'python app/main.py' natively outside Docker."
     echo "🚀 Starting $ENV environment..."
-    docker compose -f $COMPOSE_FILE up --build -d
+    docker compose -f $COMPOSE_FILE up --build -d --remove-orphans
 
 # 3. Fallback to CPU
 else
     echo "⚠️  No GPU detected."
     echo "🐢 Starting $ENV environment in CPU mode..."
-    docker compose -f $COMPOSE_FILE up --build -d
+    docker compose -f $COMPOSE_FILE up --build -d --remove-orphans
 fi
 echo "============================================================"
