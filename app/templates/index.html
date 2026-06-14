@@ -334,7 +334,7 @@
 
         <div class="input-wrapper">
             <div class="input-pill">
-                <span class="plus-icon">+</span>
+                <span class="plus-icon" onclick="document.getElementById('fileInput').click()">+</span>
                 <input type="text" id="queryInput" placeholder="Ask RAG" onkeypress="if(event.key === 'Enter') askQuery()">
                 <div class="input-actions">
                     <div class="pro-dropdown">Pro <span>▼</span></div>
@@ -462,6 +462,37 @@
                 answerBox.innerHTML = `<span style="color:#ef4444">Error: ${e.message}</span>`;
             }
         }
+
+        async function uploadFiles() {
+            const input = document.getElementById('fileInput');
+            if (!input.files || input.files.length === 0) return;
+
+            const plusBtn = document.querySelector('.plus-icon');
+            const originalPlus = plusBtn.innerHTML;
+            plusBtn.innerHTML = '⏳'; // simple spinner
+            plusBtn.style.pointerEvents = 'none';
+
+            const formData = new FormData();
+            Array.from(input.files).forEach(f => formData.append("files", f));
+
+            try {
+                const res = await fetch('/api/v1/upload', { method: 'POST', body: formData });
+                if (res.ok) {
+                    plusBtn.innerHTML = '✅';
+                } else {
+                    plusBtn.innerHTML = '❌';
+                }
+            } catch (e) {
+                plusBtn.innerHTML = '❌';
+            } finally {
+                setTimeout(() => {
+                    plusBtn.innerHTML = originalPlus;
+                    plusBtn.style.pointerEvents = 'auto';
+                    input.value = '';
+                }, 3000);
+            }
+        }
     </script>
+    <input type="file" id="fileInput" multiple style="display: none;" onchange="uploadFiles()">
 </body>
 </html>

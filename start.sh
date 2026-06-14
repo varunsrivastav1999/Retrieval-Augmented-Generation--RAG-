@@ -14,7 +14,7 @@ echo "============================================================"
 echo "🔍 Auto-Detecting Hardware..."
 
 # 1. Detect CUDA (NVIDIA)
-if command -v nvidia-smi &> /dev/null; then
+if command -v nvidia-smi &> /dev/null || ls /dev/nvidia* &> /dev/null || grep -qi nvidia /proc/driver/nvidia/version 2>/dev/null; then
     echo "✅ CUDA (NVIDIA GPU) detected!"
     echo "🚀 Starting $ENV environment with Docker GPU Passthrough..."
     docker compose -f $COMPOSE_FILE -f docker-gpu.yml up --build -d
