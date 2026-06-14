@@ -23,12 +23,12 @@
         [data-theme="light"] {
             --bg-color: #ffffff;
             --text-color: #1f1f1f;
-            --input-bg: #f0f4f9;
+            --input-bg: #ffffff;
             --input-border: #e0e0e0;
             --placeholder-color: #444746;
             --accent-color: #0b57d0;
             --info-bg: #f8f9fa;
-            --radial-gradient: radial-gradient(circle at center, #e8f0fe 0%, #ffffff 60%);
+            --radial-gradient: radial-gradient(circle at center, #e3f0fe 0%, #ffffff 50%, #ffffff 100%);
         }
 
         * {
@@ -106,9 +106,9 @@
         }
         
         [data-theme="light"] .hero h1 {
-            background: -webkit-linear-gradient(45deg, #0b57d0, #001d35);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            background: none;
+            -webkit-text-fill-color: var(--text-color);
+            color: var(--text-color);
         }
 
         @keyframes fadeIn {
@@ -421,9 +421,16 @@
     </style>
 </head>
 <body data-theme="dark">
-
+    <script>
+        // Auto-detect OS theme preference on load
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+            document.body.setAttribute('data-theme', 'light');
+        }
+    </script>
     <div class="top-nav">
-        <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">☀️</button>
+        <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">
+            <script>document.write(document.body.getAttribute('data-theme') === 'light' ? '🌙' : '☀️');</script>
+        </button>
     </div>
 
     <div class="main-container">
