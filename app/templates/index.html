@@ -556,18 +556,27 @@
 
             const plusBtn = document.querySelector('.plus-icon');
             const originalPlus = plusBtn.innerHTML;
-            plusBtn.innerHTML = '⏳'; // simple spinner
+            plusBtn.innerHTML = '⏳';
             plusBtn.style.pointerEvents = 'none';
 
-            const formData = new FormData();
-            Array.from(input.files).forEach(f => formData.append("files", f));
+            let allSuccess = true;
 
             try {
-                const res = await fetch('/api/v1/upload', { method: 'POST', body: formData });
-                if (res.ok) {
+                const uploadPromises = Array.from(input.files).map(f => {
+                    const formData = new FormData();
+                    formData.append("file", f); // Matches backend `file: UploadFile`
+                    return fetch('/api/v1/upload', { method: 'POST', body: formData });
+                });
+                
+                const responses = await Promise.all(uploadPromises);
+                responses.forEach(res => {
+                    if (!res.ok) allSuccess = false;
+                });
+
+                if (allSuccess) {
                     plusBtn.innerHTML = '✅';
                 } else {
-                    plusBtn.innerHTML = '❌';
+                    plusBtn.innerHTML = '⚠️';
                 }
             } catch (e) {
                 plusBtn.innerHTML = '❌';
