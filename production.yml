@@ -90,10 +90,6 @@ services:
         reservations:
           cpus: "2"
           memory: 4G
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     logging:
       driver: "json-file"
       options:
@@ -214,11 +210,9 @@ services:
       start_period: 60s
     deploy:
       resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+        limits:
+          cpus: "4"
+          memory: 8G
     logging:
       driver: "json-file"
       options:

@@ -17,9 +17,6 @@ DENSE_WEIGHT = 0.5
 LEXICAL_WEIGHT = 0.5
 HYDE_WEIGHT = 0.3
 
-# Use the same OLLAMA_URL resolution as model_loader.py
-OLLAMA_URL = get_ollama_generate_url()
-
 def _candidate_from_chunk(chunk: DocumentChunk) -> dict:
     metadata = chunk.doc_metadata or {}
     cand = {
@@ -57,7 +54,7 @@ def _generate_hyde(query: str) -> str:
         "options": {"num_predict": 30, "temperature": 0.3}
     }
     try:
-        response = requests.post(OLLAMA_URL, json=payload, timeout=15.0)
+        response = requests.post(get_ollama_generate_url(), json=payload, timeout=15.0)
         if response.status_code == 200:
             return response.json().get("response", "").strip()
     except Exception as e:

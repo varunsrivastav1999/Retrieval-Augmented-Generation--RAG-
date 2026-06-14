@@ -1,27 +1,43 @@
 import os
 import json
 import requests
-from neo4j import GraphDatabase
 from typing import List, Dict, Any
 
 from app.rag.model_loader import extract_entities, extract_triplets, get_ollama_generate_url
 
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+# Neo4j is optional — app runs fine without it
+try:
+    from neo4j import GraphDatabase
+    NEO4J_AVAILABLE = True
+except ImportError:
+    NEO4J_AVAILABLE = False
+
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "rag_password")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 
 class GraphDB:
     def __init__(self):
+        self.driver = None
+        if not NEO4J_AVAILABLE:
+            print("[GraphDB] neo4j package not installed — GraphRAG disabled (app runs fine without it)")
+            return
         try:
             self.driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+            # Verify connectivity with a lightweight check
+            self.driver.verify_connectivity()
+            print(f"[GraphDB] ✅ Connected to Neo4j at {NEO4J_URI}")
         except Exception as e:
-            print(f"[GraphDB] Failed to connect to Neo4j: {e}")
             self.driver = None
+            print(f"[GraphDB] ⚠️ Neo4j unavailable — GraphRAG disabled (app runs fine without it): {e}")
 
     def close(self):
         if self.driver:
-            self.driver.close()
+            try:
+                self.driver.close()
+            except Exception:
+                pass
 
     def populate_from_chunk(self, chunk_id: str, text: str, tenant_id: str):
         """Extracts entities and relationships, and creates them in Neo4j."""

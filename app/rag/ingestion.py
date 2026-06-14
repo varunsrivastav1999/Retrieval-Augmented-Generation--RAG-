@@ -358,10 +358,8 @@ def ingest_file(
             )
             chunks_inserted += inserted
             
-        # --- RAPTOR: Hierarchical Summarization ---
-        from app.rag.raptor import build_raptor_tree
-        # Build global tenant-level tree
-        build_raptor_tree(db, tenant_id, max_levels=3, n_clusters=10)
+        # NOTE: RAPTOR tree build is NOT run per-file (too expensive).
+        # Trigger via POST /raptor/build endpoint or on a schedule instead.
 
         if job_id:
             complete_ingestion_job(job_id, chunks_total, chunks_inserted)

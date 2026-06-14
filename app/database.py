@@ -131,7 +131,7 @@ def _run_schema_migrations():
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS raptor_level integer DEFAULT 0"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS parent_chunk_id INTEGER"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS confidence_score FLOAT"))
-        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS image_embedding vector(512)"))
+        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS image_embedding vector(768)"))
         conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS quantized_embedding text"))
         _execute_best_effort(
             conn,

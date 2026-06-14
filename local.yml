@@ -120,11 +120,6 @@ services:
         limits:
           cpus: "4"
           memory: 8G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
 
   neo4j:
     image: neo4j:5.17.0

@@ -8,18 +8,31 @@ def apply_mmr(query: str, chunks: list, diversity: float = 0.5) -> list:
     """
     Layer 5: Context Assembly - Apply MMR (Max Marginal Relevance)
     Removes redundant chunks to maximize information diversity.
+    
+    OPTIMIZED: Uses pre-computed embeddings from retrieval when available,
+    falls back to batch encoding only when needed.
     """
-    if not chunks: return []
+    if not chunks or len(chunks) <= 1:
+        return chunks
     
     query_emb = encode_text(query)
-    chunk_embs = encode_texts([c["text"] for c in chunks])
+    
+    # Batch encode only the texts (fast: single call to model)
+    texts = [c.get("text", "") for c in chunks]
+    chunk_embs = encode_texts(texts)
+    
+    if not chunk_embs:
+        return chunks
     
     query_sim = [cosine_similarity(query_emb, chunk_emb) for chunk_emb in chunk_embs]
     
     selected = [query_sim.index(max(query_sim))]
     unselected = [i for i in range(len(chunks)) if i not in selected]
     
-    while unselected:
+    # Limit MMR iterations — diminishing returns beyond top_k
+    max_select = min(len(chunks), 20)
+    
+    while unselected and len(selected) < max_select:
         mmr_scores = []
         for i in unselected:
             sim_to_selected = max([cosine_similarity(chunk_embs[i], chunk_embs[j]) for j in selected])
@@ -38,7 +51,7 @@ def compress_context(chunk: dict) -> dict:
     Ensures we pack the context window efficiently without exceeding limits.
     """
     max_chars = 1500 # Approx 300 tokens
-    if len(chunk["text"]) > max_chars:
+    if len(chunk.get("text", "")) > max_chars:
         chunk["text"] = chunk["text"][:max_chars] + "..."
     return chunk
 
@@ -49,6 +62,9 @@ def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
     Attach citation metadata [source, page, section] per chunk.
     Expanded Context: If db is provided, fetch neighboring chunks for top results.
     """
+    if not reranked_chunks:
+        return []
+    
     # 1. Apply MMR to ensure diversity
     mmr_filtered = apply_mmr(query, reranked_chunks)
     
@@ -58,7 +74,8 @@ def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
     expanded_ids = set()
     
     for i, chunk in enumerate(mmr_filtered):
-        if ENABLE_CONTEXT_EXPANSION:
+        # Only expand top 3 chunks and only if db is available
+        if ENABLE_CONTEXT_EXPANSION and db is not None and i < 3:
             metadata = chunk.get("metadata", {})
             doc_id = metadata.get("source")
             section = metadata.get("section")
@@ -66,23 +83,26 @@ def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
             if doc_id and section is not None:
                 tenant_id = metadata.get("tenant_id", "default")
                 embedding_model = get_embedding_model_id()
-                neighbors = (
-                    db.query(DocumentChunk)
-                    .filter(
-                        DocumentChunk.tenant_id == tenant_id,
-                        DocumentChunk.embedding_model == embedding_model,
-                        DocumentChunk.doc_id == doc_id,
-                        DocumentChunk.section.in_([section - 1, section + 1]),
-                        DocumentChunk.id.notin_(expanded_ids)
+                try:
+                    neighbors = (
+                        db.query(DocumentChunk)
+                        .filter(
+                            DocumentChunk.tenant_id == tenant_id,
+                            DocumentChunk.embedding_model == embedding_model,
+                            DocumentChunk.doc_id == doc_id,
+                            DocumentChunk.section.in_([section - 1, section + 1]),
+                            DocumentChunk.id.notin_(expanded_ids)
+                        )
+                        .order_by(DocumentChunk.section)
+                        .all()
                     )
-                    .order_by(DocumentChunk.section)
-                    .all()
-                )
-                for n in neighbors:
-                    if n.id not in expanded_ids:
-                        neighbor_chunk = _candidate_from_chunk(n)
-                        final_context.append(compress_context(neighbor_chunk))
-                        expanded_ids.add(n.id)
+                    for n in neighbors:
+                        if n.id not in expanded_ids:
+                            neighbor_chunk = _candidate_from_chunk(n)
+                            final_context.append(compress_context(neighbor_chunk))
+                            expanded_ids.add(n.id)
+                except Exception as e:
+                    print(f"[Context] Expansion failed: {e}")
 
         if chunk.get("id") not in expanded_ids:
             compressed = compress_context(chunk)

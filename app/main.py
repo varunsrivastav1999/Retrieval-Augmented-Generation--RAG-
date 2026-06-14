@@ -797,344 +797,276 @@ def root_ui():
                 --primary-glow: rgba(59,130,246,0.15);
                 --success: #10b981;
                 --warning: #f59e0b;
+                --bg: #09090b;
+                --card: #18181b;
+                --border: #27272a;
+                --primary: #ffffff;
+                --primary-glow: rgba(255,255,255,0.1);
+                --success: #10b981;
+                --warning: #f59e0b;
                 --danger: #ef4444;
                 --purple: #8b5cf6;
                 --cyan: #06b6d4;
-                --text: #f1f5f9;
-                --text-muted: #94a3b8;
-                --text-dim: #64748b;
+                --text: #f8fafc;
+                --text-muted: #a1a1aa;
+                --text-dim: #71717a;
             }
             * { box-sizing: border-box; margin: 0; padding: 0; }
             body {
                 font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
                 background: var(--bg);
-                background-image: radial-gradient(ellipse at 20% 50%, rgba(59,130,246,0.08) 0%, transparent 50%),
-                                  radial-gradient(ellipse at 80% 20%, rgba(139,92,246,0.06) 0%, transparent 50%);
                 color: var(--text);
                 min-height: 100vh;
                 display: flex;
                 flex-direction: column;
                 align-items: center;
                 padding: 1.5rem;
+                padding-bottom: 120px;
             }
-            .header { text-align: center; margin: 1rem 0 1.5rem; }
+            
+            /* Cloud AI Header */
+            .header { text-align: center; margin: 2rem 0 3rem; animation: fadeIn 1s ease-in-out; }
+            @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+            
             .header h1 {
-                font-size: 2.2rem;
-                font-weight: 800;
-                background: linear-gradient(135deg, #3b82f6, #8b5cf6, #06b6d4);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-                letter-spacing: -0.5px;
+                font-size: 2.5rem;
+                font-weight: 700;
+                color: var(--text);
+                letter-spacing: -1px;
+                margin-bottom: 0.5rem;
             }
-            .header p { color: var(--text-dim); font-size: 0.85rem; margin-top: 0.3rem; }
+            .header p { color: var(--text-muted); font-size: 1rem; margin-top: 0.3rem; }
             .layer-badge {
                 display: inline-block;
-                background: linear-gradient(135deg, rgba(59,130,246,0.2), rgba(139,92,246,0.2));
-                border: 1px solid rgba(139,92,246,0.3);
-                color: #c4b5fd;
-                padding: 4px 12px;
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.1);
+                color: var(--text-muted);
+                padding: 6px 14px;
                 border-radius: 20px;
-                font-size: 0.7rem;
-                font-weight: 600;
-                margin-top: 0.5rem;
+                font-size: 0.75rem;
+                font-weight: 500;
+                margin-top: 1rem;
                 letter-spacing: 0.5px;
             }
 
-            /* API Status Grid */
+            /* Minimalist API Status Grid */
             .api-grid {
-                display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-                gap: 0.75rem; margin-bottom: 1.5rem; max-width: 900px; width: 100%;
+                display: flex; flex-wrap: wrap; justify-content: center;
+                gap: 1rem; margin-bottom: 2rem; max-width: 800px; width: 100%;
             }
             .api-card {
-                background: var(--card); border: 1px solid var(--border);
-                border-radius: 12px; padding: 0.75rem 1rem;
-                backdrop-filter: blur(10px);
-                transition: border-color 0.3s, transform 0.2s;
+                background: transparent;
+                border-radius: 8px; padding: 0.5rem 1rem;
+                display: flex; align-items: center; gap: 0.75rem;
             }
-            .api-card:hover { border-color: rgba(59,130,246,0.3); transform: translateY(-1px); }
-            .api-card .label { font-size: 0.7rem; color: var(--text-dim); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
-            .api-card .value { font-size: 1.3rem; font-weight: 700; color: var(--text); margin-top: 2px; }
-            .api-card .status { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 0.7rem; }
-            .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-            .dot-ok { background: var(--success); box-shadow: 0 0 6px rgba(16,185,129,0.5); }
-            .dot-warn { background: var(--warning); box-shadow: 0 0 6px rgba(245,158,11,0.5); }
-            .dot-err { background: var(--danger); box-shadow: 0 0 6px rgba(239,68,68,0.5); }
+            .api-card .label { font-size: 0.75rem; color: var(--text-dim); font-weight: 500; }
+            .api-card .status { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; }
+            .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+            .dot-ok { background: var(--success); }
+            .dot-warn { background: var(--warning); }
+            .dot-err { background: var(--danger); }
 
             .stats-bar {
-                display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center;
-                margin-bottom: 1.5rem;
+                display: flex; gap: 2rem; flex-wrap: wrap; justify-content: center;
+                margin-bottom: 3rem; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+                padding: 1rem 0; width: 100%; max-width: 800px;
             }
             .stat {
-                background: var(--card);
-                border: 1px solid var(--border);
-                border-radius: 10px;
-                padding: 0.6rem 1.2rem;
-                font-size: 0.75rem;
+                font-size: 0.85rem;
                 color: var(--text-muted);
-                backdrop-filter: blur(10px);
+                text-align: center;
             }
-            .stat strong { color: var(--text); font-weight: 600; }
-            .container { max-width: 900px; width: 100%; display: flex; flex-direction: column; gap: 1.5rem; }
+            .stat strong { color: var(--text); font-weight: 600; font-size: 1.1rem; display: block; margin-bottom: 0.2rem; }
+            
+            .container { max-width: 800px; width: 100%; display: flex; flex-direction: column; gap: 2.5rem; }
+            
+            /* Clean Cards */
             .card {
                 background: var(--card);
-                backdrop-filter: blur(16px);
-                border-radius: 16px;
-                padding: 1.5rem 2rem;
-                border: 1px solid var(--border);
-                box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-                transition: border-color 0.3s;
-            }
-            .card:hover { border-color: rgba(59,130,246,0.2); }
-            .card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; }
-            .card h2 .icon { font-size: 1.2rem; }
-            input[type="text"] {
-                flex: 1; padding: 0.75rem 1rem; border-radius: 10px;
-                border: 1px solid var(--border);
-                background: rgba(0,0,0,0.3); color: white;
-                font-size: 0.9rem; font-family: inherit;
-                transition: border-color 0.2s, box-shadow 0.2s;
-            }
-            input[type="text"]:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
-            input[type="file"] {
-                flex: 1; padding: 0.5rem; color: var(--text-muted);
-                font-size: 0.85rem; font-family: inherit;
-            }
-            .btn {
-                background: linear-gradient(135deg, #3b82f6, #2563eb);
-                color: white; border: none;
-                padding: 0.7rem 1.5rem; border-radius: 10px;
-                cursor: pointer; font-weight: 600; font-size: 0.85rem;
-                font-family: inherit;
-                transition: all 0.2s; white-space: nowrap;
-                box-shadow: 0 2px 8px rgba(59,130,246,0.3);
-            }
-            .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(59,130,246,0.4); }
-            .btn:active { transform: translateY(0); }
-            .btn-secondary {
-                background: linear-gradient(135deg, #6366f1, #4f46e5);
-                box-shadow: 0 2px 8px rgba(99,102,241,0.3);
-            }
-            .btn-sm { padding: 0.4rem 0.8rem; font-size: 0.75rem; }
-            .flex-row { display: flex; gap: 0.75rem; align-items: center; width: 100%; }
-            .formats-badge {
-                display: inline-block;
-                background: rgba(139,92,246,0.15); color: #a78bfa;
-                padding: 2px 8px; border-radius: 6px;
-                font-size: 0.65rem; font-weight: 500; margin: 2px;
-            }
-            .formats-list { margin-top: 0.5rem; line-height: 1.8; }
-
-            /* Answer Box with Markdown Rendering */
-            .answer-box {
-                background: rgba(0,0,0,0.35);
-                padding: 1.5rem;
                 border-radius: 12px;
+                padding: 2rem;
+                border: 1px solid var(--border);
+            }
+            .card h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 1.5rem; color: var(--text); }
+            
+            /* Floating Input Box for Cloud AI Feel */
+            .floating-input {
+                position: fixed;
+                bottom: 2rem;
+                left: 50%;
+                transform: translateX(-50%);
+                width: 100%;
+                max-width: 800px;
+                background: var(--card);
+                border: 1px solid var(--border);
+                border-radius: 24px;
+                padding: 0.5rem 1rem;
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+                box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+                z-index: 1000;
+            }
+            
+            input[type="text"] {
+                flex: 1; padding: 0.75rem; border: none;
+                background: transparent; color: white;
+                font-size: 1rem; font-family: inherit;
+            }
+            input[type="text"]:focus { outline: none; }
+            
+            input[type="file"] {
+                flex: 1; padding: 0.75rem 1rem; color: var(--text);
+                font-size: 0.9rem; font-family: inherit;
+                background: rgba(255,255,255,0.05);
+                border-radius: 8px; border: 1px solid var(--border);
+            }
+            
+            .btn {
+                background: var(--text);
+                color: var(--bg); border: none;
+                padding: 0.75rem 1.5rem; border-radius: 18px;
+                cursor: pointer; font-weight: 500; font-size: 0.9rem;
+                font-family: inherit;
+                transition: opacity 0.2s; white-space: nowrap;
+            }
+            .btn:hover { opacity: 0.9; }
+            .btn:active { transform: scale(0.98); }
+            .btn-secondary { background: rgba(255,255,255,0.1); color: var(--text); }
+            .btn-icon { padding: 0.6rem; border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; }
+            
+            .flex-row { display: flex; gap: 1rem; align-items: center; width: 100%; }
+            
+            /* Cloud AI Answer Box */
+            .answer-box {
+                background: transparent;
+                padding: 0;
                 min-height: 80px;
-                font-size: 0.9rem;
+                font-size: 1.05rem;
                 line-height: 1.7;
-                margin-top: 1rem;
-                border: 1px solid var(--border);
-                overflow-x: auto;
+                border: none;
+                color: var(--text);
             }
-            .answer-box h1,.answer-box h2,.answer-box h3,.answer-box h4 { color: #93c5fd; margin: 1rem 0 0.5rem; font-size: 1rem; }
-            .answer-box p { margin: 0.4rem 0; }
-            .answer-box ul, .answer-box ol { padding-left: 1.5rem; margin: 0.5rem 0; }
-            .answer-box li { margin: 0.3rem 0; }
-            .answer-box strong { color: #93c5fd; }
-            .answer-box code { background: rgba(59,130,246,0.15); padding: 2px 6px; border-radius: 4px; font-size: 0.85em; color: #7dd3fc; }
-            .answer-box pre { background: rgba(0,0,0,0.4); padding: 1rem; border-radius: 8px; overflow-x: auto; margin: 0.5rem 0; }
-            .answer-box pre code { background: none; padding: 0; }
-            .answer-box blockquote { border-left: 3px solid var(--primary); padding-left: 1rem; color: var(--text-muted); margin: 0.5rem 0; }
-
+            .answer-box h1,.answer-box h2,.answer-box h3,.answer-box h4 { color: var(--text); margin: 1.5rem 0 0.75rem; font-weight: 600; }
+            .answer-box p { margin: 0.75rem 0; }
+            .answer-box ul, .answer-box ol { padding-left: 1.5rem; margin: 0.75rem 0; }
+            .answer-box li { margin: 0.4rem 0; }
+            .answer-box strong { font-weight: 600; color: #fff; }
+            .answer-box code { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 0.85em; }
+            .answer-box pre { background: #000; padding: 1.25rem; border-radius: 8px; overflow-x: auto; margin: 1rem 0; border: 1px solid var(--border); }
+            
             /* Beautiful Tables */
-            .answer-box table {
-                width: 100%; border-collapse: collapse; margin: 1rem 0;
-                font-size: 0.85rem; border-radius: 8px; overflow: hidden;
-            }
-            .answer-box table th {
-                background: rgba(59,130,246,0.2);
-                color: #93c5fd; font-weight: 600;
-                padding: 0.6rem 0.8rem; text-align: left;
-                border-bottom: 2px solid rgba(59,130,246,0.3);
-            }
-            .answer-box table td {
-                padding: 0.5rem 0.8rem;
-                border-bottom: 1px solid var(--border);
-            }
-            .answer-box table tr:hover td { background: rgba(59,130,246,0.05); }
-
-            /* Source Cards */
-            .sources-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 0.75rem; margin-top: 1rem; }
+            .answer-box table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-size: 0.9rem; border-radius: 8px; overflow: hidden; }
+            .answer-box table th { background: rgba(255,255,255,0.05); color: var(--text); font-weight: 500; padding: 0.75rem 1rem; text-align: left; }
+            .answer-box table td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); }
+            
+            /* Source Chips */
+            .sources-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.5rem; }
             .source-card {
-                background: rgba(0,0,0,0.25);
+                background: rgba(255,255,255,0.05);
                 border: 1px solid var(--border);
-                border-radius: 10px;
-                padding: 0.75rem 1rem;
-                transition: border-color 0.2s;
+                border-radius: 16px;
+                padding: 0.4rem 0.8rem;
+                display: flex; align-items: center; gap: 0.5rem;
+                font-size: 0.75rem;
             }
-            .source-card:hover { border-color: rgba(59,130,246,0.3); }
-            .source-card .name { font-weight: 600; font-size: 0.8rem; color: #93c5fd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-            .source-card .meta { font-size: 0.7rem; color: var(--text-dim); margin-top: 0.25rem; }
-            .badge {
-                display: inline-block; padding: 2px 8px; border-radius: 20px;
-                font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
-            }
-            .badge-text { background: rgba(16,185,129,0.15); color: #10b981; }
-            .badge-table { background: rgba(245,158,11,0.15); color: #f59e0b; }
-            .badge-image { background: rgba(139,92,246,0.15); color: #8b5cf6; }
-            .badge-subtitle { background: rgba(6,182,212,0.15); color: #06b6d4; }
-
-            /* Grounding indicator */
+            .source-card .name { font-weight: 500; color: var(--text-muted); }
+            
             .grounding-bar {
-                display: flex; align-items: center; gap: 0.75rem; margin-top: 0.75rem;
-                padding: 0.5rem 1rem; background: rgba(0,0,0,0.2); border-radius: 8px;
-                font-size: 0.75rem; color: var(--text-dim);
+                display: inline-flex; align-items: center; gap: 0.5rem; margin-top: 1.5rem;
+                padding: 0.4rem 0.8rem; background: rgba(255,255,255,0.05); border-radius: 16px;
+                font-size: 0.75rem; color: var(--text-muted); border: 1px solid var(--border);
             }
-            .confidence-high { color: var(--success); font-weight: 600; }
-            .confidence-medium { color: var(--warning); font-weight: 600; }
-            .confidence-low { color: var(--danger); font-weight: 600; }
-
-            /* Chart Container */
-            .chart-container { background: rgba(0,0,0,0.25); border-radius: 12px; padding: 1rem; margin-top: 1rem; border: 1px solid var(--border); }
-            .chart-container canvas { max-height: 250px; }
-
-            /* Latency Bar */
+            
             .latency-bar {
-                display: flex; align-items: center; gap: 0.75rem; margin-top: 0.5rem;
-                padding: 0.5rem 1rem; background: rgba(0,0,0,0.2); border-radius: 8px;
-                font-size: 0.75rem; color: var(--text-dim);
+                display: inline-flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; margin-left: 0.5rem;
+                padding: 0.4rem 0.8rem; background: rgba(255,255,255,0.05); border-radius: 16px;
+                font-size: 0.75rem; color: var(--text-muted); border: 1px solid var(--border);
             }
-            .latency-dot { width: 8px; height: 8px; border-radius: 50%; }
-            .latency-fast { background: #10b981; }
-            .latency-medium { background: #f59e0b; }
-            .latency-slow { background: #ef4444; }
-
-            .spinner { display: none; width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.2); border-radius: 50%; border-top-color: var(--primary); animation: spin 0.8s linear infinite; margin-left: 0.5rem; flex-shrink: 0; }
+            
+            .spinner { display: none; width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.2); border-radius: 50%; border-top-color: var(--text); animation: spin 0.8s linear infinite; margin-left: 0.5rem; flex-shrink: 0; }
             @keyframes spin { to { transform: rotate(360deg); } }
-            .status-msg { color: var(--text-muted); font-size: 0.8rem; margin-top: 0.5rem; }
-            .placeholder { color: var(--text-dim); font-style: italic; }
+            .status-msg { color: var(--text-muted); font-size: 0.85rem; margin-top: 0.75rem; }
+            .placeholder { color: var(--text-dim); font-size: 1.5rem; font-weight: 500; text-align: center; display: block; margin: 3rem 0; }
         </style>
     </head>
     <body>
         <div class="header">
-            <h1>Enterprise Level RAG Production Hub</h1>
-            <p>Enterprise-Grade Knowledge Intelligence Engine</p>
-            <div class="layer-badge">17-LAYER ARCHITECTURE &bull; ZERO HALLUCINATION &bull; 100% OFFLINE</div>
+            <h1>World's Most Powerful RAG</h1>
+            <p>Enterprise Intelligence Engine</p>
+            <div class="layer-badge">17-LAYER ARCHITECTURE • ZERO HALLUCINATION</div>
         </div>
 
         <!-- API Status Dashboard -->
         <div class="api-grid" id="apiGrid">
             <div class="api-card">
-                <div class="label">Database</div>
-                <div class="value" id="dbStatus">--</div>
-                <div class="status"><span class="dot" id="dbDot"></span> <span id="dbDetail">Checking...</span></div>
+                <div class="status"><span class="dot" id="dbDot"></span></div>
+                <div class="label">VectorDB: <span id="dbDetail">Checking...</span></div>
             </div>
             <div class="api-card">
-                <div class="label">Redis Cache</div>
-                <div class="value" id="redisStatus">--</div>
-                <div class="status"><span class="dot" id="redisDot"></span> <span id="redisDetail">Checking...</span></div>
+                <div class="status"><span class="dot" id="redisDot"></span></div>
+                <div class="label">Cache: <span id="redisDetail">Checking...</span></div>
             </div>
             <div class="api-card">
-                <div class="label">LLM (Ollama)</div>
-                <div class="value" id="ollamaStatus">--</div>
-                <div class="status"><span class="dot" id="ollamaDot"></span> <span id="ollamaDetail">Checking...</span></div>
+                <div class="status"><span class="dot" id="ollamaDot"></span></div>
+                <div class="label">LLM: <span id="ollamaDetail">Checking...</span></div>
             </div>
             <div class="api-card">
-                <div class="label">AI Models</div>
-                <div class="value" id="modelsStatus">--</div>
-                <div class="status"><span class="dot" id="modelsDot"></span> <span id="modelsDetail">Checking...</span></div>
+                <div class="status"><span class="dot" id="modelsDot"></span></div>
+                <div class="label">Models: <span id="modelsDetail">Checking...</span></div>
             </div>
         </div>
 
         <div class="stats-bar" id="statsBar">
-            <div class="stat"><strong id="statChunks">--</strong> Chunks Indexed</div>
             <div class="stat"><strong id="statDocs">--</strong> Documents</div>
-            <div class="stat"><strong id="statTypes">--</strong> File Types</div>
+            <div class="stat"><strong id="statChunks">--</strong> Vectors</div>
             <div class="stat"><strong id="statJobs">--</strong> Active Jobs</div>
         </div>
 
         <div class="container">
-            <div class="card">
-                <h2><span class="icon">&#128196;</span> Upload Knowledge Base
-                    <small style="font-weight:400; color:var(--text-dim); margin-left:auto; font-size:0.7rem;">No file size limit</small>
-                </h2>
-                <div class="flex-row">
-                    <input type="file" id="uploadFile" accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,.pptx,.ppt,.txt,.text,.md,.log,.json,.xml,.png,.jpg,.jpeg,.bmp,.tiff,.tif,.gif,.webp,.mp4,.avi,.mkv,.mov,.srt,.ass,.ssa,.vtt">
-                    <button class="btn" onclick="uploadFile()">Upload & Ingest</button>
-                    <div id="uploadSpinner" class="spinner"></div>
-                </div>
-                <p id="uploadStatus" class="status-msg"></p>
-                <div class="formats-list">
-                    <span class="formats-badge">PDF</span>
-                    <span class="formats-badge">DOCX</span>
-                    <span class="formats-badge">XLSX</span>
-                    <span class="formats-badge">PPTX</span>
-                    <span class="formats-badge">CSV</span>
-                    <span class="formats-badge">TXT</span>
-                    <span class="formats-badge">MD</span>
-                    <span class="formats-badge">PNG</span>
-                    <span class="formats-badge">JPG</span>
-                    <span class="formats-badge">BMP</span>
-                    <span class="formats-badge">TIFF</span>
-                    <span class="formats-badge">MP4</span>
-                    <span class="formats-badge">AVI</span>
-                    <span class="formats-badge">MKV</span>
-                    <span class="formats-badge">SRT</span>
-                    <span class="formats-badge">VTT</span>
-                </div>
+            <!-- Answer Area (Main Focus) -->
+            <div class="answer-box" id="answerBox">
+                <span class="placeholder">How can I help you today?</span>
             </div>
 
-            <div class="card">
-                <h2><span class="icon">&#128269;</span> Ask Your Knowledge Base
-                    <small style="font-weight:400; color:var(--text-dim); margin-left:auto; font-size:0.7rem;">Strict document grounding — zero hallucination</small>
-                </h2>
-                <div class="flex-row">
-                    <input type="text" id="queryInput" placeholder="Ask anything from your uploaded documents..." onkeypress="if(event.key === 'Enter') askQuery()">
-                    <button class="btn" onclick="askQuery()">Ask</button>
-                    <div id="askSpinner" class="spinner"></div>
-                </div>
+            <div id="chartArea"></div>
 
-                <div class="answer-box" id="answerBox"><span class="placeholder">Your answer will appear here — sourced only from your uploaded documents...</span></div>
+            <div id="sourcesArea"></div>
 
+            <div>
                 <div id="groundingBar" style="display:none" class="grounding-bar">
                     <span id="groundingIcon">🛡️</span>
                     <span id="groundingText"></span>
                 </div>
-
-                <div id="chartArea"></div>
-
-                <div id="sourcesArea"></div>
-
                 <div id="latencyBar" style="display:none" class="latency-bar">
                     <span class="latency-dot" id="latencyDot"></span>
                     <span id="latencyText"></span>
                 </div>
             </div>
-
-            <div class="card" style="margin-top: -0.5rem; padding: 1rem 2rem;">
-                <h2 style="margin-bottom: 0.5rem; cursor: pointer; user-select: none;" onclick="document.getElementById('rawApiBox').style.display = document.getElementById('rawApiBox').style.display === 'none' ? 'block' : 'none'">
-                    <span class="icon">&#123;&#125;</span> View Raw API Response <small style="font-weight:400; color:var(--text-dim); margin-left:auto;">(Click to toggle)</small>
-                </h2>
-                <pre id="rawApiBox" style="display:none; font-size: 0.7rem; color: var(--text-muted); background: rgba(0,0,0,0.4); padding: 1rem; border-radius: 8px; margin-top: 0.5rem; max-height: 300px; overflow: auto; border: 1px solid var(--border);"></pre>
-            </div>
-
-            <!-- API Reference Card -->
-            <div class="card" style="margin-top: -0.5rem; padding: 1rem 2rem;">
-                <h2 style="cursor: pointer; user-select: none;" onclick="document.getElementById('apiRef').style.display = document.getElementById('apiRef').style.display === 'none' ? 'block' : 'none'">
-                    <span class="icon">&#128218;</span> Microservice API Reference <small style="font-weight:400; color:var(--text-dim); margin-left:auto;">(Click to toggle)</small>
-                </h2>
-                <div id="apiRef" style="display:none; margin-top: 0.75rem; font-size: 0.8rem; color: var(--text-muted); line-height: 2;">
-                    <code style="color:#7dd3fc;">POST /api/v1/upload</code> — Upload any file (no size limit)<br>
-                    <code style="color:#7dd3fc;">POST /api/v1/ingest</code> — Scan /media and ingest all files<br>
-                    <code style="color:#7dd3fc;">POST /api/v1/query</code> — Query knowledge base (strict grounding)<br>
-                    <code style="color:#7dd3fc;">GET &nbsp;/api/v1/ingest/jobs</code> — List ingestion jobs<br>
-                    <code style="color:#7dd3fc;">GET &nbsp;/api/v1/ingest/jobs/{id}</code> — Job status + progress<br>
-                    <code style="color:#7dd3fc;">GET &nbsp;/api/v1/formats</code> — List supported file formats<br>
-                    <code style="color:#7dd3fc;">GET &nbsp;/health/live</code> — Liveness probe<br>
-                    <code style="color:#7dd3fc;">GET &nbsp;/health/ready</code> — Readiness probe + stats<br>
-                </div>
+            
+            <div style="margin-top: 1rem; text-align: center;">
+                <button class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem 1rem;" onclick="document.getElementById('rawApiBox').style.display = document.getElementById('rawApiBox').style.display === 'none' ? 'block' : 'none'">Toggle Debug View</button>
+                <pre id="rawApiBox" style="display:none; text-align: left; font-size: 0.7rem; color: var(--text-muted); background: rgba(0,0,0,0.4); padding: 1rem; border-radius: 8px; margin-top: 1rem; max-height: 300px; overflow: auto; border: 1px solid var(--border);"></pre>
             </div>
         </div>
+
+        <!-- Floating Input Area -->
+        <div class="floating-input">
+            <input type="file" id="uploadFile" accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,.pptx,.ppt,.txt,.text,.md,.log,.json,.xml,.png,.jpg,.jpeg,.bmp,.tiff,.tif,.gif,.webp,.mp4,.avi,.mkv,.mov,.srt,.ass,.ssa,.vtt" style="max-width: 150px; border: none; padding: 0.5rem;">
+            <button class="btn btn-icon" onclick="uploadFile()" title="Upload File" style="background: rgba(255,255,255,0.1); padding: 0.4rem;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+            </button>
+            <div id="uploadSpinner" class="spinner" style="margin:0;"></div>
+            
+            <input type="text" id="queryInput" placeholder="Message RAG Engine..." onkeypress="if(event.key === 'Enter') askQuery()">
+            
+            <button class="btn btn-icon" onclick="askQuery()" style="background: var(--text); color: var(--bg);">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+            </button>
+            <div id="askSpinner" class="spinner" style="margin:0;"></div>
+        </div>
+        
+        <div id="uploadStatus" class="status-msg" style="position: fixed; bottom: 5rem; text-align: center; width: 100%;"></div>
 
         <script>
             // Configure marked for safe markdown rendering
@@ -1232,7 +1164,7 @@ def root_ui():
             }
 
             function renderAnswer(text) {
-                let processed = text.replace(/\\\\n/g, '\\n');
+                let processed = text.replace(/\\n/g, '\n');
                 return marked.parse(processed);
             }
 
@@ -1244,7 +1176,7 @@ def root_ui():
                     return meta.type === 'table' || (c.text && c.text.includes('|') && c.text.split('|').length > 4);
                 });
                 if (tableChunks.length === 0) return;
-                const lines = tableChunks[0].text.split('\\n').filter(l => l.trim() && !l.match(/^[\\-|\\s]+$/));
+                const lines = tableChunks[0].text.split('\n').filter(l => l.trim() && !l.match(/^[\-|\s]+$/));
                 if (lines.length < 2) return;
                 const headers = lines[0].split('|').map(h => h.trim()).filter(Boolean);
                 const rows = lines.slice(1).map(l => l.split('|').map(c => c.trim()).filter(Boolean));
@@ -1342,7 +1274,7 @@ def root_ui():
                         if (done) break;
 
                         const chunk = decoder.decode(value, { stream: true });
-                        const lines = chunk.split("\\n");
+                        const lines = chunk.split("\n");
 
                         for (const line of lines) {
                             if (line.startsWith("data: ")) {
@@ -1383,7 +1315,7 @@ def root_ui():
 # =========================================================================
 # Query Pipeline — 12 Layers
 # =========================================================================
-@app.post("/api/v1/query", response_model=QueryResponse)
+@app.post("/api/v1/query")
 def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     """
     17-Layer RAG Query Pipeline (Strict Document Grounding):
@@ -1469,9 +1401,6 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         cached["ingest"] = ingest_summary
         return cached
 
-    # Layer 13: Query Intelligence (Spelling, Expansion, Decomposition)
-    query_intel = intelligent_query_pipeline(search_query)
-
     # --- FAST PATH (sub-5ms): single dense HNSW search, skip all LLM calls ---
     if request.fast_path:
         retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
@@ -1484,6 +1413,10 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         state_machine_used = False
     else:
         state_machine_used = True
+        
+        # Layer 13: Query Intelligence (Spelling, Expansion, Decomposition)
+        query_intel = intelligent_query_pipeline(search_query)
+        
         # --- FULL AGENTIC STATE MACHINE (multi-query, HyDE, BM25, reranker, CRAG) ---
         class AgentState:
             def __init__(self):
@@ -1634,6 +1567,13 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
         RAG_QUERY_TOTAL.labels(tenant=tenant_id, status=status).inc()
         RAG_QUERY_LATENCY.labels(tenant=tenant_id, fast_path=str(request.fast_path)).observe(latency)
+        
+        if request.stream:
+            def stream_extractive():
+                yield f"data: {json.dumps({'token': answer})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification})}\n\n"
+            return StreamingResponse(stream_extractive(), media_type="text/event-stream")
+            
         return response_data
 
     # ------------------------------------------------------------
@@ -1713,13 +1653,16 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             verification = verify_answer_grounding(answer_acc, final_context)
             yield f"data: {json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification})}\n\n"
             
-            set_cached_response(
-                request.query, tenant_id, effective_top_k,
-                embedding_model, corpus_version,
-                {"answer": answer_acc, "context": final_context, "sources": sources,
-                 "grounding": grounding_result, "verification": verification},
-                scope=cache_scope,
-            )
+            try:
+                set_cached_response(
+                    request.query, tenant_id, effective_top_k,
+                    embedding_model, corpus_version,
+                    {"answer": answer_acc, "context": final_context, "sources": sources,
+                     "grounding": grounding_result, "verification": verification},
+                    scope=cache_scope,
+                )
+            except Exception as cache_err:
+                print(f"[Cache] Error saving streamed response: {cache_err}")
         
         return StreamingResponse(stream_llm(), media_type="text/event-stream")
 

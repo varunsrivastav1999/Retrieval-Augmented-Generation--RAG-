@@ -59,3 +59,12 @@ RAG_USE_HALFVEC=false
 # Context Expansion
 # ------------------------------------------------------------------------------
 RAG_ENABLE_CONTEXT_EXPANSION=false
+
+# Neo4j Graph (optional — app runs fine without it)
+# ------------------------------------------------------------------------------
+NEO4J_URI=bolt://neo4j:7687
+
+# Ingestion Worker
+# ------------------------------------------------------------------------------
+RAG_INGESTION_STALE_TIMEOUT_SECONDS=1800
+RAG_SOURCE_LIMIT=50

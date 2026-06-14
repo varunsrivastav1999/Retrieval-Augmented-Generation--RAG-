@@ -226,7 +226,12 @@ def get_embedding_model() -> Any:
 
 
 def get_embedding_model_id() -> str:
-    # Always return the standard name to ensure ingestion and retrieval match
+    """Return the model ID matching the currently active embedding model.
+    If using HashingEmbedder fallback, return the fallback ID so vectors
+    are correctly labeled and never mixed with real embeddings."""
+    model = get_embedding_model()
+    if isinstance(model, HashingEmbedder):
+        return _fallback_embedding_id()
     return EMBEDDING_MODEL
 
 
@@ -276,7 +281,10 @@ def get_reranker_model() -> Any:
 
 
 def get_reranker_model_id() -> str:
-    # Always return the standard name to ensure ingestion and retrieval match
+    """Return the model ID matching the currently active reranker model."""
+    model = get_reranker_model()
+    if isinstance(model, LexicalReranker):
+        return _fallback_reranker_id()
     return RERANKER_MODEL
 
 
