@@ -116,6 +116,26 @@
             to { opacity: 1; transform: translateY(0); }
         }
 
+        /* Modern Spinner */
+        .spinner {
+            animation: rotate 2s linear infinite;
+            width: 20px;
+            height: 20px;
+        }
+        .spinner .path {
+            stroke: currentColor;
+            stroke-linecap: round;
+            animation: dash 1.5s ease-in-out infinite;
+        }
+        @keyframes rotate {
+            100% { transform: rotate(360deg); }
+        }
+        @keyframes dash {
+            0% { stroke-dasharray: 1, 150; stroke-dashoffset: 0; }
+            50% { stroke-dasharray: 90, 150; stroke-dashoffset: -35; }
+            100% { stroke-dasharray: 90, 150; stroke-dashoffset: -124; }
+        }
+
         /* Chat Area */
         .chat-area {
             width: 100%;
@@ -263,6 +283,16 @@
             color: var(--placeholder-color);
             border: 1px solid var(--input-border);
         }
+        
+        .typing-loader {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.95rem;
+            color: var(--placeholder-color);
+            padding: 10px 0;
+            animation: fadeIn 0.3s ease;
+        }
 
         .info-panel {
             position: absolute;
@@ -311,7 +341,7 @@
             animation: pulse 1s infinite;
         }
         .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.44s; }
         
         @keyframes pulse {
             0%, 100% { transform: scale(0.8); opacity: 0.5; }
@@ -468,31 +498,32 @@
 
             // Create AI response container
             const aiId = 'ai_' + Date.now();
-            const aiHtml = `
-                <div class="message-row ai">
-                    <div class="message-bubble">
-                        <div class="typing-indicator" id="loader_${aiId}" style="display:block;">
-                            <span></span><span></span><span></span>
-                        </div>
-                        <div class="markdown-body" id="text_${aiId}"></div>
-                    </div>
-                    
-                    <div class="info-container" id="info_${aiId}" style="display:none;">
-                        <div class="info-icon">ℹ️</div>
-                        <div class="info-panel" id="panel_${aiId}">
-                            <h4>RAG Pipeline Details</h4>
-                            <p id="latency_${aiId}">Latency: --</p>
-                            <p id="grounding_${aiId}">Grounding: --</p>
-                            <p id="sources_${aiId}">Sources: --</p>
-                        </div>
+            const aiRow = document.createElement('div');
+            aiRow.className = 'message-row ai';
+            aiRow.innerHTML = `
+                <div class="message-bubble">
+                    <div class="markdown-body" id="text_${aiId}"></div>
+                </div>
+                
+                <div class="info-container" id="info_${aiId}" style="display:none;">
+                    <div class="info-icon">ℹ️</div>
+                    <div class="info-panel" id="panel_${aiId}">
+                        <h4>RAG Pipeline Details</h4>
+                        <p id="latency_${aiId}">Latency: --</p>
+                        <p id="grounding_${aiId}">Grounding: --</p>
+                        <p id="sources_${aiId}">Sources: --</p>
                     </div>
                 </div>
             `;
-            chatArea.insertAdjacentHTML('beforeend', aiHtml);
+            chatArea.appendChild(aiRow);
             chatArea.scrollTop = chatArea.scrollHeight;
 
+            const loader = document.createElement('div');
+            loader.className = 'typing-loader';
+            loader.innerHTML = `<svg class="spinner" viewBox="0 0 50 50"><circle class="path" cx="25" cy="25" r="20" fill="none" stroke-width="5"></circle></svg> Thinking...`;
+            aiRow.querySelector('.message-bubble').prepend(loader);
+            
             const answerBox = document.getElementById(`text_${aiId}`);
-            const loader = document.getElementById(`loader_${aiId}`);
             
             try {
                 const response = await fetch('/api/v1/query', {
@@ -503,7 +534,7 @@
 
                 if (!response.ok) throw new Error("Request failed");
 
-                loader.style.display = 'none';
+                loader.remove();
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
@@ -545,7 +576,7 @@
                     }
                 }
             } catch (e) {
-                loader.style.display = 'none';
+                loader.remove();
                 answerBox.innerHTML = `<span style="color:#ef4444">Error: ${e.message}</span>`;
             }
         }
@@ -556,7 +587,7 @@
 
             const plusBtn = document.querySelector('.plus-icon');
             const originalPlus = plusBtn.innerHTML;
-            plusBtn.innerHTML = '⏳';
+            plusBtn.innerHTML = `<svg class="spinner" viewBox="0 0 50 50"><circle class="path" cx="25" cy="25" r="20" fill="none" stroke-width="5"></circle></svg>`;
             plusBtn.style.pointerEvents = 'none';
 
             let allSuccess = true;
