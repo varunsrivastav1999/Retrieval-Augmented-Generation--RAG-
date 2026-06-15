@@ -156,6 +156,43 @@ def create_parent_child_chunks(text: str) -> List[Dict]:
     return result
 
 
+def chunk_table_preserve_header(table_md: str, chunk_size: int = PARENT_CHUNK_SIZE) -> List[str]:
+    """
+    Split large markdown tables while guaranteeing the table header and structure 
+    are preserved in every resulting chunk. Prevents schema loss for LLMs.
+    """
+    lines = table_md.split('\n')
+    # If it's too short or not a standard markdown table format, don't split
+    if len(lines) < 4:
+        return [table_md]
+
+    # Assume first 3 lines are Table Info, Column Headers, and Separator
+    header_info = lines[0]
+    table_header = lines[1]
+    separator = lines[2]
+
+    header_block = f"{header_info}\n{table_header}\n{separator}"
+    
+    chunks = []
+    current_chunk = []
+    current_len = len(header_block)
+    
+    for row in lines[3:]:
+        row_len = len(row) + 1  # +1 for newline
+        if current_len + row_len > chunk_size and current_chunk:
+            chunks.append(f"{header_block}\n" + "\n".join(current_chunk))
+            current_chunk = []
+            current_len = len(header_block)
+            
+        current_chunk.append(row)
+        current_len += row_len
+        
+    if current_chunk:
+        chunks.append(f"{header_block}\n" + "\n".join(current_chunk))
+        
+    return chunks
+
+
 # ---------------------------------------------------------------------------
 # Universal File Ingestion
 # ---------------------------------------------------------------------------
@@ -232,15 +269,34 @@ def ingest_file(
                 print(f"[Contextual Retrieval] Failed to generate context: {e}")
 
         for page_idx, page in enumerate(parse_result.pages):
-            # --- Layer 2: Combine all content from page ---
-            all_content = [page.text] + page.tables + page.image_texts
-            combined_text = "\n\n".join([t for t in all_content if t and t.strip()])
-
-            if not combined_text.strip():
-                continue
-
-            # --- Layer 3: Parent-Child Chunking ---
-            page_chunks = create_parent_child_chunks(combined_text)
+            page_chunks = []
+            
+            # 1. Chunk normal text recursively
+            if page.text and page.text.strip():
+                page_chunks.extend(create_parent_child_chunks(page.text))
+                
+            # 2. Chunk tables intelligently (preserve headers!)
+            for table_md in page.tables:
+                if table_md and table_md.strip():
+                    table_parts = chunk_table_preserve_header(table_md, chunk_size=PARENT_CHUNK_SIZE)
+                    for t_part in table_parts:
+                        # Tables act as their own standalone chunks
+                        page_chunks.append({
+                            "text": t_part,
+                            "is_parent": True,
+                            "parent_idx": None,
+                            "child_idx": None
+                        })
+                        
+            # 3. Add Image OCR text as standalone chunks
+            for img_txt in page.image_texts:
+                if img_txt and img_txt.strip():
+                    page_chunks.append({
+                        "text": img_txt,
+                        "is_parent": True,
+                        "parent_idx": None,
+                        "child_idx": None
+                    })
 
             doc_title = os.path.basename(file_path)
 
