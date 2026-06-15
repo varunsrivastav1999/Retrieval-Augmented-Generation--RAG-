@@ -91,6 +91,10 @@ ENV HF_HOME=/models/huggingface
 ENV SENTENCE_TRANSFORMERS_HOME=/models/huggingface/sentence-transformers
 ENV HF_HUB_CACHE=/models/huggingface/hub
 
+# Ensure NVIDIA runtime passes GPU libraries
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /bin/bash appuser
 

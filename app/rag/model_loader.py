@@ -148,9 +148,9 @@ def _model_kwargs() -> dict:
     print(f"  RAG HARDWARE STATUS: {device.upper()}")
     
     if device == "cpu" and is_docker:
-        print("  MODE: 🐢 CPU ONLY (Docker limitation on Mac)")
-        print("  NOTE: Docker on Mac cannot access your GPU (MPS).")
-        print("        To use your M5 GPU, run: 'python app/main.py' natively.")
+        print("  MODE: 🐢 CPU ONLY")
+        print("  NOTE: If on Mac, Docker cannot access your GPU (MPS). Run natively to use it.")
+        print("        If on Linux, ensure NVIDIA drivers are passed properly and match PyTorch CUDA version.")
     elif device in ["mps", "cuda"]:
         print(f"  MODE: 🚀 GPU ACCELERATED ({device.upper()})")
     else:
