@@ -6,65 +6,83 @@ from typing import List, Dict, Any
 from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
 
 # The system prompt provided by the user for electrical catalog extraction
-EXTRACTION_SYSTEM_PROMPT = """You are an expert technical data extractor specializing in electrical engineering, loadcentres, and industrial control specifications. Your task is to process raw, poorly formatted, flattened OCR text from product catalogs and convert it into a perfectly structured, flat JSON array of objects.
+EXTRACTION_SYSTEM_PROMPT = """You are an elite AI data architect and technical data extractor. Your task is to process raw, poorly formatted, flattened OCR text from various enterprise documents (electrical product catalogs, SCADA/robotics manuals, complex financial reports, and HR postings) and convert it into a perfectly structured JSON object for a RAG vector database.
 
-Follow these strict rules to resolve misaligned and clustered data:
+Follow these strict rules based on the document type you detect:
 
-1. RESOLVE CLUSTERS: If you see clustered model numbers and amperages (e.g., "SEQ24100SMD SEQ24100SMK" followed by "100 125"), you must logically separate them into individual JSON objects. Each catalog number must have its own distinct object.
-2. FIX DIMENSIONS: Reformat poorly parsed fractions into standard readable formats. Convert strings like "167/8" to "16 7/8", "131/32" to "13 1/32", and maintain the millimeter conversions in parentheses if present.
-3. RETAIN HIERARCHY AS METADATA: Identify the overarching category for the section (e.g., "EQL Loadcentres with main lugs only 1 phase 3 wire 240 V AC max") and apply this exact string as a "Category_Context" field to EVERY object extracted from that section.
-4. CAPTURE MODIFICATIONS: If rules like "Factory Modifications" (e.g., "White door and trim add suffix...W") appear, apply this context to a "Notes" or "Modifications" field for the relevant models.
-5. STRICT JSON: Output ONLY valid JSON. Do not include markdown formatting, conversational text, or explanations.
+1. IF CATALOG (Hardware/Specs):
+   - RESOLVE CLUSTERS: If you see clustered model numbers and amperages (e.g., "SEQ24100SMD SEQ24100SMK" followed by "100 125"), you must logically separate them into individual JSON objects. Each catalogue number must have its own distinct object.
+   - FIX DIMENSIONS: Reformat poorly parsed fractions (e.g., "167/8" to "16 7/8", "131/32" to "13 1/32").
+   - RETAIN HIERARCHY: Identify the overarching category for the section (e.g., "EQL Loadcentres 1 phase 3 wire") and apply this exact string as a "Category_Context" field to EVERY object extracted from that section.
 
-Use the following JSON schema for each item:
+2. IF SCADA/ROBOTICS MANUAL:
+   - Extract step-by-step procedures into ordered arrays. 
+   - If UI elements (like Red/Green status indicators, Faults, or specific dashboard screens) are mentioned, tag them in a `UI_Elements` array for easy fault-resolution retrieval.
+
+3. IF FINANCIAL/CORPORATE REPORT:
+   - Scan for multi-hop reasoning requirements, numerical discrepancies, and footnotes. 
+   - If a metric (like revenue or net profit) is reported differently across pages, extract both values and include the explanatory footnote in a `Discrepancy_Context` field.
+
+4. IF HR/JOB POSTING:
+   - Extract the role, company, salary/CTC, location, and exact experience requirements into simple key-value pairs.
+
+STRICT JSON OUTPUT:
+Return ONLY valid JSON. Do not include markdown formatting, conversational text, or explanations. Use the following schema:
+
 {
-  "Category_Context": "string",
-  "Number_of_Circuits": "string",
-  "Catalogue_Number": "string",
-  "Skid_Qty": "integer or null",
-  "Main_Amps": "integer or null",
-  "Dimensions_Inches": {
-    "Height": "string",
-    "Width": "string",
-    "Depth": "string"
-  },
-  "Dimensions_mm": {
-    "Height": "integer or null",
-    "Width": "integer or null",
-    "Depth": "integer or null"
-  },
-  "Lug_Data": "string",
-  "Mounting_Trim": "string",
-  "Door_Kit_Catalogue_Number": "string",
-  "Notes_and_Modifications": "string"
+  "Document_Type": "Catalog | SCADA_Manual | Financial_Report | HR_Document",
+  "Primary_Entities": ["List of main subjects, models, or companies"],
+  "Category_Context": "string (Overarching category or section name)",
+  "Extracted_Data": [
+    {
+      "Item_Name_or_Catalogue_Number": "string",
+      "Attributes": {
+        "Main_Amps": "integer or null",
+        "Dimensions_Inches": "string or null",
+        "Role_or_Procedure_Step": "string or null"
+      },
+      "UI_Elements": ["string"],
+      "Discrepancy_Context": "string or null",
+      "Notes_and_Modifications": "string or null"
+    }
+  ]
 }
 """
 
-def looks_like_catalog_page(text: str) -> bool:
+def looks_like_extractable_page(text: str) -> bool:
     """
-    Heuristic to determine if a page contains electrical catalog/table data.
-    Looks for high density of electrical specifications and catalog terminology.
+    Heuristic to determine if a page contains dense extractable data 
+    (catalogs, SCADA manuals, financial reports, HR postings).
     """
     text_lower = text.lower()
-    keywords = ["amps", "dimensions", "loadcentre", "catalogue", "catalog", "breaker", "suffix", "circuits", "skid"]
+    keywords = [
+        # Catalog
+        "amps", "dimensions", "loadcentre", "catalogue", "catalog", "breaker", "suffix", "circuits", "skid",
+        # SCADA / Manual
+        "fault", "indicator", "status", "dashboard", "procedure", "step", "warning",
+        # Finance
+        "revenue", "net profit", "fiscal", "quarter", "ebitda", "footnote", "discrepancy",
+        # HR
+        "salary", "ctc", "experience", "requirements", "responsibilities"
+    ]
     
-    # Check if at least 3 keywords are present
+    # Check if at least 4 keywords are present
     match_count = sum(1 for kw in keywords if kw in text_lower)
     
     # Also check for product codes (e.g., sequences of caps and numbers)
     code_matches = len(re.findall(r'\b[A-Z]{2,4}[0-9]{3,5}[A-Z]*\b', text))
     
-    return match_count >= 3 or code_matches >= 5
+    return match_count >= 4 or code_matches >= 5
 
-def extract_catalog_data_from_page(page_text: str) -> List[Dict[str, Any]]:
+def extract_structured_data_from_page(page_text: str) -> Dict[str, Any]:
     """
-    Sends the raw page text to the LLM to extract perfectly structured JSON arrays
-    representing the electrical components.
+    Sends the raw page text to the LLM to extract perfectly structured JSON
+    representing the enterprise document contents.
     """
     if not page_text or not page_text.strip():
-        return []
+        return {}
         
-    prompt = f"Raw OCR Text:\n{page_text}\n\nReturn the JSON array of objects now."
+    prompt = f"Raw OCR Text:\n{page_text}\n\nReturn the JSON object now."
     
     payload = {
         "model": OLLAMA_MODEL,
@@ -96,54 +114,69 @@ def extract_catalog_data_from_page(page_text: str) -> List[Dict[str, Any]]:
             
             try:
                 parsed_data = json.loads(result_text)
-                if isinstance(parsed_data, list):
+                if isinstance(parsed_data, dict):
                     return parsed_data
-                elif isinstance(parsed_data, dict):
-                    # Sometimes the model wraps it in an object like {"components": [...]}
-                    for key, val in parsed_data.items():
-                        if isinstance(val, list):
-                            return val
-                    return [parsed_data] # If it's just a single object
-                return []
+                return {}
             except json.JSONDecodeError as je:
                 print(f"[Extraction] JSON Decode Error: {je}. Raw output: {result_text[:200]}...")
-                return []
+                return {}
         else:
             print(f"[Extraction] Ollama API Error: {response.text}")
-            return []
+            return {}
     except Exception as e:
         print(f"[Extraction] Error calling LLM: {e}")
-        return []
+        return {}
 
-def format_json_object_for_embedding(obj: Dict[str, Any]) -> str:
+def format_structured_data_for_embedding(root_obj: Dict[str, Any]) -> List[str]:
     """
-    Converts a structured JSON object into a highly readable, key-value string format.
-    This format yields much higher semantic similarity scores during vector retrieval
-    compared to raw JSON brackets.
+    Converts the structured root JSON object into a list of highly readable, key-value string chunks.
+    Each item in 'Extracted_Data' becomes its own chunk, enriched with the root metadata.
     """
-    lines = []
+    if not root_obj or not isinstance(root_obj, dict):
+        return []
+        
+    doc_type = root_obj.get("Document_Type", "Unknown")
+    primary_entities = root_obj.get("Primary_Entities", [])
+    category_context = root_obj.get("Category_Context", "")
     
-    # Prioritize key identifiers
-    if obj.get("Category_Context"):
-        lines.append(f"Category Context: {obj.get('Category_Context')}")
-    if obj.get("Catalogue_Number"):
-        lines.append(f"Catalogue Number (Model): {obj.get('Catalogue_Number')}")
+    entities_str = ", ".join(primary_entities) if isinstance(primary_entities, list) else str(primary_entities)
+    
+    chunks = []
+    extracted_data = root_obj.get("Extracted_Data", [])
+    if not isinstance(extracted_data, list):
+        # Fallback if the LLM returned a single object instead of a list
+        extracted_data = [extracted_data]
         
-    for key, value in obj.items():
-        if key in ["Category_Context", "Catalogue_Number"]:
+    for item in extracted_data:
+        if not isinstance(item, dict):
             continue
             
-        if value is None or value == "":
-            continue
+        lines = []
+        lines.append(f"Document Type: {doc_type}")
+        if category_context:
+            lines.append(f"Category Context: {category_context}")
+        if entities_str:
+            lines.append(f"Primary Entities: {entities_str}")
             
-        formatted_key = key.replace("_", " ")
-        
-        if isinstance(value, dict):
-            # E.g., Dimensions_Inches -> Height: 10, Width: 5
-            sub_items = [f"{k}: {v}" for k, v in value.items() if v is not None and v != ""]
+        item_name = item.get("Item_Name_or_Catalogue_Number")
+        if item_name:
+            lines.append(f"Item / Catalogue Number: {item_name}")
+            
+        attributes = item.get("Attributes", {})
+        if isinstance(attributes, dict):
+            sub_items = [f"{k}: {v}" for k, v in attributes.items() if v is not None and v != ""]
             if sub_items:
-                lines.append(f"{formatted_key}: " + ", ".join(sub_items))
-        else:
-            lines.append(f"{formatted_key}: {value}")
+                lines.append(f"Attributes: " + ", ".join(sub_items))
+                
+        ui_elements = item.get("UI_Elements", [])
+        if ui_elements and isinstance(ui_elements, list):
+            lines.append(f"UI Elements: " + ", ".join(str(u) for u in ui_elements))
             
-    return "\n".join(lines)
+        for key in ["Discrepancy_Context", "Notes_and_Modifications"]:
+            val = item.get(key)
+            if val and val != "null":
+                lines.append(f"{key.replace('_', ' ')}: {val}")
+                
+        chunks.append("\n".join(lines))
+        
+    return chunks

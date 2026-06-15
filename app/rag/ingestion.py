@@ -31,7 +31,7 @@ from app.rag.jobs import complete_ingestion_job, fail_ingestion_job, update_inge
 from app.rag.model_loader import encode_text, encode_texts, get_embedding_model_id, extract_entities, encode_image, get_ollama_generate_url, OLLAMA_MODEL, RAG_EMBEDDING_QUANTIZE
 from app.rag.graph import graph_db
 from app.rag.parsers import ParseResult, get_file_type, is_supported_file, parse_file
-from app.rag.extraction import looks_like_catalog_page, extract_catalog_data_from_page, format_json_object_for_embedding
+from app.rag.extraction import looks_like_extractable_page, extract_structured_data_from_page, format_structured_data_for_embedding
 from PIL import Image
 import io
 
@@ -319,20 +319,20 @@ def ingest_file(
         for page_idx, page in enumerate(parse_result.pages):
             page_chunks = []
             
-            # --- LLM Pre-processing Node (Electrical Catalogs) ---
-            if looks_like_catalog_page(page.text):
+            # --- LLM Pre-processing Node (Enterprise Documents) ---
+            if looks_like_extractable_page(page.text):
                 print(f"[Ingest] LLM Pre-processing Node triggered for Page {page.page_num}...")
-                extracted_json_objects = extract_catalog_data_from_page(page.text)
-                if extracted_json_objects:
-                    for obj in extracted_json_objects:
-                        formatted_text = format_json_object_for_embedding(obj)
-                        if formatted_text:
+                extracted_root_obj = extract_structured_data_from_page(page.text)
+                if extracted_root_obj:
+                    formatted_chunks = format_structured_data_for_embedding(extracted_root_obj)
+                    for chunk_str in formatted_chunks:
+                        if chunk_str:
                             page_chunks.append({
-                                "text": formatted_text,
+                                "text": chunk_str,
                                 "is_parent": True,
                                 "parent_idx": None,
                                 "child_idx": None,
-                                "content_type": "llm_extracted_catalog"
+                                "content_type": "llm_extracted_data"
                             })
                             
             # 1. Chunk normal text — but STRIP duplicate table content first
