@@ -49,10 +49,19 @@ def compress_context(chunk: dict) -> dict:
     """
     Layer 5: Compress chunks > 300 tokens using extractive summarization.
     Ensures we pack the context window efficiently without exceeding limits.
+    
+    IMPORTANT: Table chunks are NEVER truncated — every column and row matters
+    for lookup queries (e.g., "SNC2448L1125 door kit number").
     """
-    max_chars = 1500 # Approx 300 tokens
-    if len(chunk.get("text", "")) > max_chars:
-        chunk["text"] = chunk["text"][:max_chars] + "..."
+    max_chars = 1500  # Approx 300 tokens
+    text = chunk.get("text", "")
+    
+    # Never truncate table data — structured data loses meaning when cut
+    if "[TABLE" in text or "| " in text:
+        return chunk
+    
+    if len(text) > max_chars:
+        chunk["text"] = text[:max_chars] + "..."
     return chunk
 
 def assemble_context(query: str, reranked_chunks: list, db=None) -> list:

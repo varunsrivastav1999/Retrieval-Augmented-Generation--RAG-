@@ -156,41 +156,88 @@ def create_parent_child_chunks(text: str) -> List[Dict]:
     return result
 
 
-def chunk_table_preserve_header(table_md: str, chunk_size: int = PARENT_CHUNK_SIZE) -> List[str]:
+def chunk_table_per_row(table_md: str) -> List[str]:
     """
-    Split large markdown tables while guaranteeing the table header and structure 
-    are preserved in every resulting chunk. Prevents schema loss for LLMs.
+    Chunk a markdown table into INDIVIDUAL ROW chunks.
+    Each chunk contains: [Table Title] + [Column Headers] + [Separator] + [1 Data Row]
+    
+    This is critical for lookup queries like "SNC2448L1125c door kit number".
+    When a table has 20+ rows, naive splitting might put the target row in a
+    different chunk from the headers, making the LLM unable to match columns.
+    Per-row chunking guarantees every data row is paired with its column names.
     """
-    lines = table_md.split('\n')
-    # If it's too short or not a standard markdown table format, don't split
+    lines = table_md.strip().split('\n')
+    # Need at least: title, header, separator, 1 data row
     if len(lines) < 4:
         return [table_md]
 
-    # Assume first 3 lines are Table Info, Column Headers, and Separator
-    header_info = lines[0]
-    table_header = lines[1]
-    separator = lines[2]
+    # Lines[0] = table title/info (e.g., "[TABLE 1 - Page 1]")
+    # Lines[1] = column headers
+    # Lines[2] = separator (---)
+    header_block = "\n".join(lines[:3])
+    data_rows = lines[3:]
 
-    header_block = f"{header_info}\n{table_header}\n{separator}"
+    if not data_rows:
+        return [table_md]
+
+    # If the table is small (≤5 data rows), keep it as one chunk
+    if len(data_rows) <= 5:
+        return [table_md]
+
+    # For large tables: create per-row chunks
+    row_chunks = []
+    for row in data_rows:
+        row = row.strip()
+        if not row:
+            continue
+        row_chunk = f"{header_block}\n{row}"
+        row_chunks.append(row_chunk)
+
+    return row_chunks
+
+
+def _strip_table_text_from_raw(raw_text: str, tables: List[str]) -> str:
+    """
+    Remove table content from PyMuPDF raw text when pdfplumber already
+    extracted the same data as structured markdown.
     
-    chunks = []
-    current_chunk = []
-    current_len = len(header_block)
+    PyMuPDF's get_text() garbles multi-column tables (columns get jumbled).
+    If pdfplumber extracted the table cleanly, the raw text version is noise
+    that dilutes search quality.
+    """
+    if not tables or not raw_text:
+        return raw_text
     
-    for row in lines[3:]:
-        row_len = len(row) + 1  # +1 for newline
-        if current_len + row_len > chunk_size and current_chunk:
-            chunks.append(f"{header_block}\n" + "\n".join(current_chunk))
-            current_chunk = []
-            current_len = len(header_block)
-            
-        current_chunk.append(row)
-        current_len += row_len
+    # Extract significant tokens from each table (model numbers, part numbers, etc.)
+    import re
+    table_tokens = set()
+    for table_md in tables:
+        # Extract tokens that look like product codes / model numbers
+        tokens = re.findall(r'[A-Z0-9]{4,}[A-Z0-9-]*', table_md)
+        table_tokens.update(t.lower() for t in tokens)
+    
+    if not table_tokens:
+        return raw_text
+    
+    # Remove raw text lines that are mostly composed of table tokens
+    cleaned_lines = []
+    for line in raw_text.split('\n'):
+        line_stripped = line.strip()
+        if not line_stripped:
+            cleaned_lines.append(line)
+            continue
         
-    if current_chunk:
-        chunks.append(f"{header_block}\n" + "\n".join(current_chunk))
+        line_tokens = re.findall(r'[A-Za-z0-9]{3,}[A-Za-z0-9-]*', line_stripped)
+        if line_tokens:
+            overlap = sum(1 for t in line_tokens if t.lower() in table_tokens)
+            overlap_ratio = overlap / len(line_tokens)
+            # If >60% of tokens in this line are from the table, it's a duplicate
+            if overlap_ratio > 0.6 and len(line_tokens) >= 3:
+                continue
         
-    return chunks
+        cleaned_lines.append(line)
+    
+    return '\n'.join(cleaned_lines)
 
 
 # ---------------------------------------------------------------------------
@@ -271,16 +318,21 @@ def ingest_file(
         for page_idx, page in enumerate(parse_result.pages):
             page_chunks = []
             
-            # 1. Chunk normal text recursively
-            if page.text and page.text.strip():
-                page_chunks.extend(create_parent_child_chunks(page.text))
+            # 1. Chunk normal text — but STRIP duplicate table content first
+            #    PyMuPDF's get_text() garbles multi-column tables. If pdfplumber
+            #    already extracted them cleanly, the raw text version is noise.
+            cleaned_text = page.text
+            if page.tables:
+                cleaned_text = _strip_table_text_from_raw(page.text, page.tables)
+            if cleaned_text and cleaned_text.strip():
+                page_chunks.extend(create_parent_child_chunks(cleaned_text))
                 
-            # 2. Chunk tables intelligently (preserve headers!)
+            # 2. Chunk tables into PER-ROW entries (each row gets column headers!)
+            #    This is the KEY fix for lookup queries like "SNC2448L1125c door kit"
             for table_md in page.tables:
                 if table_md and table_md.strip():
-                    table_parts = chunk_table_preserve_header(table_md, chunk_size=PARENT_CHUNK_SIZE)
+                    table_parts = chunk_table_per_row(table_md)
                     for t_part in table_parts:
-                        # Tables act as their own standalone chunks
                         page_chunks.append({
                             "text": t_part,
                             "is_parent": True,
