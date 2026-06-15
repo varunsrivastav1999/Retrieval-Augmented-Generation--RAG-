@@ -1132,7 +1132,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 yield f"data: {json.dumps({'token': err})}\n\n"
                 
             # Final safety check
-            answer_acc = strip_prefix(answer_acc.strip())
+            answer_acc = answer_acc.strip()
             
             # Verification and Caching after generation
             verification = verify_answer_grounding(answer_acc, final_context)
