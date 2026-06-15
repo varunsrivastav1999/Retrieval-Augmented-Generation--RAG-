@@ -1100,6 +1100,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 "options": {
                     "num_predict": OLLAMA_NUM_PREDICT,
                     "temperature": 0.0,
+                    "num_gpu": 99,       # Force 100% of layers to GPU compute
+                    "num_ctx": 4096,     # Explicitly set context window length
                 }
             }
             answer_acc = ""
@@ -1185,6 +1187,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         "options": {
             "num_predict": OLLAMA_NUM_PREDICT,
             "temperature": 0.0,
+            "num_gpu": 99,
+            "num_ctx": 4096,
         }
     }
     answer = ""
