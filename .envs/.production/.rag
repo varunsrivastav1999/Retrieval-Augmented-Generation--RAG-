@@ -26,7 +26,7 @@ OLLAMA_TIMEOUT_SECONDS=300
 OLLAMA_NUM_PREDICT=1024
 
 # GPU — set to cpu to offload embedding/reranker to CPU, leave GPU for Ollama
-RAG_MODEL_DEVICE=cpu
+RAG_MODEL_DEVICE=
 
 # Hugging Face models
 RAG_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
