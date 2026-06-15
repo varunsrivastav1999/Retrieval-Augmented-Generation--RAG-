@@ -161,11 +161,11 @@ All parsing is 100% offline. No cloud APIs.
 
 **Images, tables, and diagrams** embedded in documents (PDF/DOCX/PPTX) are extracted via PyMuPDF image extraction + Tesseract OCR, and separately indexed through the CLIP vision model for visual similarity search.
 
-### Smart Table Chunking & Deduplication
-To prevent schema loss and hallucination on complex tabular data (like electrical catalogs):
+### Universal Enterprise Document Extractor
+To prevent schema loss and hallucination on complex formatting (like electrical catalogs, SCADA manuals, or financial balance sheets):
 - **Deduplication:** The pipeline uses `pdfplumber` for clean markdown extraction and automatically strips garbled table data from PyMuPDF's raw text to prevent vector noise.
-- **Per-Row Chunking:** Large tables (>5 rows) are split such that **every single data row becomes its own vector chunk**, paired permanently with the table title and column headers. This guarantees exact row lookups for specific model or part numbers.
-- **LLM Extraction Pipeline (Optional/Planned):** For highly misaligned OCR clusters, an LLM pre-processing node is supported to force raw text into strict JSON arrays prior to chunking.
+- **Universal LLM Pre-Processing:** For dense, highly misaligned OCR clusters, an intelligent LLM pre-processing node is triggered via keywords. It forces raw text into strict, nested JSON arrays prior to chunking, fully resolving clustered rows, extracting SCADA UI signals, HR metrics, and reconciling financial discrepancies.
+- **Semantic Metadata Chunks:** Each extracted component is formatted into a highly readable `Key: Value` string embedded with its global document context (e.g., Fiscal Period, Category) to guarantee exact lookups.
 
 ---
 

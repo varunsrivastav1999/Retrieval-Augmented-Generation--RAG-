@@ -272,6 +272,7 @@ def build_strict_grounding_prompt(
         "   that identifier. Then read the value from the requested column by matching the\n"
         "   column headers. Do NOT use values from different rows.\n"
         "7. If the exact model number is not found in any record, say so explicitly.\n"
+        "8. DO NOT start your answer with phrases like 'Based on the provided records'. Start directly.\n"
         f"{topic_line}\n"
         "-----------------------------------------------------------\n"
         f"DATABASE RECORDS:\n{context_text}\n"

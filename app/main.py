@@ -1105,23 +1105,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 }
             }
             answer_acc = ""
-            buffer = ""
-            prefix_stripped = False
             
-            def strip_prefix(text):
-                lower = text.lower()
-                prefixes = [
-                    "based on the provided context,", "based on the provided manual,", 
-                    "based on the context,", "according to the document,", "according to the documents,",
-                    "the context states that", "from the provided context,",
-                    "according to the extracted data", "according to the database records"
-                ]
-                for p in prefixes:
-                    if lower.startswith(p):
-                        cleaned = text[len(p):].strip()
-                        return cleaned[0].upper() + cleaned[1:] if cleaned else ""
-                return text
-
             try:
                 response = requests.post(OLLAMA_URL, json=payload, stream=True, timeout=OLLAMA_TIMEOUT_SECONDS)
                 if response.status_code == 200:
@@ -1135,18 +1119,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                                 break
                                 
                             token = data.get("response", "")
-                            
-                            if not prefix_stripped:
-                                buffer += token
-                                # Wait until we have enough chars to check for prefixes
-                                if len(buffer) > 50 or data.get("done", False):
-                                    cleaned_buffer = strip_prefix(buffer)
-                                    answer_acc += cleaned_buffer
-                                    yield f"data: {json.dumps({'token': cleaned_buffer})}\n\n"
-                                    prefix_stripped = True
-                            else:
-                                answer_acc += token
-                                yield f"data: {json.dumps({'token': token})}\n\n"
+                            answer_acc += token
+                            yield f"data: {json.dumps({'token': token})}\n\n"
                 else:
                     err = f"Ollama Error: {response.text}"
                     yield f"data: {json.dumps({'token': err})}\n\n"
