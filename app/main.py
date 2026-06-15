@@ -47,6 +47,7 @@ from typing import List, Dict, Any, Optional
 import redis
 import json
 import hashlib
+import warnings
 
 # Suppress noisy third-party deprecation warnings (e.g., pynvml, huggingface_hub)
 warnings.filterwarnings("ignore", category=FutureWarning)
