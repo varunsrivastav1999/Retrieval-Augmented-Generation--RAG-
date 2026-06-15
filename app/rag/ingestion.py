@@ -31,6 +31,7 @@ from app.rag.jobs import complete_ingestion_job, fail_ingestion_job, update_inge
 from app.rag.model_loader import encode_text, encode_texts, get_embedding_model_id, extract_entities, encode_image, get_ollama_generate_url, OLLAMA_MODEL, RAG_EMBEDDING_QUANTIZE
 from app.rag.graph import graph_db
 from app.rag.parsers import ParseResult, get_file_type, is_supported_file, parse_file
+from app.rag.extraction import looks_like_catalog_page, extract_catalog_data_from_page, format_json_object_for_embedding
 from PIL import Image
 import io
 
@@ -318,6 +319,22 @@ def ingest_file(
         for page_idx, page in enumerate(parse_result.pages):
             page_chunks = []
             
+            # --- LLM Pre-processing Node (Electrical Catalogs) ---
+            if looks_like_catalog_page(page.text):
+                print(f"[Ingest] LLM Pre-processing Node triggered for Page {page.page_num}...")
+                extracted_json_objects = extract_catalog_data_from_page(page.text)
+                if extracted_json_objects:
+                    for obj in extracted_json_objects:
+                        formatted_text = format_json_object_for_embedding(obj)
+                        if formatted_text:
+                            page_chunks.append({
+                                "text": formatted_text,
+                                "is_parent": True,
+                                "parent_idx": None,
+                                "child_idx": None,
+                                "content_type": "llm_extracted_catalog"
+                            })
+                            
             # 1. Chunk normal text — but STRIP duplicate table content first
             #    PyMuPDF's get_text() garbles multi-column tables. If pdfplumber
             #    already extracted them cleanly, the raw text version is noise.
@@ -380,17 +397,18 @@ def ingest_file(
                         continue
 
                 # Detect content type
-                content_type = "text"
-                if chunk_text.startswith("[TABLE"):
-                    content_type = "table"
-                elif chunk_text.startswith("[IMAGE OCR") or chunk_text.startswith("[FULL PAGE OCR"):
-                    content_type = "image_ocr"
-                elif chunk_text.startswith("[VIDEO SUBTITLE") or chunk_text.startswith("[SUBTITLE"):
-                    content_type = "subtitle"
-                elif chunk_text.startswith("[EXCEL SHEET"):
-                    content_type = "table"
-                elif chunk_text.startswith("[CSV DATA"):
-                    content_type = "table"
+                content_type = chunk_info.get("content_type", "text")
+                if content_type == "text":
+                    if chunk_text.startswith("[TABLE"):
+                        content_type = "table"
+                    elif chunk_text.startswith("[IMAGE OCR") or chunk_text.startswith("[FULL PAGE OCR"):
+                        content_type = "image_ocr"
+                    elif chunk_text.startswith("[VIDEO SUBTITLE") or chunk_text.startswith("[SUBTITLE"):
+                        content_type = "subtitle"
+                    elif chunk_text.startswith("[EXCEL SHEET"):
+                        content_type = "table"
+                    elif chunk_text.startswith("[CSV DATA"):
+                        content_type = "table"
 
                 pending_chunks.append({
                     "text": chunk_text,
