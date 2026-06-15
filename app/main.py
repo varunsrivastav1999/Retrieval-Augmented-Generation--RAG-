@@ -48,6 +48,9 @@ import redis
 import json
 import hashlib
 
+# Suppress noisy third-party deprecation warnings (e.g., pynvml, huggingface_hub)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from app.database import DocumentChunk, IngestionJob, SessionLocal, init_db, get_db
 from app.rag.jobs import (
@@ -1072,6 +1075,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         RAG_QUERY_LATENCY.labels(tenant=tenant_id, fast_path=str(request.fast_path)).observe(latency)
         
         if request.stream:
+            # Release DB transaction before streaming to prevent EOF errors
+            db.commit()
             def stream_extractive():
                 yield f"data: {json.dumps({'token': answer})}\n\n"
                 yield f"data: {json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification})}\n\n"
@@ -1090,6 +1095,9 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     
     prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
     
+    # Release DB transaction before calling external LLM to prevent EOF/connection drops
+    db.commit()
+
     if request.stream:
         def stream_llm():
             payload = {

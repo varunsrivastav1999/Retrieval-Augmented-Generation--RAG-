@@ -30,7 +30,7 @@ LEGACY_EMBEDDING_MODEL = os.getenv(
     "sentence-transformers/all-MiniLM-L6-v2",
 )
 
-engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_pre_ping=True)
+engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_pre_ping=True, pool_recycle=3600)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
