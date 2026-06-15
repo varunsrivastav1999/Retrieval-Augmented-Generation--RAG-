@@ -891,6 +891,13 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         cached["latency_ms"] = int((time.time() - start_time) * 1000)
         cached.setdefault("sources", _context_sources(cached.get("context", [])))
         cached["ingest"] = ingest_summary
+
+        if request.stream:
+            def stream_cache():
+                yield f"data: {json.dumps({'token': cached.get('answer', '')})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'sources': cached.get('sources', []), 'grounding': cached.get('grounding'), 'verification': cached.get('verification')})}\n\n"
+            return StreamingResponse(stream_cache(), media_type="text/event-stream")
+
         return cached
 
     # --- FAST PATH (sub-5ms): single dense HNSW search, skip all LLM calls ---
