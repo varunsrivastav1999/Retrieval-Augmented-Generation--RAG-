@@ -25,7 +25,7 @@ MEDIA_PATH=/media
 # Ollama
 # ------------------------------------------------------------------------------
 OLLAMA_URL=http://ollama:11434/api/generate
-OLLAMA_MODEL=qwen2.5:14b
+OLLAMA_MODEL=qwen2.5:7b
 OLLAMA_TIMEOUT_SECONDS=600
 OLLAMA_NUM_PREDICT=512
 
@@ -48,7 +48,7 @@ RAG_ENABLE_INGESTION_WORKER=true
 
 # Performance Tuning
 # ------------------------------------------------------------------------------
-RAG_DEFAULT_TOP_K=12
+RAG_DEFAULT_TOP_K=6
 RAG_MAX_TOP_K=50
 RAG_BROAD_QUERY_TOP_K=16
 RAG_INGESTION_WORKER_POLL_SECONDS=3

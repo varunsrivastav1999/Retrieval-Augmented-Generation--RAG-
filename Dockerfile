@@ -80,7 +80,7 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 # Pre-download Ollama LLM model (baked into image — zero runtime/download at startup)
 RUN ollama serve &>/tmp/ollama-srv.log & \
     for i in $(seq 1 30); do ollama list 2>/dev/null && break; sleep 1; done && \
-    ollama pull qwen2.5:14b && \
+    ollama pull qwen2.5:7b && \
     pkill ollama 2>/dev/null; true && \
     mkdir -p /models/ollama/blobs /models/ollama/manifests && \
     cp -r /root/.ollama/models/blobs/* /models/ollama/blobs/ && \

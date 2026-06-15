@@ -113,7 +113,7 @@
 | `DATABASE_URL` | `postgresql://rag_user:rag_password@postgres:5432/rag_db` | PostgreSQL with pgvector |
 | `REDIS_URL` | `redis://redis:6379/0` | Redis for semantic caching |
 | `OLLAMA_URL` | `http://ollama:11434/api/generate` | Ollama LLM endpoint |
-| `OLLAMA_MODEL` | `qwen2.5:14b` | LLM model name |
+| `OLLAMA_MODEL` | `qwen2.5:7b` | LLM model name |
 | `MEDIA_PATH` | `/media` | Shared volume for auto-scan |
 
 ### Models

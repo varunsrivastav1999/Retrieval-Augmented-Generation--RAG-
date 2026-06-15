@@ -21,7 +21,7 @@ RERANKER_MODEL = os.getenv(
     "RAG_RERANKER_MODEL",
     "BAAI/bge-reranker-v2-m3",
 )
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 MODEL_CACHE_DIR = os.getenv("HF_HOME")
 ST_CACHE_DIR = os.getenv("SENTENCE_TRANSFORMERS_HOME")
 HF_OFFLINE = os.getenv("RAG_HF_OFFLINE", "false").lower() in {"1", "true", "yes", "on"}

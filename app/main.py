@@ -114,7 +114,7 @@ MEDIA_PATH = os.getenv("MEDIA_PATH", "/media")
 
 # Connecting directly to the independent Ollama container inside this repository
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b") # Best for RAG — world-class reasoning, 128K context
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b") # Best for RAG — world-class reasoning, 128K context
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "1024"))
 RAG_ENV = os.getenv("RAG_ENV", "local").lower()

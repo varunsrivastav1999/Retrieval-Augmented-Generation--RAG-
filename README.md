@@ -212,7 +212,7 @@ docker compose -f production.yml build --no-cache
 docker compose -f production.yml up -d
 
 # 3. Pull the LLM
-docker exec ollama_rag_prod ollama pull qwen2.5:14b
+docker exec ollama_rag_prod ollama pull qwen2.5:7b
 
 # 4. Ingest documents
 curl -X POST http://localhost:1000/api/v1/ingest \
@@ -304,7 +304,7 @@ Key environment variables (full reference in `.env.example`):
 | `RAG_EMBEDDING_DIM` | `1024` | Embedding dimension |
 | `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranker |
 | `RAG_CLIP_MODEL` | `sentence-transformers/clip-ViT-L-14` | Vision model |
-| `OLLAMA_MODEL` | `qwen2.5:14b` | LLM for synthesis + routing |
+| `OLLAMA_MODEL` | `qwen2.5:7b` | LLM for synthesis + routing |
 | `RAG_MODEL_DEVICE` | auto | `cuda`, `mps`, or `cpu` |
 | `RAG_EMBEDDING_QUANTIZE` | `int8` | `int8` enables 4x vector compression |
 | `RAG_USE_HALFVEC` | `true` | `true` stores embeddings as float16 in pgvector |
