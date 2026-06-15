@@ -124,10 +124,18 @@ def get_optimal_device() -> str:
     try:
         import torch
 
-        if torch.backends.mps.is_available():
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return "mps"
         if torch.cuda.is_available():
             return "cuda"
+        else:
+            print(f"[RAG Hardware] PyTorch CUDA is False. PyTorch built for CUDA: {torch.version.cuda}")
+            import subprocess
+            try:
+                subprocess.check_output(["nvidia-smi"])
+                print("[RAG Hardware] nvidia-smi works inside container, but PyTorch cannot use it. (Likely an NVIDIA Driver version mismatch or missing CUDA libs).")
+            except Exception as e:
+                print(f"[RAG Hardware] nvidia-smi missing inside container. The GPU is NOT passed through to Docker! Ensure you run start.sh and not docker compose directly.")
     except (ImportError, Exception) as e:
         print(f"[RAG Hardware] Torch check failed: {e}. Defaulting to CPU.")
 
