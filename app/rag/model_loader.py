@@ -124,10 +124,10 @@ def get_optimal_device() -> str:
     try:
         import torch
 
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
         if torch.cuda.is_available():
             return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
         else:
             print(f"[RAG Hardware] PyTorch CUDA is False. PyTorch built for CUDA: {torch.version.cuda}")
             import subprocess
