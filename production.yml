@@ -41,7 +41,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: itips_rag_prod:latest
-    pull_policy: build
+    pull_policy: if_not_present
     container_name: itips_rag_prod
     restart: unless-stopped
     depends_on:
@@ -227,7 +227,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: itips_rag_prod:latest
-    pull_policy: build
+    pull_policy: if_not_present
     container_name: itips_rag_prod_models
     user: root
     depends_on:
@@ -309,7 +309,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: itips_rag_prod:latest
-    pull_policy: build
+    pull_policy: if_not_present
     container_name: itips_rag_prod_backup
     restart: unless-stopped
     depends_on:
