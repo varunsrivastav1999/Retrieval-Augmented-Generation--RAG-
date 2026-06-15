@@ -161,13 +161,19 @@ All parsing is 100% offline. No cloud APIs.
 
 **Images, tables, and diagrams** embedded in documents (PDF/DOCX/PPTX) are extracted via PyMuPDF image extraction + Tesseract OCR, and separately indexed through the CLIP vision model for visual similarity search.
 
+### Smart Table Chunking & Deduplication
+To prevent schema loss and hallucination on complex tabular data (like electrical catalogs):
+- **Deduplication:** The pipeline uses `pdfplumber` for clean markdown extraction and automatically strips garbled table data from PyMuPDF's raw text to prevent vector noise.
+- **Per-Row Chunking:** Large tables (>5 rows) are split such that **every single data row becomes its own vector chunk**, paired permanently with the table title and column headers. This guarantees exact row lookups for specific model or part numbers.
+- **LLM Extraction Pipeline (Optional/Planned):** For highly misaligned OCR clusters, an LLM pre-processing node is supported to force raw text into strict JSON arrays prior to chunking.
+
 ---
 
 ## GPU Support
 
 | Hardware | Detection | Docker Support |
 |----------|-----------|----------------|
-| **NVIDIA CUDA** (Linux) | Auto via `torch.cuda.is_available()` | ✅ Full GPU passthrough via `nvidia-container-toolkit` |
+| **NVIDIA CUDA** (Linux) | Auto via `torch.cuda.is_available()` | ✅ Full GPU passthrough via `nvidia-container-toolkit`. Ollama is forced to use `num_gpu=99` to ensure 100% of compute layers are offloaded from CPU. |
 | **Apple MPS** (macOS native) | Auto via `torch.backends.mps.is_available()` | ❌ MPS unavailable in Docker (CPU fallback with clear warning) |
 | **CPU** (fallback) | Default when no GPU detected | ✅ Always works |
 
@@ -193,6 +199,16 @@ All 7 services in `production.yml`:
 
 ## Quick Start
 
+### The Smart Start Script (`start.sh`)
+The project uses a smart bash script that manages Docker Compose, hardware detection, and image building to prevent disk-space exhaustion.
+
+| Command | Action | Rebuilds 10GB Image? |
+|---|---|---|
+| `./start.sh production up` | Starts the production stack. Auto-cleans dangling images. | **Only if Dockerfile or requirements.txt changed** |
+| `./start.sh production update` | Instant fast-path update. Pulls `git` and restarts the API container (code changes use bind mounts). | **NO** |
+| `./start.sh production build` | Forces a full image rebuild. | **YES** |
+| `./start.sh production clean` | Nuclear cleanup. Removes all old Docker images, volumes, and build cache. | N/A |
+
 ### Production
 
 ```bash
@@ -208,8 +224,8 @@ sed -i '' "s/mysecurepassword/$REDIS_PW/g" .envs/.production/.rag
 sed -i '' "s/rag_password/$NEO4J_PW/g" .envs/.production/.neo4j
 
 # 2. Build & start
-docker compose -f production.yml build --no-cache
-docker compose -f production.yml up -d
+chmod +x start.sh
+./start.sh production up
 
 # 3. Pull the LLM
 docker exec ollama_rag_prod ollama pull qwen2.5:7b
@@ -228,7 +244,8 @@ curl -s -X POST http://localhost:1000/api/v1/query \
 ### Local Development
 
 ```bash
-docker compose -f local.yml up -d
+chmod +x start.sh
+./start.sh local up
 # Hot-reload at http://localhost:1000
 # No passwords, GPU auto-detect
 ```
