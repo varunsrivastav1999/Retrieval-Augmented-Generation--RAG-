@@ -800,6 +800,9 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     """
     start_time = time.time()
     request_start = start_time
+    print(f"\n[{'='*50}]")
+    print(f"[API: IN] Query: {request.query}")
+    print(f"[{'='*50}]")
     tenant_id = validate_tenant_id(request.tenant_id)
     embedding_model = get_embedding_model_id()
     broad_query = _is_broad_query(request.query)
@@ -847,6 +850,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         is_greeting = bool(re.match(r"^(hi|hello|hey|greetings|how are you|good morning|good afternoon)(?:\s+|$|[!.,?])", q_lower))
         if is_greeting:
             answer = "Hello! I'm your Enterprise Q&A Assistant. Please ask me a question about your uploaded documents!"
+            print(f"[API: OUT] Response: {answer}")
             grounding_result = {"is_grounded": True, "score": 1.0, "detail": "Conversational Greeting"}
             response_data = {
                 "answer": answer,
@@ -883,6 +887,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     )
     if cached:
         print(f"[Cache] HIT for tenant={tenant_id!r}, query={request.query!r}")
+        print(f"[API: OUT] Response: {cached.get('answer', '')}")
         cached["latency_ms"] = int((time.time() - start_time) * 1000)
         cached.setdefault("sources", _context_sources(cached.get("context", [])))
         cached["ingest"] = ingest_summary
@@ -996,6 +1001,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 "Please wait for ingestion to complete, then ask again."
             )
 
+        print(f"[API: OUT] Response: {answer}")
+        
         response_data = {
             "answer": answer,
             "context": [],
@@ -1034,6 +1041,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             answer = f"[{source_name}{page_str}]\n{text}"
         verification = verify_answer_grounding(answer, final_context) if answer else {"confidence": "low", "confidence_score": 0.0, "grounded_sentences": 0, "total_sentences": 0, "evidence": []}
         latency = int((time.time() - start_time) * 1000)
+        print(f"[API: OUT] Response: {answer}")
+        
         response_data = {
             "answer": answer,
             "context": final_context,
@@ -1144,6 +1153,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             
             # Verification and Caching after generation
             verification = verify_answer_grounding(answer_acc, final_context)
+            print(f"[API: OUT] Response: {answer_acc}")
             yield f"data: {json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification})}\n\n"
             
             try:
@@ -1196,6 +1206,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         
     verification = verify_answer_grounding(answer, final_context)
     latency = int((time.time() - start_time) * 1000)
+    print(f"[API: OUT] Response: {answer}")
     
     response_data = {
         "answer": answer,
