@@ -186,7 +186,7 @@ def _cache_key(
 
 from app.rag.model_loader import cosine_similarity, encode_text
 
-CACHE_SEMANTIC_THRESHOLD = float(os.getenv("RAG_CACHE_SEMANTIC_THRESHOLD", "0.85"))
+CACHE_SEMANTIC_THRESHOLD = float(os.getenv("RAG_CACHE_SEMANTIC_THRESHOLD", "0.95"))
 
 def get_cached_response(
     query: str,
@@ -198,21 +198,44 @@ def get_cached_response(
 ):
     if not redis_client: return None
     try:
-        # Layer 11: Semantic Query Cache — aggressive matching (0.85 threshold)
+        # Layer 11: Semantic Query Cache — aggressive matching (0.95 threshold)
         query_vector = encode_text(query)
         index_key = f"semantic_index:{tenant_id}:{embedding_model}:{corpus_version}"
         
         index_data = redis_client.get(index_key)
         if index_data:
             index = json.loads(index_data)
+            
+            # 1. Exact Match Check
+            query_normalized = re.sub(r'\s+', ' ', query.strip().lower())
+            for item in index:
+                item_query = item.get("query", "")
+                if re.sub(r'\s+', ' ', item_query.strip().lower()) == query_normalized:
+                    print(f"[Cache] EXACT HIT for query={query!r}")
+                    cached = redis_client.get(item["cache_key"])
+                    if cached:
+                        return json.loads(cached)
+
+            # 2. Semantic Match with Entity Verification
+            # Extract alphanumeric sequences that contain at least one digit (product IDs, part numbers)
+            def extract_ids(text):
+                return set(re.findall(r'\b[a-zA-Z0-9]*[0-9][a-zA-Z0-9]*\b', text.lower()))
+            
+            query_ids = extract_ids(query)
+
             best_match = None
             best_sim = 0.0
             
             for item in index:
                 sim = cosine_similarity(query_vector, item["embedding"])
                 if sim > best_sim:
-                    best_sim = sim
-                    best_match = item
+                    item_query = item.get("query", "")
+                    item_ids = extract_ids(item_query)
+                    
+                    # Ensure identifiers perfectly match to prevent cross-product cache hits
+                    if query_ids == item_ids:
+                        best_sim = sim
+                        best_match = item
                     
             if best_match and best_sim > CACHE_SEMANTIC_THRESHOLD:
                 print(f"[Cache] Semantic HIT (sim={best_sim:.3f}) for query={query!r}")
@@ -250,7 +273,8 @@ def set_cached_response(
             
         index.append({
             "cache_key": cache_key,
-            "embedding": query_vector
+            "embedding": query_vector,
+            "query": query
         })
         redis_client.setex(index_key, 86400, json.dumps(index))
         
