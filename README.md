@@ -173,9 +173,9 @@ To prevent schema loss and hallucination on complex formatting (like electrical 
 
 | Hardware | Detection | Docker Support |
 |----------|-----------|----------------|
-| **NVIDIA CUDA** (Linux) | Auto via `torch.cuda.is_available()` | ✅ Full GPU passthrough via `nvidia-container-toolkit`. Ollama is forced to use `num_gpu=99` to ensure 100% of compute layers are offloaded from CPU. |
-| **Apple MPS** (macOS native) | Auto via `torch.backends.mps.is_available()` | ❌ MPS unavailable in Docker (CPU fallback with clear warning) |
-| **CPU** (fallback) | Default when no GPU detected | ✅ Always works |
+| **NVIDIA CUDA** (Linux) | Auto via `torch.cuda.is_available()` | Supported. Full GPU passthrough via `nvidia-container-toolkit`. Ollama is forced to use `num_gpu=99` to ensure 100% of compute layers are offloaded from CPU. |
+| **Apple MPS** (macOS native) | Auto via `torch.backends.mps.is_available()` | Not Supported. MPS unavailable in Docker (CPU fallback with clear warning) |
+| **CPU** (fallback) | Default when no GPU detected | Supported. Always works |
 
 Set `RAG_MODEL_DEVICE=cuda` or `RAG_MODEL_DEVICE=mps` to override. Leave empty for auto-detection.
 

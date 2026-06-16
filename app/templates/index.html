@@ -1,10 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ask RAG</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="/static/js/marked.min.js"></script>
     <style>
@@ -67,6 +69,7 @@
             padding: 8px;
             border-radius: 50%;
         }
+
         .theme-toggle:hover {
             background: var(--input-bg);
         }
@@ -107,7 +110,7 @@
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
-        
+
         [data-theme="light"] .hero h1 {
             background: none;
             -webkit-text-fill-color: var(--text-color);
@@ -115,8 +118,15 @@
         }
 
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         /* Modern Spinner */
@@ -125,18 +135,34 @@
             width: 20px;
             height: 20px;
         }
+
         .spinner .path {
             stroke: currentColor;
             stroke-linecap: round;
             animation: dash 1.5s ease-in-out infinite;
         }
+
         @keyframes rotate {
-            100% { transform: rotate(360deg); }
+            100% {
+                transform: rotate(360deg);
+            }
         }
+
         @keyframes dash {
-            0% { stroke-dasharray: 1, 150; stroke-dashoffset: 0; }
-            50% { stroke-dasharray: 90, 150; stroke-dashoffset: -35; }
-            100% { stroke-dasharray: 90, 150; stroke-dashoffset: -124; }
+            0% {
+                stroke-dasharray: 1, 150;
+                stroke-dashoffset: 0;
+            }
+
+            50% {
+                stroke-dasharray: 90, 150;
+                stroke-dashoffset: -35;
+            }
+
+            100% {
+                stroke-dasharray: 90, 150;
+                stroke-dashoffset: -124;
+            }
         }
 
         /* Chat Area */
@@ -167,11 +193,20 @@
             font-size: 1.05rem;
             line-height: 1.5;
         }
-        
+
         @media (max-width: 600px) {
-            .message-bubble { max-width: 100%; font-size: 1rem; }
-            .top-nav { padding: 10px; }
-            .hero h1 { margin-bottom: 20px; }
+            .message-bubble {
+                max-width: 100%;
+                font-size: 1rem;
+            }
+
+            .top-nav {
+                padding: 10px;
+            }
+
+            .hero h1 {
+                margin-bottom: 20px;
+            }
         }
 
         .message-row.user .message-bubble {
@@ -207,7 +242,7 @@
             display: flex;
             align-items: center;
             padding: 10px 20px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
         }
 
         .input-pill .plus-icon {
@@ -224,6 +259,7 @@
             margin-right: 15px;
             transition: all 0.2s;
         }
+
         .input-pill .plus-icon:hover {
             background: rgba(255, 255, 255, 0.1);
         }
@@ -261,11 +297,15 @@
             cursor: pointer;
             transition: transform 0.2s;
         }
-        
+
         .send-icon:hover {
             transform: scale(1.05);
         }
-        .send-icon svg { width: 20px; height: 20px; }
+
+        .send-icon svg {
+            width: 20px;
+            height: 20px;
+        }
 
         /* Info Hover Icon */
         .info-container {
@@ -287,7 +327,7 @@
             color: var(--placeholder-color);
             border: 1px solid var(--input-border);
         }
-        
+
         .typing-loader {
             display: inline-flex;
             align-items: center;
@@ -307,7 +347,7 @@
             border: 1px solid var(--input-border);
             border-radius: 12px;
             padding: 15px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
             display: none;
             z-index: 100;
             font-size: 0.85rem;
@@ -323,6 +363,7 @@
             margin-bottom: 10px;
             color: var(--accent-color);
         }
+
         .info-panel p {
             margin-bottom: 5px;
             color: var(--placeholder-color);
@@ -335,6 +376,7 @@
             color: var(--placeholder-color);
             font-size: 0.9rem;
         }
+
         .typing-indicator span {
             display: inline-block;
             width: 6px;
@@ -344,12 +386,27 @@
             margin-right: 3px;
             animation: pulse 1s infinite;
         }
-        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-        .typing-indicator span:nth-child(3) { animation-delay: 0.44s; }
-        
+
+        .typing-indicator span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-indicator span:nth-child(3) {
+            animation-delay: 0.44s;
+        }
+
         @keyframes pulse {
-            0%, 100% { transform: scale(0.8); opacity: 0.5; }
-            50% { transform: scale(1.2); opacity: 1; }
+
+            0%,
+            100% {
+                transform: scale(0.8);
+                opacity: 0.5;
+            }
+
+            50% {
+                transform: scale(1.2);
+                opacity: 1;
+            }
         }
 
         /* Markdown Styles */
@@ -361,15 +418,27 @@
             margin: 10px 0;
             border: 1px solid var(--input-border);
         }
+
         .markdown-body code {
             font-family: monospace;
             background: var(--info-bg);
             padding: 2px 6px;
             border-radius: 4px;
         }
-        .markdown-body a { color: var(--accent-color); }
-        .markdown-body ul, .markdown-body ol { margin-left: 20px; margin-bottom: 10px; }
-        .markdown-body p { margin-bottom: 10px; }
+
+        .markdown-body a {
+            color: var(--accent-color);
+        }
+
+        .markdown-body ul,
+        .markdown-body ol {
+            margin-left: 20px;
+            margin-bottom: 10px;
+        }
+
+        .markdown-body p {
+            margin-bottom: 10px;
+        }
 
         /* Health Indicator */
         .health-indicator-wrapper {
@@ -382,15 +451,27 @@
             width: 12px;
             height: 12px;
             border-radius: 50%;
-            background-color: #6b7280; /* default gray */
+            background-color: #6b7280;
+            /* default gray */
             cursor: pointer;
-            box-shadow: 0 0 5px rgba(0,0,0,0.2);
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
             transition: background-color 0.3s;
         }
 
-        .health-dot.ok { background-color: #10b981; box-shadow: 0 0 8px rgba(16,185,129,0.4); }
-        .health-dot.warning { background-color: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,0.4); }
-        .health-dot.error { background-color: #ef4444; box-shadow: 0 0 8px rgba(239,68,68,0.4); }
+        .health-dot.ok {
+            background-color: #10b981;
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+        }
+
+        .health-dot.warning {
+            background-color: #f59e0b;
+            box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
+        }
+
+        .health-dot.error {
+            background-color: #ef4444;
+            box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
+        }
 
         .health-panel {
             position: absolute;
@@ -401,7 +482,7 @@
             border: 1px solid var(--input-border);
             border-radius: 12px;
             padding: 12px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
             display: none;
             z-index: 200;
             font-size: 0.85rem;
@@ -418,12 +499,25 @@
             justify-content: space-between;
             margin-bottom: 4px;
         }
-        .health-item span:first-child { color: var(--placeholder-color); }
-        .health-item span.status-ok { color: #10b981; }
-        .health-item span.status-warn { color: #f59e0b; }
-        .health-item span.status-err { color: #ef4444; }
+
+        .health-item span:first-child {
+            color: var(--placeholder-color);
+        }
+
+        .health-item span.status-ok {
+            color: #10b981;
+        }
+
+        .health-item span.status-warn {
+            color: #f59e0b;
+        }
+
+        .health-item span.status-err {
+            color: #ef4444;
+        }
     </style>
 </head>
+
 <body data-theme="dark">
     <script>
         // Auto-detect OS theme preference on load
@@ -438,7 +532,7 @@
     </div>
 
     <div class="main-container">
-        
+
         <div class="hero" id="heroArea">
             <h1>Ready when you are</h1>
         </div>
@@ -450,11 +544,14 @@
         <div class="input-wrapper">
             <div class="input-pill">
                 <div class="plus-icon" onclick="document.getElementById('fileInput').click()">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"
+                        xmlns="http://www.w3.org/2000/svg">
+                        <path
+                            d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z" />
                     </svg>
                 </div>
-                <input type="text" id="queryInput" placeholder="Ask RAG" onkeypress="if(event.key === 'Enter') askQuery()">
+                <input type="text" id="queryInput" placeholder="Ask RAG"
+                    onkeypress="if(event.key === 'Enter') askQuery()">
                 <div class="input-actions">
                     <div class="health-indicator-wrapper">
                         <div class="health-dot" id="sysHealthDot"></div>
@@ -467,7 +564,11 @@
                         </div>
                     </div>
                     <div class="send-icon" onclick="askQuery()">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="19" x2="12" y2="5"></line>
+                            <polyline points="5 12 12 5 19 12"></polyline>
+                        </svg>
                     </div>
                 </div>
             </div>
@@ -494,7 +595,7 @@
             if (!query) return;
 
             input.value = '';
-            
+
             // Hide hero, show chat, shift layout
             document.getElementById('heroArea').style.display = 'none';
             document.querySelector('.main-container').classList.add('chatting');
@@ -542,9 +643,9 @@
             loader.className = 'typing-loader';
             loader.innerHTML = `<svg class="spinner" viewBox="0 0 50 50"><circle class="path" cx="25" cy="25" r="20" fill="none" stroke-width="5"></circle></svg> Thinking...`;
             aiRow.querySelector('.message-bubble').prepend(loader);
-            
+
             const answerBox = document.getElementById(`text_${aiId}`);
-            
+
             try {
                 const response = await fetch('/api/v1/query', {
                     method: 'POST',
@@ -567,7 +668,7 @@
 
                     buffer += decoder.decode(value, { stream: true });
                     const lines = buffer.split("\n");
-                    
+
                     // The last element is either an incomplete line or an empty string (if it ended with \n)
                     // Keep it in the buffer for the next chunk
                     buffer = lines.pop();
@@ -623,7 +724,7 @@
                     formData.append("file", f); // Matches backend `file: UploadFile`
                     return fetch('/api/v1/upload', { method: 'POST', body: formData });
                 });
-                
+
                 const responses = await Promise.all(uploadPromises);
                 responses.forEach(res => {
                     if (!res.ok) allSuccess = false;
@@ -650,10 +751,10 @@
                 const res = await fetch('/health/ready');
                 const data = await res.json();
                 const checks = data.checks || {};
-                
+
                 let issues = 0;
                 let fails = 0;
-                
+
                 const updateStatus = (id, val) => {
                     const el = document.getElementById(id);
                     if (!el) return;
@@ -703,4 +804,5 @@
     </script>
     <input type="file" id="fileInput" multiple style="display: none;" onchange="uploadFiles()">
 </body>
+
 </html>

@@ -214,7 +214,7 @@ def _strip_table_text_from_raw(raw_text: str, tables: List[str]) -> str:
     table_tokens = set()
     for table_md in tables:
         # Extract tokens that look like product codes / model numbers
-        tokens = re.findall(r'[A-Z0-9]{4,}[A-Z0-9-]*', table_md)
+        tokens = re.findall(r'[A-Za-z0-9]{2,}[A-Za-z0-9-]*', table_md)
         table_tokens.update(t.lower() for t in tokens)
     
     if not table_tokens:
@@ -228,12 +228,12 @@ def _strip_table_text_from_raw(raw_text: str, tables: List[str]) -> str:
             cleaned_lines.append(line)
             continue
         
-        line_tokens = re.findall(r'[A-Za-z0-9]{3,}[A-Za-z0-9-]*', line_stripped)
+        line_tokens = re.findall(r'[A-Za-z0-9]{2,}[A-Za-z0-9-]*', line_stripped)
         if line_tokens:
             overlap = sum(1 for t in line_tokens if t.lower() in table_tokens)
             overlap_ratio = overlap / len(line_tokens)
             # If >60% of tokens in this line are from the table, it's a duplicate
-            if overlap_ratio > 0.6 and len(line_tokens) >= 3:
+            if overlap_ratio > 0.6 and len(line_tokens) >= 2:
                 continue
         
         cleaned_lines.append(line)

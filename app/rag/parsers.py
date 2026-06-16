@@ -329,12 +329,42 @@ def _extract_tables_pdfplumber(pdf_path: str, page_num: int) -> list:
                 if not table:
                     continue
                 rows = []
+                
+                # First pass: clean cells
+                cleaned_table = []
                 for row in table:
-                    cleaned = [str(cell).strip() if cell else "" for cell in row]
-                    rows.append(" | ".join(cleaned))
+                    cleaned_row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
+                    cleaned_table.append(cleaned_row)
+                    
+                # Second pass: detect multi-row merged headers
+                if len(cleaned_table) > 1 and "" in cleaned_table[0]:
+                    merged_header = []
+                    last_val = ""
+                    for i in range(len(cleaned_table[0])):
+                        val0 = cleaned_table[0][i]
+                        if val0:
+                            last_val = val0
+                        else:
+                            val0 = last_val
+                        
+                        val1 = cleaned_table[1][i] if i < len(cleaned_table[1]) else ""
+                        if val0 and val1:
+                            merged_header.append(f"{val0} - {val1}")
+                        elif val0:
+                            merged_header.append(val0)
+                        else:
+                            merged_header.append(val1)
+                    
+                    cleaned_table[0] = merged_header
+                    cleaned_table.pop(1)
+
+                for row in cleaned_table:
+                    rows.append(" | ".join(row))
+                    
                 if rows:
                     header = rows[0]
-                    separator = " | ".join(["---"] * len(table[0])) if table[0] else "---"
+                    col_count = len(cleaned_table[0]) if cleaned_table else 1
+                    separator = " | ".join(["---"] * col_count)
                     table_text = f"[TABLE {table_idx + 1} - Page {page_num}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
                     tables_text.append(table_text.strip())
     except Exception as e:
@@ -432,7 +462,7 @@ def _parse_docx(file_path: str) -> ParseResult:
         for table_idx, table in enumerate(doc.tables):
             rows = []
             for row in table.rows:
-                cells = [cell.text.strip() for cell in row.cells]
+                cells = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
                 rows.append(" | ".join(cells))
             if rows:
                 header = rows[0]
@@ -494,7 +524,7 @@ def _parse_xlsx(file_path: str) -> ParseResult:
             ws = wb[sheet_name]
             rows = []
             for row in ws.iter_rows(values_only=True):
-                cells = [str(cell).strip() if cell is not None else "" for cell in row]
+                cells = [str(cell).replace('\n', ' ').strip() if cell is not None else "" for cell in row]
                 if any(cells):  # Skip completely empty rows
                     rows.append(" | ".join(cells))
 
@@ -560,7 +590,7 @@ def _parse_pptx(file_path: str) -> ParseResult:
                     table = shape.table
                     rows = []
                     for row in table.rows:
-                        cells = [cell.text.strip() for cell in row.cells]
+                        cells = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
                         rows.append(" | ".join(cells))
                     if rows:
                         header = rows[0]
