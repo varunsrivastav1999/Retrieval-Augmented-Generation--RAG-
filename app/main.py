@@ -83,11 +83,11 @@ app = FastAPI(
 )
 
 # ── Prometheus Metrics ────────────────────────────────────────────────────────
-RAG_QUERY_TOTAL = Counter("rag_queries_total", "Total queries processed", ["tenant", "status"])
+RAG_QUERY_TOTAL = Counter("rag_queries_total", "Total queries processed", ["status"])
 RAG_QUERY_LATENCY = Histogram("rag_query_latency_seconds", "Query latency in seconds",
-    ["tenant", "fast_path"], buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0))
+    ["fast_path"], buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0))
 RAG_INGESTION_TOTAL = Counter("rag_ingestion_total", "Total files ingested", ["file_type"])
-RAG_CACHE_HITS = Counter("rag_cache_hits_total", "Total cache hits", ["type"])
+RAG_CACHE_HITS = Counter("rag_cache_hits_total", "Total cache hits")
 RAG_GROUNDING_BLOCKED = Counter("rag_grounding_blocked_total", "Queries blocked by grounding guard")
 RAG_LLM_CALLS = Counter("rag_llm_calls_total", "Total Ollama LLM calls", ["operation"])
 
@@ -140,8 +140,8 @@ DEFAULT_TOP_K = int(os.getenv("RAG_DEFAULT_TOP_K", "12"))
 MAX_TOP_K = int(os.getenv("RAG_MAX_TOP_K", "50"))
 BROAD_QUERY_TOP_K = int(os.getenv("RAG_BROAD_QUERY_TOP_K", "16"))
 SOURCE_LIMIT = int(os.getenv("RAG_SOURCE_LIMIT", "12"))
-# NO FILE SIZE LIMIT — enterprise production system
-MAX_UPLOAD_SIZE_BYTES = None  # Unlimited
+# File size limit — prevents zip bombs and OOM
+MAX_UPLOAD_SIZE_BYTES = int(os.getenv("RAG_MAX_UPLOAD_SIZE_BYTES", str(5000 * 1024 * 1024)))  # 5000MB default
 
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
@@ -204,9 +204,9 @@ def get_cached_response(
         query_vector = encode_text(query)
         index_key = f"semantic_index:{tenant_id}:{embedding_model}:{corpus_version}"
         
-        index_data = redis_client.get(index_key)
-        if index_data:
-            index = json.loads(index_data)
+        raw_entries = redis_client.lrange(index_key, 0, -1)
+        if raw_entries:
+            index = [json.loads(e) for e in raw_entries]
             
             # 1. Exact Match Check
             query_normalized = re.sub(r'\s+', ' ', query.strip().lower())
@@ -269,23 +269,16 @@ def set_cached_response(
         cache_key = _cache_key(query, tenant_id, top_k, embedding_model, corpus_version, scope)
         redis_client.setex(cache_key, 86400, json.dumps(response))
         
-        # Update semantic index
+        # Update semantic index atomically with Redis list
         query_vector = encode_text(query)
         index_key = f"semantic_index:{tenant_id}:{embedding_model}:{corpus_version}"
+        entry = json.dumps({"cache_key": cache_key, "embedding": query_vector, "query": query})
         
-        index_data = redis_client.get(index_key)
-        index = json.loads(index_data) if index_data else []
-        
-        # Prune index to keep it fast (max 1000 items per tenant)
-        if len(index) > 1000:
-            index.pop(0)
-            
-        index.append({
-            "cache_key": cache_key,
-            "embedding": query_vector,
-            "query": query
-        })
-        redis_client.setex(index_key, 86400, json.dumps(index))
+        pipe = redis_client.pipeline()
+        pipe.lpush(index_key, entry)
+        pipe.ltrim(index_key, 0, 999)
+        pipe.expire(index_key, 86400)
+        pipe.execute()
         
     except Exception as e:
         print(f"Redis set error: {e}")
@@ -669,7 +662,7 @@ async def upload_file(
             detail=f"Unsupported file format '{ext}'. Supported: {supported_list}",
         )
 
-    # Stream file to disk — NO SIZE LIMIT
+    # Stream file to disk with size limit
     tenant_media_path = os.path.join(MEDIA_PATH, tenant_id)
     os.makedirs(tenant_media_path, exist_ok=True)
     file_path = os.path.join(tenant_media_path, filename)
@@ -678,11 +671,17 @@ async def upload_file(
     try:
         with open(file_path, "wb") as buffer:
             while True:
-                chunk = await file.read(4 * 1024 * 1024)  # 4MB chunks for speed
+                chunk = await file.read(4 * 1024 * 1024)
                 if not chunk:
                     break
                 total_bytes += len(chunk)
+                if MAX_UPLOAD_SIZE_BYTES and total_bytes > MAX_UPLOAD_SIZE_BYTES:
+                    raise HTTPException(status_code=413, detail=f"File exceeds maximum upload size of {MAX_UPLOAD_SIZE_BYTES / (1024*1024):.0f}MB")
                 buffer.write(chunk)
+    except HTTPException:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise
     except Exception as e:
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -700,9 +699,15 @@ async def upload_file(
 
 
 @app.get("/api/v1/ingest/jobs/{job_id}", response_model=IngestionJobResponse)
-def get_ingestion_status(job_id: str):
+def get_ingestion_status(
+    job_id: str,
+    tenant_id: str = Query("default", pattern=TENANT_PATTERN),
+):
+    tenant_id = validate_tenant_id(tenant_id)
     job = get_ingestion_job(job_id)
     if not job:
+        raise HTTPException(status_code=404, detail="Ingestion job not found.")
+    if job.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Ingestion job not found.")
     return _job_response(job)
 
@@ -942,15 +947,18 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             answer = "Hello! I'm your Enterprise Q&A Assistant. Please ask me a question about your uploaded documents!"
             print(f"[API: OUT] Response: {answer}")
             grounding_result = {"is_grounded": True, "score": 1.0, "detail": "Conversational Greeting"}
+            latency_ms = int((time.time() - start_time) * 1000)
             response_data = {
                 "answer": answer,
                 "context": [],
                 "sources": [],
-                "latency_ms": int((time.time() - start_time) * 1000),
+                "latency_ms": latency_ms,
                 "ingest": ingest_summary,
                 "grounding": grounding_result,
                 "verification": {"confidence": "high", "confidence_score": 1.0, "grounded_sentences": 1, "total_sentences": 1, "evidence": []},
             }
+            RAG_QUERY_TOTAL.labels(status="greeting").inc()
+            RAG_QUERY_LATENCY.labels(fast_path="false").observe(latency_ms / 1000.0)
             if request.stream:
                 def stream_greeting():
                     yield f"data: {json.dumps({'token': answer})}\n\n"
@@ -979,6 +987,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         scope=cache_scope,
     )
     if cached:
+        RAG_CACHE_HITS.inc()
         print(f"[Cache] HIT for tenant={tenant_id!r}, query={request.query!r}")
         print(f"[API: OUT] Response: {cached.get('answer', '')}")
         cached["latency_ms"] = int((time.time() - start_time) * 1000)
@@ -988,7 +997,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         if request.stream:
             def stream_cache():
                 yield f"data: {json.dumps({'token': cached.get('answer', '')})}\n\n"
-                yield f"data: {json.dumps({'done': True, 'sources': cached.get('sources', []), 'grounding': cached.get('grounding'), 'verification': cached.get('verification')})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'sources': cached.get('sources', []), 'grounding': cached.get('grounding'), 'verification': cached.get('verification'), 'latency_ms': cached.get('latency_ms', 0)})}\n\n"
             return StreamingResponse(stream_cache(), media_type="text/event-stream")
 
         return cached
@@ -1130,6 +1139,9 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             )
 
         print(f"[API: OUT] Response: {answer}")
+        RAG_QUERY_TOTAL.labels(status="blocked").inc()
+        RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency / 1000.0)
+        RAG_GROUNDING_BLOCKED.inc()
         
         response_data = {
             "answer": answer,
@@ -1187,10 +1199,10 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 {key: value for key, value in response_data.items() if key != "ingest"},
                 scope=cache_scope,
             )
-        latency = time.time() - request_start
+        elapsed = time.time() - request_start
         status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
-        RAG_QUERY_TOTAL.labels(tenant=tenant_id, status=status).inc()
-        RAG_QUERY_LATENCY.labels(tenant=tenant_id, fast_path=str(request.fast_path)).observe(latency)
+        RAG_QUERY_TOTAL.labels(status=status).inc()
+        RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(elapsed)
         
         if request.stream:
             # Release DB transaction before streaming to prevent EOF errors
@@ -1425,10 +1437,10 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     )
 
     # Record Prometheus metrics
-    latency = time.time() - request_start
+    elapsed = time.time() - request_start
     status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
-    RAG_QUERY_TOTAL.labels(tenant=tenant_id, status=status).inc()
-    RAG_QUERY_LATENCY.labels(tenant=tenant_id, fast_path=str(request.fast_path)).observe(latency)
+    RAG_QUERY_TOTAL.labels(status=status).inc()
+    RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(elapsed)
     if grounding_result and not grounding_result.get("is_grounded"):
         RAG_GROUNDING_BLOCKED.inc()
     

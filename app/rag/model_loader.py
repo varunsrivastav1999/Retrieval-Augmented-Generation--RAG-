@@ -2,6 +2,7 @@ import hashlib
 import math
 import os
 import re
+import threading
 from glob import glob
 from functools import lru_cache
 from typing import Any, Iterable, List, Sequence, Optional
@@ -204,33 +205,47 @@ def get_ollama_generate_url() -> str:
     base_url = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
     return base_url
 
-@lru_cache(maxsize=1)
+_embedding_model = None
+_embedding_model_lock = threading.Lock()
+
+def clear_embedding_model_cache():
+    global _embedding_model
+    with _embedding_model_lock:
+        _embedding_model = None
+
 def get_embedding_model() -> Any:
-    # ... (existing logic)
-    if HF_OFFLINE and ALLOW_HASH_FALLBACK and not _model_appears_cached(EMBEDDING_MODEL):
-        print(
-            "[RAG Embeddings] Using deterministic local hashing embeddings "
-            f"because {EMBEDDING_MODEL!r} is not in the offline cache."
-        )
-        return HashingEmbedder()
+    global _embedding_model
+    with _embedding_model_lock:
+        if _embedding_model is not None:
+            return _embedding_model
 
-    try:
-        from sentence_transformers import SentenceTransformer
+        if HF_OFFLINE and ALLOW_HASH_FALLBACK and not _model_appears_cached(EMBEDDING_MODEL):
+            print(
+                "[RAG Embeddings] Using deterministic local hashing embeddings "
+                f"because {EMBEDDING_MODEL!r} is not in the offline cache."
+            )
+            _embedding_model = HashingEmbedder()
+            return _embedding_model
 
-        return SentenceTransformer(EMBEDDING_MODEL, **_model_kwargs())
-    except Exception as exc:
-        if not ALLOW_HASH_FALLBACK:
-            raise RuntimeError(
-                "Embedding model is unavailable. Check network/DNS or pre-populate "
-                "the Hugging Face cache, or enable RAG_ALLOW_HASH_FALLBACK=true "
-                "for local development."
-            ) from exc
+        try:
+            from sentence_transformers import SentenceTransformer
 
-        print(
-            "[RAG Embeddings] Falling back to deterministic local hashing "
-            f"embeddings because {EMBEDDING_MODEL!r} could not be loaded: {exc}"
-        )
-        return HashingEmbedder()
+            _embedding_model = SentenceTransformer(EMBEDDING_MODEL, **_model_kwargs())
+            return _embedding_model
+        except Exception as exc:
+            if not ALLOW_HASH_FALLBACK:
+                raise RuntimeError(
+                    "Embedding model is unavailable. Check network/DNS or pre-populate "
+                    "the Hugging Face cache, or enable RAG_ALLOW_HASH_FALLBACK=true "
+                    "for local development."
+                ) from exc
+
+            print(
+                "[RAG Embeddings] Falling back to deterministic local hashing "
+                f"embeddings because {EMBEDDING_MODEL!r} could not be loaded: {exc}"
+            )
+            _embedding_model = HashingEmbedder()
+            return _embedding_model
 
 
 def get_embedding_model_id() -> str:
@@ -243,49 +258,64 @@ def get_embedding_model_id() -> str:
     return EMBEDDING_MODEL
 
 
-@lru_cache(maxsize=1)
+_reranker_model = None
+_reranker_model_lock = threading.Lock()
+
+def clear_reranker_model_cache():
+    global _reranker_model
+    with _reranker_model_lock:
+        _reranker_model = None
+
 def get_reranker_model() -> Any:
-    if HF_OFFLINE and ALLOW_RERANKER_FALLBACK and not _model_appears_cached(RERANKER_MODEL):
-        print(
-            "[RAG Reranker] Using lexical reranking because "
-            f"{RERANKER_MODEL!r} is not in the offline cache."
-        )
-        return LexicalReranker()
+    global _reranker_model
+    with _reranker_model_lock:
+        if _reranker_model is not None:
+            return _reranker_model
 
-    try:
-        if "colbert" in RERANKER_MODEL.lower():
-            from ragatouille import RAGPretrainedModel
-            print(f"[RAG Reranker] Loading ColBERT Late-Interaction model: {RERANKER_MODEL}")
-            return RAGPretrainedModel.from_pretrained(RERANKER_MODEL)
-        else:
-            from sentence_transformers import CrossEncoder
+        if HF_OFFLINE and ALLOW_RERANKER_FALLBACK and not _model_appears_cached(RERANKER_MODEL):
+            print(
+                "[RAG Reranker] Using lexical reranking because "
+                f"{RERANKER_MODEL!r} is not in the offline cache."
+            )
+            _reranker_model = LexicalReranker()
+            return _reranker_model
 
-            kwargs = {}
-            tokenizer_args = {}
-            automodel_args = {}
-            # Do not manually pass cache_dir, let HuggingFace use HF_HOME
-            kwargs["device"] = get_optimal_device()
-            if HF_OFFLINE:
-                tokenizer_args["local_files_only"] = True
-                automodel_args["local_files_only"] = True
-            if tokenizer_args:
-                kwargs["tokenizer_args"] = tokenizer_args
-            if automodel_args:
-                kwargs["automodel_args"] = automodel_args
-            return CrossEncoder(RERANKER_MODEL, **kwargs)
-    except Exception as exc:
-        if not ALLOW_RERANKER_FALLBACK:
-            raise RuntimeError(
-                "Reranker model is unavailable. Check network/DNS or pre-populate "
-                "the Hugging Face cache, or enable RAG_ALLOW_RERANKER_FALLBACK=true "
-                "for local development."
-            ) from exc
+        try:
+            if "colbert" in RERANKER_MODEL.lower():
+                from ragatouille import RAGPretrainedModel
+                print(f"[RAG Reranker] Loading ColBERT Late-Interaction model: {RERANKER_MODEL}")
+                _reranker_model = RAGPretrainedModel.from_pretrained(RERANKER_MODEL)
+                return _reranker_model
+            else:
+                from sentence_transformers import CrossEncoder
 
-        print(
-            "[RAG Reranker] Falling back to lexical reranking because "
-            f"{RERANKER_MODEL!r} could not be loaded: {exc}"
-        )
-        return LexicalReranker()
+                kwargs = {}
+                tokenizer_args = {}
+                automodel_args = {}
+                kwargs["device"] = get_optimal_device()
+                if HF_OFFLINE:
+                    tokenizer_args["local_files_only"] = True
+                    automodel_args["local_files_only"] = True
+                if tokenizer_args:
+                    kwargs["tokenizer_args"] = tokenizer_args
+                if automodel_args:
+                    kwargs["automodel_args"] = automodel_args
+                _reranker_model = CrossEncoder(RERANKER_MODEL, **kwargs)
+                return _reranker_model
+        except Exception as exc:
+            if not ALLOW_RERANKER_FALLBACK:
+                raise RuntimeError(
+                    "Reranker model is unavailable. Check network/DNS or pre-populate "
+                    "the Hugging Face cache, or enable RAG_ALLOW_RERANKER_FALLBACK=true "
+                    "for local development."
+                ) from exc
+
+            print(
+                "[RAG Reranker] Falling back to lexical reranking because "
+                f"{RERANKER_MODEL!r} could not be loaded: {exc}"
+            )
+            _reranker_model = LexicalReranker()
+            return _reranker_model
 
 
 def get_reranker_model_id() -> str:
@@ -332,7 +362,6 @@ def _as_vector(value: Any) -> List[float]:
     return [float(item) for item in value]
 
 
-@lru_cache(maxsize=128)
 def encode_text(text: str, quantize: bool = False) -> List[float]:
     vec = _as_vector(get_embedding_model().encode(text))
     if quantize and RAG_EMBEDDING_QUANTIZE == "int8":
@@ -386,7 +415,7 @@ if __name__ == "__main__":
     
     print("\n1. Downloading Embedding Model...")
     try:
-        get_embedding_model.cache_clear()
+        clear_embedding_model_cache()
         embedder = get_embedding_model()
         if isinstance(embedder, HashingEmbedder):
             print("❌ ERROR: Download failed, fell back to Hashing.")
@@ -397,7 +426,7 @@ if __name__ == "__main__":
 
     print("\n2. Downloading Reranker Model...")
     try:
-        get_reranker_model.cache_clear()
+        clear_reranker_model_cache()
         reranker = get_reranker_model()
         if isinstance(reranker, LexicalReranker):
             print("❌ ERROR: Download failed, fell back to Lexical.")

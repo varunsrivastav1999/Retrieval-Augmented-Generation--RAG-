@@ -196,14 +196,25 @@ def _run_raptor_background(tid: str) -> None:
         print(f"[RAPTOR] Background build failed: {e}")
 
 
-def ingestion_worker_loop(stop_event: threading.Event, poll_seconds: float = 5.0) -> None:
+def ingestion_worker_loop(stop_event: threading.Event, poll_seconds: float = 5.0, stale_timeout_seconds: int = 1800) -> None:
     """Background worker that processes queued ingestion jobs for any file type."""
     from app.rag.ingestion import ingest_file
 
     consecutive_empty = 0
     last_tenant = "default"
+    iterations_without_stale_check = 0
 
     while not stop_event.is_set():
+        # Periodic stale job recovery
+        iterations_without_stale_check += 1
+        if iterations_without_stale_check >= 60:
+            iterations_without_stale_check = 0
+            try:
+                recovered = mark_stale_running_jobs_queued(stale_timeout_seconds)
+                if recovered:
+                    print(f"[IngestWorker] Re-queued {recovered} stale ingestion jobs")
+            except Exception as exc:
+                print(f"[IngestWorker] Stale recovery check failed: {exc}")
         job = claim_next_ingestion_job()
         if not job:
             # Auto-trigger RAPTOR after queue stays empty for 15+ seconds
@@ -229,13 +240,34 @@ def ingestion_worker_loop(stop_event: threading.Event, poll_seconds: float = 5.0
                 extract_dir = os.path.join(os.path.dirname(source_path), f"extracted_{job_id}")
                 os.makedirs(extract_dir, exist_ok=True)
                 
-                # Unpack archive
+                total_extracted = 0
+                MAX_ARCHIVE_SIZE = 1024 * 1024 * 1024  # 1GB limit for zip bomb protection
+                
+                # Unpack archive with size limit
                 if source_path.endswith(".zip"):
                     with zipfile.ZipFile(source_path, 'r') as zip_ref:
-                        zip_ref.extractall(extract_dir)
+                        members = [m for m in zip_ref.namelist()
+                                  if os.path.splitext(m)[1].lower() in SUPPORTED_EXTENSIONS
+                                  and not os.path.basename(m).startswith('.')]
+                        for member in members:
+                            info = zip_ref.getinfo(member)
+                            total_extracted += info.file_size
+                            if total_extracted > MAX_ARCHIVE_SIZE:
+                                print(f"[Jobs] Archive extract aborted: exceeded {MAX_ARCHIVE_SIZE} bytes")
+                                break
+                            zip_ref.extract(member, extract_dir)
                 elif source_path.endswith((".tar", ".tar.gz", ".tgz")):
                     with tarfile.open(source_path, 'r:*') as tar_ref:
-                        tar_ref.extractall(extract_dir)
+                        members = [m for m in tar_ref.getmembers()
+                                  if m.isfile()
+                                  and os.path.splitext(m.name)[1].lower() in SUPPORTED_EXTENSIONS
+                                  and not os.path.basename(m.name).startswith('.')]
+                        for member in members:
+                            total_extracted += member.size
+                            if total_extracted > MAX_ARCHIVE_SIZE:
+                                print(f"[Jobs] Archive extract aborted: exceeded {MAX_ARCHIVE_SIZE} bytes")
+                                break
+                            tar_ref.extract(member, extract_dir)
                 
                 # Find all supported files inside
                 extracted_files = find_all_supported_files(extract_dir, include_scan=True)
@@ -243,6 +275,9 @@ def ingestion_worker_loop(stop_event: threading.Event, poll_seconds: float = 5.0
                 # Create jobs for them
                 if extracted_files:
                     create_ingestion_jobs(tenant_id, extracted_files, force_reindex=bool(job.get("force_reindex", False)))
+                
+                # Clean up extracted files
+                shutil.rmtree(extract_dir, ignore_errors=True)
                 
                 # Complete the archive job itself
                 complete_ingestion_job(job_id, chunks_total=len(extracted_files), chunks_inserted=len(extracted_files))
@@ -270,7 +305,7 @@ def start_ingestion_worker(
 
     thread = threading.Thread(
         target=ingestion_worker_loop,
-        args=(stop_event, poll_seconds),
+        args=(stop_event, poll_seconds, stale_timeout_seconds),
         name="rag-ingestion-worker",
         daemon=True,
     )

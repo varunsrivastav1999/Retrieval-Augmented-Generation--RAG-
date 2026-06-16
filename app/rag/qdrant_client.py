@@ -10,7 +10,9 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 def get_qdrant_client():
     return QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
-def init_qdrant_collections(dim: int = 1024):
+def init_qdrant_collections(dim: int = None):
+    if dim is None:
+        dim = int(os.getenv("RAG_EMBEDDING_DIM", "1024"))
     client = get_qdrant_client()
     collections = ["document_chunks", "image_chunks"]
     for col in collections:

@@ -116,7 +116,12 @@ class GraphDB:
         print(f"[GraphDB] Executing Cypher: {cypher}")
         try:
             with self.driver.session() as session:
-                result = session.run(cypher, tenant_id=tenant_id)
+                # Enforce tenant isolation: inject tenant_id filter into generated Cypher
+                if "WHERE" in cypher.upper():
+                    isolated = cypher.replace("WHERE", f"WHERE n.tenant_id = '{tenant_id}' AND")
+                else:
+                    isolated = cypher.rstrip().rstrip(";") + f" WHERE n.tenant_id = '{tenant_id}'"
+                result = session.run(isolated)
                 records = [record.data() for record in result]
                 if not records:
                     return ""

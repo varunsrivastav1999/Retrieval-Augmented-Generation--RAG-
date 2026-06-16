@@ -25,6 +25,7 @@ def _candidate_from_payload(point_id: str, payload: dict, distance: float) -> di
         "score": 0.0,
         "hybrid_score": 0.0,
         "dense_score": distance,
+        "file_type": payload.get("file_type", metadata.get("file_type", "unknown")),
         "metadata": {
             "tenant_id": payload.get("tenant_id"),
             "source": payload.get("doc_id"),
@@ -32,6 +33,7 @@ def _candidate_from_payload(point_id: str, payload: dict, distance: float) -> di
             "type": metadata.get("type", "text"),
             "page_num": metadata.get("page_num"),
             "embedding_model": metadata.get("embedding_model"),
+            "file_type": payload.get("file_type", metadata.get("file_type", "unknown")),
             "entities": metadata.get("entities", []),
         }
     }

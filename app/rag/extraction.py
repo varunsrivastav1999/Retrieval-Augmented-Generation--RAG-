@@ -98,6 +98,44 @@ def looks_like_extractable_page(text: str) -> bool:
     
     return match_count >= 4 or code_matches >= 5
 
+def _try_fix_truncated_json(text: str) -> Dict[str, Any]:
+    """Attempt to recover a truncated JSON object (model ran out of num_predict tokens)."""
+    if not text:
+        return {}
+    # Try closing dangling strings
+    fixed = text
+    # Count unclosed double quotes in the last line
+    lines = fixed.split('\n')
+    for i in range(len(lines) - 1, -1, -1):
+        line = lines[i]
+        # If odd number of double quotes, the string was cut off
+        if line.count('"') % 2 != 0:
+            lines[i] = line + '"'
+            break
+    fixed = '\n'.join(lines)
+    # Try to find the last complete outer JSON object
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+    # Find the last complete '}' that closes the top-level object
+    depth = 0
+    last_valid_end = -1
+    for i, ch in enumerate(fixed):
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                last_valid_end = i
+    if last_valid_end > 0:
+        try:
+            return json.loads(fixed[:last_valid_end + 1])
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
 def extract_structured_data_from_page(page_text: str) -> Dict[str, Any]:
     """
     Sends the raw page text to the LLM to extract perfectly structured JSON
@@ -105,6 +143,11 @@ def extract_structured_data_from_page(page_text: str) -> Dict[str, Any]:
     """
     if not page_text or not page_text.strip():
         return {}
+        
+    # Truncate input to avoid exceeding model context window
+    max_input_chars = 8000
+    if len(page_text) > max_input_chars:
+        page_text = page_text[:max_input_chars] + "\n...[truncated]"
         
     prompt = f"Raw OCR Text:\n{page_text}\n\nReturn the JSON object now."
     
@@ -115,41 +158,60 @@ def extract_structured_data_from_page(page_text: str) -> Dict[str, Any]:
         "stream": False,
         "options": {
             "temperature": 0.0,
-            "num_predict": 4096,
+            "num_predict": -1,  # -1 = unlimited (let context window decide)
             "num_gpu": 99,
         },
-        "format": "json" # Force JSON mode if supported by the model
+        "format": "json"  # Force JSON mode if supported by the model
     }
     
-    try:
-        response = requests.post(get_ollama_generate_url(), json=payload, timeout=120)
-        if response.status_code == 200:
-            result_text = response.json().get("response", "").strip()
-            
-            # Clean up markdown formatting if the model still includes it
-            if result_text.startswith("```json"):
-                result_text = result_text[7:]
-            if result_text.startswith("```"):
-                result_text = result_text[3:]
-            if result_text.endswith("```"):
-                result_text = result_text[:-3]
+    last_error = ""
+    for attempt in range(2):
+        try:
+            response = requests.post(get_ollama_generate_url(), json=payload, timeout=120)
+            if response.status_code == 200:
+                result_text = response.json().get("response", "").strip()
                 
-            result_text = result_text.strip()
-            
-            try:
-                parsed_data = json.loads(result_text)
-                if isinstance(parsed_data, dict):
-                    return parsed_data
-                return {}
-            except json.JSONDecodeError as je:
-                print(f"[Extraction] JSON Decode Error: {je}. Raw output: {result_text[:200]}...")
-                return {}
-        else:
-            print(f"[Extraction] Ollama API Error: {response.text}")
-            return {}
-    except Exception as e:
-        print(f"[Extraction] Error calling LLM: {e}")
-        return {}
+                # Clean up markdown formatting if the model still includes it
+                if result_text.startswith("```json"):
+                    result_text = result_text[7:]
+                if result_text.startswith("```"):
+                    result_text = result_text[3:]
+                if result_text.endswith("```"):
+                    result_text = result_text[:-3]
+                    
+                result_text = result_text.strip()
+                
+                if not result_text:
+                    last_error = "Empty response"
+                    continue
+                
+                try:
+                    parsed_data = json.loads(result_text)
+                    if isinstance(parsed_data, dict):
+                        return parsed_data
+                    last_error = "Response not a dict"
+                    continue
+                except json.JSONDecodeError as je:
+                    # Try to recover truncated JSON
+                    recovered = _try_fix_truncated_json(result_text)
+                    if recovered:
+                        print(f"[Extraction] Recovered truncated JSON ({len(recovered)} keys)")
+                        return recovered
+                    last_error = str(je)
+                    print(f"[Extraction] JSON Decode Error (attempt {attempt + 1}): {je}")
+                    if attempt == 0:
+                        print(f"[Extraction] Retrying with more tokens...")
+                        payload["options"]["num_predict"] = 8192
+                        continue
+            else:
+                last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                print(f"[Extraction] Ollama API Error (attempt {attempt + 1}): {last_error}")
+        except Exception as e:
+            last_error = str(e)
+            print(f"[Extraction] Error calling LLM (attempt {attempt + 1}): {e}")
+    
+    print(f"[Extraction] Failed after retries: {last_error}")
+    return {}
 
 def format_structured_data_for_embedding(root_obj: Dict[str, Any]) -> List[str]:
     """

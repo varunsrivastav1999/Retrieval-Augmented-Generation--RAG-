@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import requests
 import numpy as np
 from sqlalchemy.orm import Session
@@ -112,6 +113,7 @@ def build_raptor_tree(db: Session, tenant_id: str, max_levels: int = 3, n_cluste
     print(f"[RAPTOR] Starting tree generation for tenant {tenant_id}")
     _delete_previous_tree(db, tenant_id)
     try:
+        os.environ["NUMBA_DISABLE_CACHE"] = "1"
         import umap
         from sklearn.mixture import GaussianMixture
     except ImportError:
@@ -184,7 +186,7 @@ def build_raptor_tree(db: Session, tenant_id: str, max_levels: int = 3, n_cluste
                 )
                 db.add(new_chunk)
                 db.flush()
-                
+
                 points.append(
                     models.PointStruct(
                         id=new_chunk.id,
@@ -200,6 +202,7 @@ def build_raptor_tree(db: Session, tenant_id: str, max_levels: int = 3, n_cluste
                                 "level": level + 1,
                                 "tenant_id": tenant_id,
                                 "source": f"raptor_summary_lvl_{level+1}",
+                                "embedding_model": embedding_model_id,
                             }
                         }
                     )

@@ -338,8 +338,10 @@ def ingest_file(
             except Exception as e:
                 print(f"[Contextual Retrieval] Failed to generate context: {e}")
 
-        # force_reindex: delete all existing chunks for this document before re-ingesting
+        # force_reindex: clean Qdrant + PG before re-ingesting
         if force_reindex:
+            from app.rag.qdrant_client import delete_qdrant_points_by_source
+            delete_qdrant_points_by_source(tenant_id, [file_path])
             deleted = db.query(DocumentChunk).filter(
                 DocumentChunk.tenant_id == tenant_id,
                 DocumentChunk.doc_id == file_path,
@@ -409,7 +411,7 @@ def ingest_file(
                     continue
 
                 # Contextual Chunk Header: Prepend doc title, page, and Global Context
-                header = f"[{doc_title} | Page {page.page_num}]"
+                header = f"[{doc_title}, Page {page.page_num}]"
                 if doc_context_summary:
                     header += f"\n[GLOBAL CONTEXT: {doc_context_summary}]"
                 chunk_text = f"{header}\n{raw_text}"
@@ -485,7 +487,7 @@ def ingest_file(
                         img = Image.open(io.BytesIO(img_bytes))
                         vector = encode_image(img)
                         if vector:
-                            img_hash = hash_chunk(str(img_bytes[:100]))
+                            img_hash = hash_chunk(str(img_bytes))
                             
                             doc_metadata = {
                                 "page_num": page.page_num, 
@@ -609,7 +611,6 @@ def _process_chunk_batch(
         try:
             db.add(chunk_obj)
             db.flush()
-            db.commit()
 
             insert_qdrant_points(
                 "document_chunks",
@@ -628,6 +629,7 @@ def _process_chunk_batch(
                     )
                 ]
             )
+            db.commit()
             inserted += 1
         except IntegrityError:
             db.rollback()

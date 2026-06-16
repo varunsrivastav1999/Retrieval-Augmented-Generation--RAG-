@@ -11,6 +11,7 @@ import csv
 import io
 import os
 import re
+import shutil
 import subprocess
 import email
 from email import policy
@@ -111,6 +112,7 @@ CODE_EXTENSIONS = {".py", ".js", ".java", ".cpp", ".c", ".h", ".cs", ".go", ".rs
 EMAIL_EXTENSIONS = {".eml", ".msg"}
 URL_EXTENSIONS = {".url", ".webloc"}
 ARCHIVE_EXTENSIONS = {".zip", ".tar", ".gz", ".tgz", ".rar"}
+MAX_ARCHIVE_EXTRACT_SIZE = 1024 * 1024 * 1024  # 1GB limit for zip bomb protection
 
 SUPPORTED_EXTENSIONS = {
     ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv",
@@ -590,6 +592,7 @@ def _parse_xlsx(file_path: str) -> ParseResult:
     if not XLSX_AVAILABLE:
         return ParseResult(success=False, error="openpyxl not installed")
 
+    wb = None
     try:
         wb = load_workbook(file_path, read_only=True, data_only=True)
         pages = []
@@ -599,15 +602,13 @@ def _parse_xlsx(file_path: str) -> ParseResult:
             rows = []
             for row in ws.iter_rows(values_only=True):
                 cells = [str(cell).replace('\n', ' ').strip() if cell is not None else "" for cell in row]
-                if any(cells):  # Skip completely empty rows
+                if any(cells):
                     rows.append(" | ".join(cells))
 
             if not rows:
                 continue
 
-            # First row as header
             header = rows[0]
-            # Count columns from first data row
             col_count = len(rows[0].split(" | "))
             separator = " | ".join(["---"] * col_count)
             table_md = f"[EXCEL SHEET: {sheet_name}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
@@ -619,7 +620,6 @@ def _parse_xlsx(file_path: str) -> ParseResult:
                 content_type="table",
             ))
 
-        wb.close()
         return ParseResult(
             pages=pages,
             metadata={
@@ -631,6 +631,9 @@ def _parse_xlsx(file_path: str) -> ParseResult:
         )
     except Exception as e:
         return ParseResult(success=False, error=f"XLSX parse error: {e}")
+    finally:
+        if wb is not None:
+            wb.close()
 
 
 # ---------------------------------------------------------------------------
@@ -645,12 +648,14 @@ def _parse_pptx(file_path: str) -> ParseResult:
         prs = Presentation(file_path)
         pages = []
 
-        def _iter_shapes(shapes):
+        def _iter_shapes(shapes, _depth=0):
+            if _depth > 10:
+                return
             for shape in shapes:
                 yield shape
                 if shape.shape_type == 6:  # GROUP
                     try:
-                        yield from _iter_shapes(shape.shapes)
+                        yield from _iter_shapes(shape.shapes, _depth + 1)
                     except Exception:
                         pass
 
@@ -693,6 +698,16 @@ def _parse_pptx(file_path: str) -> ParseResult:
                             image_texts.append(f"[IMAGE OCR - Slide {slide_num}]\n{ocr_text}")
                     except Exception as e:
                         print(f"[Parser] PPTX image OCR failed slide {slide_num}: {e}")
+
+                # XML_RAW fallback for SmartArt, charts, embedded objects
+                if not shape.has_text_frame and not shape.has_table and shape.shape_type != 13:
+                    try:
+                        xml_raw = shape._element.xml
+                        text_matches = re.findall(r'<a:t[^>]*>([^<]+)</a:t>', xml_raw)
+                        if text_matches:
+                            text_parts.append("[SMARTART/CHART] " + " ".join(text_matches))
+                    except Exception:
+                        pass
 
             # Slide notes
             if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
@@ -853,6 +868,20 @@ def _parse_image(file_path: str) -> ParseResult:
 
     try:
         img = Image.open(file_path)
+
+        # Apply EXIF orientation before processing
+        try:
+            exif = img.getexif()
+            if exif:
+                orientation = exif.get(274)
+                if orientation == 3:
+                    img = img.rotate(180, expand=True)
+                elif orientation == 6:
+                    img = img.rotate(270, expand=True)
+                elif orientation == 8:
+                    img = img.rotate(90, expand=True)
+        except Exception:
+            pass
 
         # Pre-process for optimal OCR
         if img.mode != "L":
@@ -1169,6 +1198,81 @@ def _parse_url(file_path: str) -> ParseResult:
 
 
 # ---------------------------------------------------------------------------
+# Archive Parser (zip, tar, gz, tgz, rar)
+# ---------------------------------------------------------------------------
+def _parse_archive(file_path: str) -> ParseResult:
+    """Extract supported files from archives and parse each one."""
+    import zipfile, tarfile
+
+    pages = []
+    supported_files = []
+    extract_dir = None
+    total_extracted = 0
+
+    try:
+        extract_dir = file_path + "_extracted"
+        os.makedirs(extract_dir, exist_ok=True)
+
+        if file_path.endswith('.zip'):
+            with zipfile.ZipFile(file_path, 'r') as zf:
+                members = [m for m in zf.namelist()
+                          if os.path.splitext(m)[1].lower() in SUPPORTED_EXTENSIONS
+                          and not os.path.basename(m).startswith('.')]
+                for member in members:
+                    info = zf.getinfo(member)
+                    total_extracted += info.file_size
+                    if total_extracted > MAX_ARCHIVE_EXTRACT_SIZE:
+                        print(f"[Parser] Archive extract aborted: exceeded {MAX_ARCHIVE_EXTRACT_SIZE} bytes")
+                        break
+                    zf.extract(member, extract_dir)
+        elif file_path.endswith(('.tar', '.tar.gz', '.tgz')):
+            with tarfile.open(file_path, 'r:*') as tf:
+                members = [m for m in tf.getmembers()
+                          if m.isfile()
+                          and os.path.splitext(m.name)[1].lower() in SUPPORTED_EXTENSIONS
+                          and not os.path.basename(m.name).startswith('.')]
+                for member in members:
+                    total_extracted += member.size
+                    if total_extracted > MAX_ARCHIVE_EXTRACT_SIZE:
+                        print(f"[Parser] Archive extract aborted: exceeded {MAX_ARCHIVE_EXTRACT_SIZE} bytes")
+                        break
+                    tf.extract(member, extract_dir)
+
+        for root, dirs, files in os.walk(extract_dir):
+            for fname in files:
+                fpath = os.path.join(root, fname)
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in SUPPORTED_EXTENSIONS and ext not in ARCHIVE_EXTENSIONS:
+                    supported_files.append(fpath)
+
+        if not supported_files:
+            return ParseResult(
+                pages=[PageContent(page_num=1, text="(Archive contained no supported files)")],
+                metadata={"format": "archive", "page_count": 1, "source": file_path},
+            )
+
+        for fpath in supported_files:
+            result = parse_file(fpath)
+            if result.success:
+                pages.extend(result.pages)
+            else:
+                print(f"[Parser] Archive sub-file failed: {fpath}: {result.error}")
+
+        return ParseResult(
+            pages=pages,
+            metadata={
+                "format": "archive",
+                "page_count": len(pages),
+                "source": file_path,
+                "contained_files": len(supported_files),
+            },
+        )
+    finally:
+        if extract_dir and os.path.isdir(extract_dir):
+            shutil.rmtree(extract_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Main Entry Point — Universal Parser
 # ---------------------------------------------------------------------------
 PARSER_REGISTRY = {
@@ -1221,6 +1325,10 @@ for ext in EMAIL_EXTENSIONS:
 # Add URL extensions dynamically
 for ext in URL_EXTENSIONS:
     PARSER_REGISTRY[ext] = _parse_url
+
+# Add archive extensions dynamically
+for ext in ARCHIVE_EXTENSIONS:
+    PARSER_REGISTRY[ext] = _parse_archive
 
 
 def parse_file(file_path: str) -> ParseResult:
