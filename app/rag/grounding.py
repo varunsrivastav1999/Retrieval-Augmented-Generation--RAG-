@@ -24,10 +24,10 @@ from app.rag.model_loader import cosine_similarity, encode_text, encode_texts
 # Configuration
 # ---------------------------------------------------------------------------
 # Minimum grounding score to proceed with LLM generation
-GROUNDING_THRESHOLD = 0.25
+GROUNDING_THRESHOLD = 0.10
 
 # Minimum confidence to return an answer
-CONFIDENCE_THRESHOLD = 0.20
+CONFIDENCE_THRESHOLD = 0.10
 
 # Keywords that lower the threshold (very short/vague queries)
 VAGUE_QUERY_WORDS = {"what", "how", "why", "when", "where", "which", "who", "tell", "explain", "describe", "show"}
@@ -239,15 +239,15 @@ def build_strict_grounding_prompt(
     if broad_query:
         return (
             "═══════════════════════════════════════════════════════════\n"
-            "  SYSTEM: Technical Document Analyst\n"
-            "  MODE: DOCUMENT ANALYSIS — CITED GROUNDING\n"
+            "  SYSTEM: Expert Technical Analyst\n"
+            "  MODE: AGGRESSIVE DOCUMENT ANALYSIS & SYNTHESIS\n"
             "═══════════════════════════════════════════════════════════\n\n"
             "RULES:\n"
-            "1. You have NO general knowledge. ONLY use the DATABASE RECORDS below.\n"
-            "2. Analyze and synthesize information ACROSS multiple records.\n"
-            "3. Group related information from the same document together.\n"
+            "1. You are an expert technical assistant. Provide a highly confident, accurate, and user-perspective answer.\n"
+            "2. Analyze and synthesize information ACROSS multiple records aggressively to find the answer.\n"
+            "3. If the answer is implied or scattered across records, draw logical conclusions and state them confidently.\n"
             "4. Preserve all markdown formatting, tables, lists, and images exactly as they appear in the records.\n"
-            "5. Do not guess or make up information. Use ONLY the provided records.\n"
+            "5. Group related information from the same document together.\n"
             f"{topic_line}\n"
             "-----------------------------------------------------------\n"
             f"DATABASE RECORDS:\n{context_text}\n"
@@ -258,21 +258,19 @@ def build_strict_grounding_prompt(
 
     return (
         "═══════════════════════════════════════════════════════════\n"
-        "  SYSTEM: Technical Document Assistant\n"
-        "  MODE: PRECISE ANSWER GENERATION — CITED\n"
+        "  SYSTEM: Expert Technical Assistant\n"
+        "  MODE: AGGRESSIVE & CONFIDENT ANSWER GENERATION\n"
         "═══════════════════════════════════════════════════════════\n\n"
         "RULES:\n"
-        "1. You have NO general knowledge. ONLY use the DATABASE RECORDS below.\n"
-        "2. Provide a clear, accurate, and concise answer based ONLY on the records.\n"
-        "3. DO NOT repeat the same information multiple times, even if it appears in multiple records.\n"
+        "1. You are an expert technical assistant. Provide a highly confident, accurate, and user-perspective answer.\n"
+        "2. Be aggressive in extracting the answer from the records. If the answer is implied by the context, state it confidently.\n"
+        "3. DO NOT repeat the same information multiple times.\n"
         "4. Preserve all markdown formatting, tables, lists, and images exactly as they appear.\n"
-        "5. Do not guess or make up information. Use ONLY the provided records.\n"
-        "6. TABLE LOOKUP RULE: When the question asks about a specific model number, part number,\n"
+        "5. TABLE LOOKUP RULE: When the question asks about a specific model number, part number,\n"
         "   or product code (e.g., SNC2448L1125), find the EXACT row in the table that contains\n"
         "   that identifier. Then read the value from the requested column by matching the\n"
         "   column headers. Do NOT use values from different rows.\n"
-        "7. If the exact model number is not found in any record, say so explicitly.\n"
-        "8. DO NOT start your answer with phrases like 'Based on the provided records'. Start directly.\n"
+        "6. DO NOT start your answer with phrases like 'Based on the provided records'. Start directly and confidently.\n"
         f"{topic_line}\n"
         "-----------------------------------------------------------\n"
         f"DATABASE RECORDS:\n{context_text}\n"
