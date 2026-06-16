@@ -72,7 +72,7 @@ services:
       - ./.envs/.production/.neo4j
     ports:
       - "1000:1000"
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "1000", "--workers", "2"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "1000", "--workers", "1"]
     networks:
       rag_network:
         ipv4_address: 172.28.0.10
@@ -86,7 +86,7 @@ services:
       resources:
         limits:
           cpus: "4"
-          memory: 8G
+          memory: 12G
         reservations:
           cpus: "2"
           memory: 4G

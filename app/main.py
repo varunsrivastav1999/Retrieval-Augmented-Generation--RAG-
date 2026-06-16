@@ -285,9 +285,11 @@ def on_startup():
         if PRELOAD_MODELS_ON_STARTUP:
             print("[Plug&Play] Ensuring AI models are ready in background...")
             try:
-                from app.rag.model_loader import get_embedding_model, get_reranker_model
+                from app.rag.model_loader import get_embedding_model, get_reranker_model, get_clip_model, get_spacy_model
                 get_embedding_model()
                 get_reranker_model()
+                get_clip_model()
+                get_spacy_model()
                 
                 # Auto-Create/Update Custom Ollama Brain
                 import httpx
