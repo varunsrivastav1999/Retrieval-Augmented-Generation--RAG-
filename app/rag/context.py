@@ -2,7 +2,7 @@ import os
 from app.database import DocumentChunk
 from app.rag.model_loader import cosine_similarity, encode_text, encode_texts, get_embedding_model_id
 
-ENABLE_CONTEXT_EXPANSION = os.getenv("RAG_ENABLE_CONTEXT_EXPANSION", "false").lower() in {"1", "true", "yes", "on"}
+ENABLE_CONTEXT_EXPANSION = os.getenv("RAG_ENABLE_CONTEXT_EXPANSION", "true").lower() in {"1", "true", "yes", "on"}
 
 def apply_mmr(query: str, chunks: list, diversity: float = 0.5) -> list:
     """
@@ -78,13 +78,13 @@ def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
     mmr_filtered = apply_mmr(query, reranked_chunks)
     
     # 2. Context Window Expansion (Neighboring chunks)
-    # For the top 3 most relevant chunks, fetch their immediate neighbors
+    # Fetch their immediate neighbors (+/- 5 for broad coverage)
     final_context = []
     expanded_ids = set()
     
     for i, chunk in enumerate(mmr_filtered):
-        # Only expand top 3 chunks and only if db is available
-        if ENABLE_CONTEXT_EXPANSION and db is not None and i < 3:
+        # Only expand top 5 chunks and only if db is available
+        if ENABLE_CONTEXT_EXPANSION and db is not None and i < 5:
             metadata = chunk.get("metadata", {})
             doc_id = metadata.get("source")
             section = metadata.get("section")
@@ -99,7 +99,8 @@ def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
                             DocumentChunk.tenant_id == tenant_id,
                             DocumentChunk.embedding_model == embedding_model,
                             DocumentChunk.doc_id == doc_id,
-                            DocumentChunk.section.in_([section - 1, section + 1]),
+                            DocumentChunk.section >= section - 5,
+                            DocumentChunk.section <= section + 5,
                             DocumentChunk.id.notin_(expanded_ids)
                         )
                         .order_by(DocumentChunk.section)

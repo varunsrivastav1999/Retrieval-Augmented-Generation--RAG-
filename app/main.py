@@ -465,12 +465,24 @@ def _queue_file_ingestion(
     unique_files = sorted(set(files))
 
     if force_reindex and unique_files:
+        from app.rag.qdrant_client import delete_qdrant_points
+        for f in unique_files:
+            delete_qdrant_points(tenant_id, f)
         db.query(DocumentChunk).filter(
             DocumentChunk.tenant_id == tenant_id,
             DocumentChunk.embedding_model == embedding_model,
             DocumentChunk.doc_id.in_(unique_files),
         ).delete(synchronize_session=False)
         db.commit()
+        if redis_client:
+            try:
+                keys_to_delete = redis_client.keys(f"semantic_index:{tenant_id}:*")
+                for k in keys_to_delete:
+                    # also delete the individual cached query keys if needed, but deleting the index forces a miss anyway
+                    redis_client.delete(k)
+                print(f"[Cache] Cleared semantic cache indices for tenant {tenant_id}")
+            except Exception as e:
+                print(f"[Cache] Failed to clear semantic cache: {e}")
 
     indexed_sources = {
         row[0]
@@ -1136,9 +1148,9 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 "stream": True,
                 "options": {
                     "num_predict": OLLAMA_NUM_PREDICT,
+                    "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "16384")),
                     "temperature": 0.0,
                     "num_gpu": 99,       # Force 100% of layers to GPU compute
-                    "num_ctx": 4096,     # Explicitly set context window length
                 }
             }
             answer_acc = ""

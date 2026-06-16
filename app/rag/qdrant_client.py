@@ -29,3 +29,23 @@ def insert_qdrant_points(collection_name: str, points: list):
         collection_name=collection_name,
         points=points
     )
+
+def delete_qdrant_points(tenant_id: str, doc_id: str):
+    """Deletes vectors from Qdrant by tenant_id and doc_id for both collections."""
+    client = get_qdrant_client()
+    for col in ["document_chunks", "image_chunks"]:
+        try:
+            client.delete(
+                collection_name=col,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id)),
+                            models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id)),
+                        ]
+                    )
+                )
+            )
+            print(f"[Qdrant] Deleted stale points for {doc_id} in {col}")
+        except Exception as e:
+            print(f"[Qdrant] Failed to delete points in {col} for {doc_id}: {e}")

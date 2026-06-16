@@ -431,44 +431,53 @@ def _parse_docx(file_path: str) -> ParseResult:
         current_image_texts = []
         page_num = 1
 
-        # Extract paragraphs
-        for para in doc.paragraphs:
-            text = para.text.strip()
-            text = _enrich_mcq_text(text)
-            if text:
-                # Detect page breaks (approximate)
-                if para.paragraph_format.page_break_before:
-                    if current_text_parts or current_tables:
-                        pages.append(PageContent(
-                            page_num=page_num,
-                            text="\n".join(current_text_parts),
-                            tables=current_tables,
-                            image_texts=current_image_texts,
-                        ))
-                        page_num += 1
-                        current_text_parts = []
-                        current_tables = []
-                        current_image_texts = []
-
-                # Preserve heading structure
-                if para.style and para.style.name and para.style.name.startswith("Heading"):
-                    level = para.style.name.replace("Heading", "").strip()
-                    prefix = "#" * (int(level) if level.isdigit() else 1)
-                    current_text_parts.append(f"{prefix} {text}")
-                else:
-                    current_text_parts.append(text)
-
-        # Extract tables
-        for table_idx, table in enumerate(doc.tables):
-            rows = []
-            for row in table.rows:
-                cells = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
-                rows.append(" | ".join(cells))
-            if rows:
-                header = rows[0]
-                separator = " | ".join(["---"] * len(table.rows[0].cells))
-                table_md = f"[TABLE {table_idx + 1}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
-                current_tables.append(table_md.strip())
+        table_idx = 0
+        try:
+            from docx.oxml.table import CT_Tbl
+            from docx.oxml.text.paragraph import CT_P
+            from docx.text.paragraph import Paragraph
+            from docx.table import Table
+            
+            for child in doc.element.body:
+                if isinstance(child, CT_P):
+                    para = Paragraph(child, doc)
+                    text = para.text.strip()
+                    text = _enrich_mcq_text(text)
+                    if text:
+                        if para.paragraph_format.page_break_before:
+                            if current_text_parts or current_tables:
+                                pages.append(PageContent(
+                                    page_num=page_num,
+                                    text="\n".join(current_text_parts),
+                                    tables=current_tables,
+                                    image_texts=current_image_texts,
+                                ))
+                                page_num += 1
+                                current_text_parts = []
+                                current_tables = []
+                                current_image_texts = []
+                        if para.style and para.style.name and para.style.name.startswith("Heading"):
+                            level = para.style.name.replace("Heading", "").strip()
+                            prefix = "#" * (int(level) if level.isdigit() else 1)
+                            current_text_parts.append(f"{prefix} {text}")
+                        else:
+                            current_text_parts.append(text)
+                            
+                elif isinstance(child, CT_Tbl):
+                    table = Table(child, doc)
+                    table_idx += 1
+                    rows = []
+                    for row in table.rows:
+                        cells = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
+                        rows.append(" | ".join(cells))
+                    if rows:
+                        header = rows[0]
+                        separator = " | ".join(["---"] * len(table.rows[0].cells))
+                        table_md = f"[TABLE {table_idx}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
+                        current_tables.append(table_md.strip())
+        except ImportError:
+            # Fallback if internals change
+            pass
 
         # Extract images via OCR
         if OCR_AVAILABLE:
