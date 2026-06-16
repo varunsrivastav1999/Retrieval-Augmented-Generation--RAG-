@@ -1124,8 +1124,9 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             # Release DB transaction before streaming to prevent EOF errors
             db.commit()
             def stream_extractive():
+                latency = int((time.time() - start_time) * 1000)
                 yield f"data: {json.dumps({'token': answer})}\n\n"
-                yield f"data: {json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency})}\n\n"
             return StreamingResponse(stream_extractive(), media_type="text/event-stream")
             
         return response_data
@@ -1190,8 +1191,9 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             
             # Verification and Caching after generation
             verification = verify_answer_grounding(answer_acc, final_context)
+            latency_ms = int((time.time() - start_time) * 1000)
             print(f"[API: OUT] Response: {answer_acc}")
-            yield f"data: {json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency_ms})}\n\n"
             
             try:
                 set_cached_response(
