@@ -108,81 +108,10 @@ def _execute_best_effort(conn, statement: str):
 
 
 def _run_schema_migrations():
-    with engine.connect() as conn:
-        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS tenant_id varchar"))
-        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding_model varchar"))
-        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS created_at timestamp"))
-        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS file_type varchar"))
-        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS raptor_level integer DEFAULT 0"))
-        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS parent_chunk_id INTEGER"))
-        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS confidence_score FLOAT"))
-        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS image_embedding vector(768)"))
-        conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS quantized_embedding text"))
-        _execute_best_effort(
-            conn,
-            "CREATE INDEX IF NOT EXISTS ix_document_chunks_image_hnsw ON document_chunks USING hnsw (image_embedding vector_cosine_ops)"
-        )
-        conn.execute(text("ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS force_reindex boolean"))
-        conn.execute(text("ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS file_type varchar"))
-        conn.execute(text("ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS progress_pct float"))
-        conn.execute(text("UPDATE ingestion_jobs SET force_reindex = false WHERE force_reindex IS NULL"))
-        conn.execute(text("ALTER TABLE ingestion_jobs ALTER COLUMN force_reindex SET NOT NULL"))
-        conn.execute(text("UPDATE document_chunks SET tenant_id = 'default' WHERE tenant_id IS NULL"))
-        conn.execute(
-            text(
-                "UPDATE document_chunks "
-                "SET embedding_model = :model "
-                "WHERE embedding_model IS NULL"
-            ),
-            {"model": LEGACY_EMBEDDING_MODEL},
-        )
-        conn.execute(text("UPDATE document_chunks SET created_at = now() WHERE created_at IS NULL"))
-        conn.execute(text("UPDATE document_chunks SET file_type = 'pdf' WHERE file_type IS NULL"))
-        conn.execute(text("ALTER TABLE document_chunks ALTER COLUMN tenant_id SET NOT NULL"))
-        conn.execute(text("ALTER TABLE document_chunks ALTER COLUMN embedding_model SET NOT NULL"))
-        conn.execute(text("ALTER TABLE document_chunks ALTER COLUMN created_at SET NOT NULL"))
-        conn.execute(text("ALTER TABLE document_chunks DROP CONSTRAINT IF EXISTS document_chunks_chunk_hash_key"))
-        conn.execute(text("DROP INDEX IF EXISTS ix_document_chunks_chunk_hash"))
-        conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS ix_document_chunks_chunk_hash "
-                "ON document_chunks (chunk_hash)"
-            )
-        )
-        conn.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_document_chunk_scope "
-                "ON document_chunks (tenant_id, doc_id, chunk_hash, embedding_model)"
-            )
-        )
-        conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS ix_document_chunks_tenant_model "
-                "ON document_chunks (tenant_id, embedding_model)"
-            )
-        )
-        conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS ix_document_chunks_file_type "
-                "ON document_chunks (file_type)"
-            )
-        )
-        conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS ix_document_chunks_parent_chunk "
-                "ON document_chunks (parent_chunk_id)"
-            )
-        )
-        conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS ix_ingestion_jobs_status_created_at "
-                "ON ingestion_jobs (status, created_at)"
-            )
-        )
-        conn.commit()
+    # SQLite schema updates should be done via alembic or fresh db
+    # We rely on Base.metadata.create_all for initial setup
+    pass
 
-        # SQLite doesn't support pg_trgm or vector indexes, so we skip these operations.
-        pass
 
 def get_db():
     db = SessionLocal()
