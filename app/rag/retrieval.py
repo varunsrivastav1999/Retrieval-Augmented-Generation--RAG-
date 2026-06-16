@@ -77,12 +77,17 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
     candidate_limit = max(top_k * 8, 100)
     candidates = {}
 
-    # Qdrant filters
+    # Qdrant filters: always scope by tenant AND embedding model to prevent
+    # mixing vectors from different model versions (e.g., 384-dim vs 1024-dim)
     must_conditions = [
         models.FieldCondition(
             key="tenant_id",
             match=models.MatchValue(value=tenant_id)
-        )
+        ),
+        models.FieldCondition(
+            key="metadata.embedding_model",
+            match=models.MatchValue(value=get_embedding_model_id())
+        ),
     ]
     
     if metadata_filters:

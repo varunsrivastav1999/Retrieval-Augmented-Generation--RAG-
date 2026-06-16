@@ -494,68 +494,62 @@ def flare_mid_generation_retrieval(
     original_query: str,
     existing_context: List[Dict],
     min_sentence_len: int = 30,
+    is_full_answer: bool = False,
 ) -> Optional[str]:
     """
-    FLARE mid-generation: extract claims from partial answer and generate
-    a targeted search query for ungrounded claims.
+    FLARE mid-generation: extract claims from partial/generated answer and
+    generate a targeted search query for ungrounded claims.
+
+    In streaming mode (is_full_answer=False): checks only the last sentence.
+    In full-answer mode (is_full_answer=True): checks ALL sentences for safety.
 
     Returns a search query string if re-retrieval is needed, or None if
     the partial answer is sufficiently grounded in existing context.
-
-    Algorithm:
-    1. Split partial_answer into sentences
-    2. For each sentence, check if key terms appear in existing context
-    3. If a sentence has < 50% term overlap with context, extract missing terms
-    4. Generate a targeted search query from the missing terms
     """
     if not partial_answer or len(partial_answer) < min_sentence_len:
         return None
 
-    import re
-    # Split into sentences
     sentences = re.split(r'(?<=[.!?])\s+', partial_answer)
     if not sentences:
         return None
 
-    # Build context text for overlap checking
     context_text = " ".join(
         c.get("text", "") for c in (existing_context or [])
     ).lower()
 
-    # Check the latest sentence (most recent generation)
-    latest = sentences[-1].strip()
-    if len(latest) < min_sentence_len:
-        return None
+    # Determine which sentences to check
+    if is_full_answer:
+        candidates = sentences
+    else:
+        candidates = [sentences[-1].strip()]
 
-    # Extract significant terms from the latest sentence
-    terms = set(re.findall(r'[A-Za-z][A-Za-z0-9_-]{3,}', latest.lower()))
-    # Remove common words
     stopwords = {"this", "that", "with", "from", "have", "been", "will",
                  "would", "could", "should", "their", "there", "which",
                  "what", "when", "where", "how", "does", "based", "also",
-                 "used", "using", "such", "each", "than", "then", "very"}
-    terms -= stopwords
+                 "used", "using", "such", "each", "than", "then", "very",
+                 "more", "most", "some", "just", "only"}
 
-    if not terms:
-        return None
+    for sentence in candidates:
+        sentence = sentence.strip()
+        if len(sentence) < min_sentence_len:
+            continue
 
-    # Count overlap with existing context
-    matched = sum(1 for t in terms if t in context_text)
-    overlap_ratio = matched / len(terms)
+        terms = set(re.findall(r'[A-Za-z0-9][A-Za-z0-9_-]{2,}', sentence.lower()))
+        terms -= stopwords
+        if not terms:
+            continue
 
-    # If overlap is below 40%, this sentence may be hallucinating
-    if overlap_ratio >= 0.4:
-        return None
+        # Word-boundary matching to avoid false positives
+        matched = sum(1 for t in terms if re.search(r'\b' + re.escape(t) + r'\b', context_text))
+        overlap_ratio = matched / len(terms)
 
-    # Extract missing terms (not found in context)
-    missing = [t for t in terms if t not in context_text]
-    if not missing:
-        return None
+        if overlap_ratio < 0.4:
+            missing = [t for t in terms if not re.search(r'\b' + re.escape(t) + r'\b', context_text)]
+            if missing:
+                flare_query = f"{original_query} {' '.join(missing[:5])}"
+                print(f"[FLARE] Triggered. Overlap: {overlap_ratio:.0%} "
+                      f"Missing terms: {missing[:5]}")
+                return flare_query
 
-    # Build targeted search query from original question + missing terms
-    flare_query = f"{original_query} {' '.join(missing[:5])}"
-    print(f"[FLARE] Mid-gen re-retrieval triggered. Overlap: {overlap_ratio:.0%} "
-          f"Missing terms: {missing[:5]}")
-    print(f"[FLARE] FLARE query: '{flare_query}'")
-    return flare_query
+    return None
 

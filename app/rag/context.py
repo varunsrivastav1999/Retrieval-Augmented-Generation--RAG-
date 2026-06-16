@@ -97,7 +97,7 @@ def assemble_context(query: str, reranked_chunks: list, db=None, broad_query: bo
             
             if doc_id and section is not None:
                 tenant_id = metadata.get("tenant_id", "default")
-                embedding_model = get_embedding_model_id()
+                embedding_model = metadata.get("embedding_model", get_embedding_model_id())
                 try:
                     neighbors = (
                         db.query(DocumentChunk)
@@ -209,6 +209,7 @@ def _candidate_from_chunk(chunk) -> dict:
             "tenant_id": chunk.tenant_id,
             "type": metadata.get("type", "text"),
             "file_type": metadata.get("file_type", chunk.file_type),
+            "embedding_model": chunk.embedding_model,
             "entities": metadata.get("entities", []),
         },
         "quantized_embedding": chunk.quantized_embedding if hasattr(chunk, "quantized_embedding") else None,

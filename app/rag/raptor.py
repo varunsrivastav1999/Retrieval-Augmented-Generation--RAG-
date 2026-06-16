@@ -45,8 +45,10 @@ def generate_cluster_summary(texts: list[str], retries: int = 2) -> str:
         combined_text = combined_text[:100000]
         
     prompt = f"""
-    You are an expert summarizer. Synthesize the following texts into a comprehensive, high-level summary.
-    Extract the key themes, relationships, and overarching concepts.
+    You are a faithful summarizer. Synthesize ONLY the information provided below.
+    Do NOT add any external knowledge, examples, or explanations.
+    Preserve all specific numbers, part numbers, and technical terms exactly as stated.
+    Extract the key themes, relationships, and overarching concepts found in the texts.
     
     TEXTS:
     {combined_text}

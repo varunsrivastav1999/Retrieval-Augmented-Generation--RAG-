@@ -554,7 +554,6 @@ def _is_broad_query(query: str) -> bool:
         " summarize",
         " summary",
         " overview",
-        " response",
     ]
     return any(phrase in normalized for phrase in broad_phrases)
 
@@ -894,6 +893,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     embedding_model = get_embedding_model_id()
     broad_query = _is_broad_query(request.query)
     effective_top_k = request.top_k
+    original_top_k = effective_top_k
     if broad_query:
         effective_top_k = min(MAX_TOP_K, max(effective_top_k, BROAD_QUERY_TOP_K))
 
@@ -918,15 +918,18 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         is_analysis = bool(re.search(
             r"(?:compare|contrast|difference|analysis|analyze|predict|trend|pattern|"
             r"relationship|correlation|impact|effect|cause|explain|why\s+|"
-            r"how\s+(?:does|do|can|would)|summarize|overview|troubleshoot|diagnos|"
-            r"list\s+all|every|all\s+the)", q_lower
+            r"how\s+(?:does|do|can|would|to|is|are)|summarize|overview|troubleshoot|"
+            r"diagnos(?:e|is|tic)|list\s+all|\ball\s+the\b|"
+            r"\bevery\b|\beach\b)", q_lower
         ))
         if is_analysis:
             print("[Auto] Complex analysis → full LLM pipeline")
         else:
             is_simple = (
-                bool(re.search(r"(?:^what\s+is|^who\s+is|^when\s+|^where\s+|^which\s+|"
-                               r"^how\s+to|^define\s+|^meaning\s+|^list\s+|^show\s+)", q_lower))
+                bool(re.search(r"(?:(?:^|\s)what\s+is|(?:^|\s)who\s+is|(?:^|\s)when\s+|"
+                               r"(?:^|\s)where\s+|(?:^|\s)which\s+|"
+                               r"(?:^|\s)how\s+to|(?:^|\s)define\s+|(?:^|\s)meaning\s+|"
+                               r"(?:^|\s)list\s+|(?:^|\s)show\s+)", q_lower))
                 or (len(q_lower.split()) <= 5)
             )
             if is_simple:
@@ -961,6 +964,9 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         "parent": request.parent,
         "child": request.child,
         "search_query": search_query,
+        "fast_path": request.fast_path,
+        "extractive": request.extractive,
+        "auto": request.auto,
     }
     
     # Layer 11: Semantic Query Cache
@@ -1105,7 +1111,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                     retry_count=agent.retry_count,
                 )
                 # Expand the search pool on retries (more chunks)
-                effective_top_k = min(effective_top_k * agent.retry_count, 48)
+                effective_top_k = min(original_top_k * agent.retry_count, 48)
                 agent.current_state = "retrieve"
 
         final_context = agent.final_context
@@ -1307,10 +1313,11 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 final_context = enriched_context
                 sources = _context_sources(enriched_context)
             
-            # Verification and Caching after generation
-            verification = verify_answer_grounding(answer_acc, final_context)
+            # Strip FLARE notes from answer before verification
+            clean_answer = re.sub(r'\[FLARE re-retrieved:.*?\]', '', answer_acc).strip()
+            verification = verify_answer_grounding(clean_answer, final_context)
             latency_ms = int((time.time() - start_time) * 1000)
-            print(f"[API: OUT] Response: {answer_acc}")
+            print(f"[API: OUT] Response: {clean_answer}")
             yield f"data: {json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency_ms})}\n\n"
             
             try:
@@ -1339,7 +1346,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 "num_predict": OLLAMA_NUM_PREDICT,
                 "temperature": 0.0,
                 "num_gpu": 99,
-                "num_ctx": 4096,
+                "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "8192")),
             }
         }
         response = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT_SECONDS)
@@ -1351,6 +1358,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 partial_answer=answer,
                 original_query=search_query,
                 existing_context=final_context,
+                is_full_answer=True,
             )
             if flare_query and flare_query.strip():
                 print(f"[FLARE] Post-generation re-retrieval for: '{flare_query}'")
@@ -1384,19 +1392,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 final_context = enriched_context
                 sources = _context_sources(enriched_context)
             
-            # Post-process strip
-            lower = answer.lower()
-            prefixes = [
-                "based on the provided context,", "based on the provided manual,", 
-                "based on the context,", "according to the document,", "according to the documents,",
-                "the context states that", "from the provided context,"
-            ]
-            for p in prefixes:
-                if lower.startswith(p):
-                    answer = answer[len(p):].strip()
-                    if answer:
-                        answer = answer[0].upper() + answer[1:]
-                    break
+            # Do NOT strip answer prefixes — they indicate uncertainty
+            # and removing them hides the model's hedging from the user.
         else:
             answer = f"Ollama Error: {response.text}"
     except Exception as e:
