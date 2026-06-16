@@ -1,65 +1,84 @@
 from app.rag.model_loader import get_reranker_model
+import re
+
+
+# Rare marker used to embed original index in documents for collision-free
+# reranker round-trip. Choose something unlikely in real text but safe for
+# BERT tokenizers (which break on spaces/punctuation but keep word chars).
+_IDX_MARKER = "__IDX_"
+
 
 def rerank_results(query: str, retrieved_chunks: list, top_n: int = 5) -> list:
     """
     Layer 4/ColBERT: Reranking
     ColBERT Late-Interaction or Cross-encoder reranker.
     Input: top-20 fused results -> Output: top-N ranked by relevance.
-    
-    FIXED: Uses index-based matching instead of fragile text equality
-    for ColBERT results mapping.
+
+    Uses index-embedded document markers to prevent content-collision bugs
+    when two chunks share the same prefix text.
     """
     if not retrieved_chunks:
         return []
     
     print(f"[Reranker] Reranking {len(retrieved_chunks)} results for query: '{query[:80]}'")
     model = get_reranker_model()
-    docs = [chunk.get("text", "") or "" for chunk in retrieved_chunks]
-    
-    # RAGatouille (ColBERT) has a .rerank() method, CrossEncoder has .predict()
+    raw_docs = [chunk.get("text", "") or "" for chunk in retrieved_chunks]
+
+    # Embed original index in document text for collision-free round-trip.
+    # Use a marker that survives BERT/ColBERT tokenization (word chars only).
+    indexed_docs = [f"{_IDX_MARKER}{idx}{_IDX_MARKER}{doc}" for idx, doc in enumerate(raw_docs)]
+
     if hasattr(model, "rerank"):
-        # ColBERT reranking
         try:
-            results = model.rerank(query=query, documents=docs, k=top_n)
+            results = model.rerank(query=query, documents=indexed_docs, k=top_n)
         except Exception as e:
             print(f"[Reranker] ColBERT rerank failed: {e}, falling back to original order")
             for chunk in retrieved_chunks[:top_n]:
                 chunk["rerank_score"] = chunk.get("hybrid_score", chunk.get("score", 0.0))
             return retrieved_chunks[:top_n]
-        
-        # Build a lookup from content -> original chunk (using index-based matching)
-        # Create a map of doc text to list of chunk indices to handle duplicates
-        doc_to_indices = {}
-        for idx, doc in enumerate(docs):
-            doc_key = doc[:500]  # Use first 500 chars as key for matching
-            if doc_key not in doc_to_indices:
-                doc_to_indices[doc_key] = []
-            doc_to_indices[doc_key].append(idx)
-        
+
         ranked_chunks = []
         used_indices = set()
         for res in results:
             content = res.get("content", "")
-            content_key = content[:500]
-            indices = doc_to_indices.get(content_key, [])
+            # Try marker-based extraction first (fast path)
+            match = re.search(re.escape(_IDX_MARKER) + r'(\d+)' + re.escape(_IDX_MARKER), content)
+            if match:
+                orig_idx = int(match.group(1))
+                if orig_idx < len(retrieved_chunks) and orig_idx not in used_indices:
+                    chunk = retrieved_chunks[orig_idx]
+                    chunk["rerank_score"] = float(res.get("score", 0.0))
+                    ranked_chunks.append(chunk)
+                    used_indices.add(orig_idx)
+                    continue
             
-            matched_idx = None
-            for idx in indices:
-                if idx not in used_indices:
-                    matched_idx = idx
+            # Marker lost (e.g., tokenizer stripped it): fall back to content matching
+            # Match by exact content against unused chunks
+            for idx, doc in enumerate(raw_docs):
+                if idx in used_indices:
+                    continue
+                if doc and doc == content:
+                    chunk = retrieved_chunks[idx]
+                    chunk["rerank_score"] = float(res.get("score", 0.0))
+                    ranked_chunks.append(chunk)
                     used_indices.add(idx)
                     break
-            
-            if matched_idx is not None:
-                chunk = retrieved_chunks[matched_idx]
-                chunk["rerank_score"] = float(res.get("score", 0.0))
-                ranked_chunks.append(chunk)
-        
+            else:
+                # Last resort: match by truncated prefix (500 chars)
+                for idx, doc in enumerate(raw_docs):
+                    if idx in used_indices:
+                        continue
+                    if doc and doc[:500] == content[:500]:
+                        chunk = retrieved_chunks[idx]
+                        chunk["rerank_score"] = float(res.get("score", 0.0))
+                        ranked_chunks.append(chunk)
+                        used_indices.add(idx)
+                        break
+
         return ranked_chunks[:top_n]
     else:
-        # CrossEncoder reranking (LexicalReranker also uses .predict())
         try:
-            pairs = [[query, doc] for doc in docs]
+            pairs = [[query, doc] for doc in raw_docs]
             scores = model.predict(pairs)
         except Exception as e:
             print(f"[Reranker] Predict failed: {e}, falling back to original order")

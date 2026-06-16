@@ -70,9 +70,16 @@ class GraphDB:
         - Nodes: Entity (properties: name, tenant_id)
         - Relationships: RELATED_TO (properties: verb, weight)
         
+        Examples:
+        - "What is related to the compressor?" -> MATCH (n:Entity {{name: "compressor"}})-[r:RELATED_TO]->(m) RETURN n.name, r.verb, m.name LIMIT 25
+        - "Show all entities" -> MATCH (n:Entity) RETURN n.name LIMIT 50
+        - "What is connected to sensor A?" -> MATCH (n:Entity {{name: "sensor A"}})-[r:RELATED_TO]-(m) RETURN n.name, r.verb, m.name LIMIT 25
+        
+        ALWAYS add LIMIT 50 to the query to prevent returning too many results.
+        
         Natural language query: {query}
         
-        Return ONLY the Cypher query. Do not provide any explanation, markdown formatting, or prefix.
+        Return ONLY the Cypher query. No explanation, no markdown.
         Cypher query:
         """
         payload = {
@@ -85,11 +92,13 @@ class GraphDB:
             response = requests.post(get_ollama_generate_url(), json=payload, timeout=10)
             if response.status_code == 200:
                 cypher = response.json().get("response", "").strip()
-                # Clean up markdown if model didn't listen
                 if cypher.startswith("```cypher"):
                     cypher = cypher[9:-3].strip()
                 elif cypher.startswith("```"):
                     cypher = cypher[3:-3].strip()
+                # Ensure LIMIT clause exists (safety: prevent full graph dump)
+                if "limit" not in cypher.lower():
+                    cypher = cypher.rstrip().rstrip(";") + " LIMIT 50"
                 return cypher
         except Exception as e:
             print(f"[GraphDB] Text-to-Cypher error: {e}")
@@ -107,10 +116,12 @@ class GraphDB:
         print(f"[GraphDB] Executing Cypher: {cypher}")
         try:
             with self.driver.session() as session:
-                result = session.run(cypher)
+                result = session.run(cypher, tenant_id=tenant_id)
                 records = [record.data() for record in result]
                 if not records:
                     return ""
+                # Limit results for safety
+                records = records[:50]
                 return f"Graph Knowledge: {json.dumps(records)}"
         except Exception as e:
             print(f"[GraphDB] Query error: {e}")

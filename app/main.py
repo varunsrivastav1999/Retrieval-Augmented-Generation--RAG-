@@ -234,10 +234,17 @@ def get_cached_response(
                     item_query = item.get("query", "")
                     item_ids = extract_ids(item_query)
                     
-                    # Ensure identifiers perfectly match to prevent cross-product cache hits
-                    if query_ids == item_ids:
-                        best_sim = sim
-                        best_match = item
+                    # Entity verification: if both queries have IDs, they must match exactly.
+                    # If neither has IDs, skip the check (e.g., "What is torque?").
+                    # If one has IDs and the other doesn't, no match.
+                    if query_ids and item_ids:
+                        if query_ids != item_ids:
+                            continue
+                    elif query_ids or item_ids:
+                        continue
+                    
+                    best_sim = sim
+                    best_match = item
                     
             if best_match and best_sim > CACHE_SEMANTIC_THRESHOLD:
                 print(f"[Cache] Semantic HIT (sim={best_sim:.3f}) for query={query!r}")
@@ -998,7 +1005,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         
         # --- FULL AGENTIC STATE MACHINE (multi-query, HyDE, BM25, reranker, FLARE) ---
         MAX_FLARE_RETRIES = 3
-        FLARE_THRESHOLDS = [0.35, 0.25, 0.15]  # Decreasing threshold per retry
+        FLARE_THRESHOLDS = [0.35, 0.25, 0.15]
+        FLARE_TIMEOUT = 30.0  # seconds total before circuit-breaker
         
         class AgentState:
             def __init__(self):
@@ -1013,8 +1021,18 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 self.answer = ""
                 
         agent = AgentState()
+        flare_start = time.time()
         
         while agent.current_state not in ["generate", "end"]:
+            
+            # Circuit breaker: stop retrying after FLARE_TIMEOUT seconds
+            if time.time() - flare_start > FLARE_TIMEOUT:
+                print(f"[FLARE] Timeout after {FLARE_TIMEOUT}s. Accepting current context.")
+                if agent.final_context:
+                    agent.current_state = "generate"
+                else:
+                    agent.current_state = "end"
+                break
             
             if agent.current_state == "route":
                 route = query_router.route_query(search_query)

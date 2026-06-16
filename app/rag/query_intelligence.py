@@ -71,7 +71,7 @@ TERM_CORRECTIONS = {
     "circit": "circuit",
     "circut": "circuit",
     "compresser": "compressor",
-    "compressor": "compressor",
+    "compresor": "compressor",
     "coolent": "coolant",
     "exhust": "exhaust",
     "filtter": "filter",

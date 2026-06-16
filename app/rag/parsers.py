@@ -237,8 +237,19 @@ def _parse_pdf(file_path: str) -> ParseResult:
 
     pages = []
     doc = None
+    all_fonts = set()
+    has_links = False
+    pdfplumber_pdf = None
     try:
         doc = fitz.open(file_path)
+
+        # Open pdfplumber once for all pages (avoids O(N) file opens)
+        if PDFPLUMBER_AVAILABLE:
+            try:
+                import pdfplumber as _pdfplumber
+                pdfplumber_pdf = _pdfplumber.open(file_path)
+            except Exception as e:
+                print(f"[Parser] pdfplumber open failed: {e}")
 
         # --- Extract document-level metadata ---
         meta = doc.metadata
@@ -261,7 +272,6 @@ def _parse_pdf(file_path: str) -> ParseResult:
             page_num = page_num_idx + 1
 
             # --- 1. Layout-aware text extraction with font metadata ---
-            # Use "dict" mode for precise positioning, sort by (y, x) for multi-column
             blocks = fitz_page.get_text("dict", sort=False)["blocks"]
             blocks.sort(key=lambda b: (round(b["bbox"][1], -1), b["bbox"][0]))
 
@@ -269,6 +279,11 @@ def _parse_pdf(file_path: str) -> ParseResult:
             for block in blocks:
                 if block["type"] == 0:
                     for line in block["lines"]:
+                        for span in line["spans"]:
+                            font = span.get("font", "")
+                            size = round(span.get("size", 0), 1)
+                            if font:
+                                all_fonts.add(f"{font}@{size}")
                         line_text = "".join(span["text"] for span in line["spans"])
                         if line_text.strip():
                             text_lines.append(line_text)
@@ -278,10 +293,17 @@ def _parse_pdf(file_path: str) -> ParseResult:
             text = "\n".join(text_lines)
             text = _enrich_mcq_text(text)
 
+            # Check for hyperlinks on this page
+            if not has_links:
+                for link in fitz_page.get_links():
+                    if link.get("uri"):
+                        has_links = True
+                        break
+
             # --- 2. Table extraction (bordered + borderless via pdfplumber) ---
             tables = []
-            if PDFPLUMBER_AVAILABLE:
-                tables = _extract_tables_pdfplumber(file_path, page_num)
+            if pdfplumber_pdf is not None and page_num - 1 < len(pdfplumber_pdf.pages):
+                tables = _extract_tables_pdfplumber(pdfplumber_pdf.pages[page_num - 1], page_num)
 
             # --- 3. Image OCR extraction ---
             image_texts, image_bytes = _extract_images_ocr(fitz_page, page_num)
@@ -313,27 +335,8 @@ def _parse_pdf(file_path: str) -> ParseResult:
             ))
 
         # --- 6. Preserve headers/footers that contain meaningful context ---
-        # Instead of stripping, we keep them but deduplicate across pages
         if len(pages) >= 3:
             _deduplicate_headers_footers(pages)
-
-        # --- 7. Collect document-level metadata ---
-        all_fonts = set()
-        has_links = False
-        for pg in doc:
-            for block in pg.get_text("dict")["blocks"]:
-                if block["type"] == 0:
-                    for line in block["lines"]:
-                        for span in line["spans"]:
-                            font = span.get("font", "")
-                            size = round(span.get("size", 0), 1)
-                            if font:
-                                all_fonts.add(f"{font}@{size}")
-            if not has_links:
-                for link in pg.get_links():
-                    if link.get("uri"):
-                        has_links = True
-                        break
 
         doc_metadata["fonts"] = sorted(all_fonts)
         doc_metadata["has_links"] = has_links
@@ -347,6 +350,8 @@ def _parse_pdf(file_path: str) -> ParseResult:
     finally:
         if doc is not None:
             doc.close()
+        if pdfplumber_pdf is not None:
+            pdfplumber_pdf.close()
 
 
 def _deduplicate_headers_footers(pages: List[PageContent]) -> None:
@@ -359,8 +364,8 @@ def _deduplicate_headers_footers(pages: List[PageContent]) -> None:
     # Only strip if ALL 3 pages have identical header AND it looks like a page number or copyright
     if len(first_lines) == 3 and first_lines[0] == first_lines[1] == first_lines[2]:
         h = first_lines[0].strip()
-        # Only strip if it's a page number ("123") or simple copyright ("© 2024 Company")
-        if re.match(r'^\d{1,4}$', h) or re.match(r'^©.*\d{4}', h) or len(h) > 50:
+        # Only strip boilerplate: page numbers or simple copyright notices
+        if re.match(r'^\d{1,4}$', h) or re.match(r'^©.*\d{4}', h):
             for p in pages:
                 lines = p.text.strip().split("\n")
                 if lines and lines[0].strip() == h:
@@ -368,63 +373,65 @@ def _deduplicate_headers_footers(pages: List[PageContent]) -> None:
 
     if len(last_lines) == 3 and last_lines[0] == last_lines[1] == last_lines[2]:
         f = last_lines[0].strip()
-        if re.match(r'^\d{1,4}$', f) or re.match(r'^Page \d+', f, re.I) or len(f) > 50:
+        if re.match(r'^\d{1,4}$', f) or re.match(r'^Page \d+', f, re.I):
             for p in pages:
                 lines = p.text.strip().split("\n")
                 if lines and lines[-1].strip() == f:
                     p.text = "\n".join(lines[:-1]).strip()
 
 
-def _extract_tables_pdfplumber(pdf_path: str, page_num: int) -> list:
-    """Extract structured tables from a PDF page using pdfplumber, including borderless."""
+def _extract_tables_pdfplumber(pdf_page, page_num: int) -> list:
+    """Extract structured tables from a pdfplumber page, including borderless."""
     tables_text = []
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            if page_num - 1 >= len(pdf.pages):
-                return []
-            page = pdf.pages[page_num - 1]
+        # 1. Bordered tables (default detection)
+        tables = pdf_page.extract_tables()
+        for table_idx, table in enumerate(tables):
+            if not table:
+                continue
+            rows = []
+            for row in table:
+                if row is None:
+                    continue
+                cleaned_row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
+                rows.append(" | ".join(cleaned_row))
+            if rows:
+                header = rows[0]
+                first_row = table[0]
+                col_count = len(first_row) if first_row else len(rows[0].split(" | "))
+                separator = " | ".join(["---"] * col_count)
+                table_text = f"[TABLE {table_idx + 1} - Page {page_num}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
+                tables_text.append(table_text.strip())
 
-            # 1. Bordered tables (default detection)
-            tables = page.extract_tables()
-            for table_idx, table in enumerate(tables):
-                if not table:
+        # 2. Borderless tables (aligned text columns)
+        existing_count = len(tables_text)
+        borderless = pdf_page.find_tables(
+            table_settings={
+                "vertical_strategy": "text",
+                "horizontal_strategy": "text",
+                "snap_tolerance": 5,
+            }
+        )
+        for bt in borderless:
+            if not bt.bbox:
+                continue
+            table_data = bt.extract()
+            if table_data is None or len(table_data) <= 1:
+                continue
+            if table_data[0] is None:
+                continue
+            rows = []
+            for row in table_data:
+                if row is None:
                     continue
-                rows = []
-                for row in table:
-                    cleaned_row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
-                    rows.append(" | ".join(cleaned_row))
-                if rows:
-                    header = rows[0]
-                    col_count = len(table[0]) if table else 1
-                    separator = " | ".join(["---"] * col_count)
-                    table_text = f"[TABLE {table_idx + 1} - Page {page_num}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
-                    tables_text.append(table_text.strip())
-
-            # 2. Borderless tables (aligned text columns)
-            existing_count = len(tables_text)
-            borderless = page.find_tables(
-                table_settings={
-                    "vertical_strategy": "text",
-                    "horizontal_strategy": "text",
-                    "snap_tolerance": 5,
-                }
-            )
-            for bt in borderless:
-                if not bt.bbox:
-                    continue
-                table_data = bt.extract()
-                if len(table_data) <= 1:
-                    continue
-                rows = []
-                for row in table_data:
-                    cleaned_row = [str(c).replace('\n', ' ').strip() if c else "" for c in row]
-                    rows.append(" | ".join(cleaned_row))
-                if rows:
-                    header = rows[0]
-                    sep = " | ".join(["---"] * len(table_data[0]))
-                    table_text = f"[TABLE {existing_count + 1} - Page {page_num} (borderless)]\n{header}\n{sep}\n" + "\n".join(rows[1:])
-                    tables_text.append(table_text.strip())
-                    existing_count += 1
+                cleaned_row = [str(c).replace('\n', ' ').strip() if c else "" for c in row]
+                rows.append(" | ".join(cleaned_row))
+            if rows:
+                header = rows[0]
+                sep = " | ".join(["---"] * len(table_data[0]))
+                table_text = f"[TABLE {existing_count + 1} - Page {page_num} (borderless)]\n{header}\n{sep}\n" + "\n".join(rows[1:])
+                tables_text.append(table_text.strip())
+                existing_count += 1
     except Exception as e:
         print(f"[Parser] Table extraction warning for page {page_num}: {e}")
     return tables_text

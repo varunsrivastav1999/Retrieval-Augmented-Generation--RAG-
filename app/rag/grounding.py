@@ -313,7 +313,7 @@ _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 def _extract_tokens(text: str) -> List[str]:
     """Extract meaningful tokens from text, removing stop words."""
     tokens = _TOKEN_RE.findall(text.lower())
-    return [t for t in tokens if t not in _STOP_WORDS and len(t) > 1]
+    return [t for t in tokens if t not in _STOP_WORDS]
 
 
 def _split_sentences(text: str) -> List[str]:

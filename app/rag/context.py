@@ -56,15 +56,18 @@ def compress_context(chunk: dict) -> dict:
     IMPORTANT: Table chunks are NEVER truncated — every column and row matters
     for lookup queries (e.g., "SNC2448L1125 door kit number").
     """
-    max_chars = 1500  # Approx 300 tokens
+    max_chars = 1500
     text = chunk.get("text", "")
     
-    # Never truncate table data — structured data loses meaning when cut
     if "[TABLE" in text or "| " in text:
         return chunk
     
     if len(text) > max_chars:
-        chunk["text"] = text[:max_chars] + "..."
+        break_point = text.rfind(" ", 0, max_chars)
+        if break_point > max_chars // 2:
+            chunk["text"] = text[:break_point] + "..."
+        else:
+            chunk["text"] = text[:max_chars] + "..."
     return chunk
 
 def assemble_context(query: str, reranked_chunks: list, db=None, broad_query: bool = False) -> list:

@@ -252,7 +252,9 @@ def _strip_table_text_from_raw(raw_text: str, tables: List[str]) -> str:
         if line_tokens:
             overlap = sum(1 for t in line_tokens if t.lower() in table_tokens)
             overlap_ratio = overlap / len(line_tokens)
-            if overlap_ratio > 0.4:
+            # Short lines (≤3 tokens) need higher confidence to avoid false positives
+            threshold = 0.6 if len(line_tokens) <= 3 else 0.4
+            if overlap_ratio > threshold:
                 continue
 
         cleaned_lines.append(line)
@@ -307,6 +309,7 @@ def ingest_file(
         page_count = len(parse_result.pages)
         section = 0
         pending_chunks = []
+        pending_vision_chunks = []
         total_pages = len(parse_result.pages)
         doc_title = os.path.basename(file_path)
 
@@ -475,7 +478,7 @@ def ingest_file(
                             progress_pct=round(progress, 1),
                         )
 
-            # Process any raw image bytes for Vision embeddings
+            # Process any raw image bytes for Vision embeddings (batched)
             if hasattr(page, "image_bytes") and page.image_bytes:
                 for img_bytes in page.image_bytes:
                     try:
@@ -500,34 +503,37 @@ def ingest_file(
                                 doc_metadata=doc_metadata
                             )
                             db.add(img_chunk)
-                            db.commit()
-                            
-                            from app.rag.qdrant_client import insert_qdrant_points
-                            from qdrant_client.http import models
-                            
-                            # Insert vector into Qdrant
-                            insert_qdrant_points(
-                                "image_chunks",
-                                [
-                                    models.PointStruct(
-                                        id=img_chunk.id,
-                                        vector=vector,
-                                        payload={
-                                            "tenant_id": tenant_id,
-                                            "doc_id": file_path,
-                                            "file_type": file_type,
-                                            "metadata": doc_metadata
-                                        }
-                                    )
-                                ]
-                            )
-                            chunks_inserted += 1
+                            pending_vision_chunks.append((img_chunk, vector, doc_metadata))
                             chunks_total += 1
-                    except IntegrityError:
-                        db.rollback()
                     except Exception as e:
-                        db.rollback()
-                        print(f"[Ingest] Vision embedding failed: {e}")
+                        print(f"[Ingest] Vision extract failed: {e}")
+        
+        # Flush pending vision batches
+        if pending_vision_chunks:
+            from app.rag.qdrant_client import insert_qdrant_points
+            from qdrant_client.http import models
+            try:
+                db.flush()
+                db.commit()
+                points = []
+                for img_chunk, vector, doc_metadata in pending_vision_chunks:
+                    points.append(models.PointStruct(
+                        id=img_chunk.id,
+                        vector=vector,
+                        payload={
+                            "tenant_id": tenant_id,
+                            "doc_id": file_path,
+                            "file_type": file_type,
+                            "metadata": doc_metadata
+                        }
+                    ))
+                insert_qdrant_points("image_chunks", points)
+                chunks_inserted += len(pending_vision_chunks)
+            except Exception as e:
+                db.rollback()
+                print(f"[Ingest] Failed to insert {len(pending_vision_chunks)} vision chunks: {e}")
+            finally:
+                pending_vision_chunks = []
 
         # Process remaining chunks
         if pending_chunks:
@@ -602,8 +608,9 @@ def _process_chunk_batch(
         
         try:
             db.add(chunk_obj)
+            db.flush()
             db.commit()
-            
+
             insert_qdrant_points(
                 "document_chunks",
                 [
@@ -624,6 +631,7 @@ def _process_chunk_batch(
             inserted += 1
         except IntegrityError:
             db.rollback()
+            print(f"[Ingest] Duplicate chunk skipped (hash exists)")
         except Exception as e:
             db.rollback()
             print(f"[Ingest] Single chunk error: {e}")
