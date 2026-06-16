@@ -15,22 +15,14 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
-from pgvector.sqlalchemy import Vector
-
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://rag_user:rag_password@postgres:5432/rag_db")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./rag_db.sqlite3")
 EMBEDDING_DIM = int(os.getenv("RAG_EMBEDDING_DIM", "1024"))
-RAG_USE_HALFVEC = os.getenv("RAG_USE_HALFVEC", "false").lower() in {"1", "true", "yes", "on"}
-try:
-    from pgvector.sqlalchemy import Halfvec as _Halfvec
-    VECTOR_TYPE = _Halfvec if RAG_USE_HALFVEC else Vector
-except ImportError:
-    VECTOR_TYPE = Vector
 LEGACY_EMBEDDING_MODEL = os.getenv(
     "RAG_LEGACY_EMBEDDING_MODEL",
     "sentence-transformers/all-MiniLM-L6-v2",
 )
 
-engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_pre_ping=True, pool_recycle=3600)
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -58,14 +50,13 @@ class DocumentChunk(Base):
     section = Column(Integer)
     doc_metadata = Column(JSON)
     embedding_model = Column(String, default=LEGACY_EMBEDDING_MODEL, nullable=False, index=True)
-    embedding = Column(VECTOR_TYPE(EMBEDDING_DIM))
     created_at = Column(DateTime, default=utcnow, nullable=False)
     # --- NEW columns for 17-layer architecture ---
     file_type = Column(String, default="pdf", nullable=True, index=True)
     parent_chunk_id = Column(Integer, nullable=True, index=True)
     confidence_score = Column(Float, nullable=True)
+    # Note: Vectors are now stored in Qdrant. These columns only hold textual metadata.
     # --- NEW columns for Multi-modal / Vision ---
-    image_embedding = Column(Vector(768), nullable=True)
     quantized_embedding = Column(Text, nullable=True)
     # --- NEW columns for RAPTOR ---
     raptor_level = Column(Integer, default=0, nullable=False, index=True)
@@ -94,14 +85,8 @@ class IngestionJob(Base):
 import sqlalchemy.exc
 
 def init_db():
-    with engine.connect() as conn:
-        try:
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            print(f"[DB] Skipped extension creation: {e}")
+    # Skip pgvector extensions because we use Qdrant for vectors
+    pass
             
     try:
         Base.metadata.create_all(bind=engine)
@@ -196,23 +181,8 @@ def _run_schema_migrations():
         )
         conn.commit()
 
-        # Recreate with 'english' to match the retrieval queries and enable stemming.
-        _execute_best_effort(
-            conn,
-            "CREATE INDEX IF NOT EXISTS ix_document_chunks_text_search "
-            "ON document_chunks USING gin "
-            "(to_tsvector('english', coalesce(text_content, '')))",
-        )
-        _execute_best_effort(
-            conn,
-            "CREATE INDEX IF NOT EXISTS ix_document_chunks_text_trgm "
-            "ON document_chunks USING gin (text_content gin_trgm_ops)",
-        )
-        _execute_best_effort(
-            conn,
-            "CREATE INDEX IF NOT EXISTS ix_document_chunks_embedding_hnsw "
-            "ON document_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
-        )
+        # SQLite doesn't support pg_trgm or vector indexes, so we skip these operations.
+        pass
 
 def get_db():
     db = SessionLocal()

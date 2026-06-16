@@ -300,7 +300,9 @@ def on_startup():
     global ingestion_worker_thread
     try:
         init_db()
-        print("✅ Database initialized with pgvector successfully.")
+        from app.rag.qdrant_client import init_qdrant_collections
+        init_qdrant_collections()
+        print("✅ Database initialized and Qdrant collections created successfully.")
     except Exception as e:
         print(f"❌ Failed to initialize database: {e}")
         raise

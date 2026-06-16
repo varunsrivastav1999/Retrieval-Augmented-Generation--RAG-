@@ -416,8 +416,8 @@ if __name__ == "__main__":
 def get_clip_model() -> Any:
     try:
         from sentence_transformers import SentenceTransformer
-        print(f"[RAG Vision] Loading CLIP model: {CLIP_MODEL}")
-        return SentenceTransformer(CLIP_MODEL, **_model_kwargs())
+        print(f"[RAG Vision] Loading CLIP model: {CLIP_MODEL} on CPU (VRAM optimization)")
+        return SentenceTransformer(CLIP_MODEL, device="cpu")
     except Exception as exc:
         print(f"[RAG Vision] CLIP Model failed to load: {exc}")
         return None

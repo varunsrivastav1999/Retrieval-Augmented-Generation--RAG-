@@ -12,7 +12,7 @@
 # ==============================================================================
 
 volumes:
-  prod_pgvector_data:
+  prod_qdrant_data:
     driver: local
   prod_redis_data:
     driver: local
@@ -45,7 +45,7 @@ services:
     container_name: itips_rag_prod
     restart: unless-stopped
     depends_on:
-      postgres:
+      qdrant:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -67,7 +67,7 @@ services:
       - HF_HUB_CACHE=/models/huggingface/hub
     env_file:
       - ./.envs/.production/.rag
-      - ./.envs/.production/.postgres
+      - ./.envs/.production/.qdrant
       - ./.envs/.production/.redis
       - ./.envs/.production/.neo4j
     ports:
@@ -97,35 +97,25 @@ services:
         max-file: "7"
 
   # ============================================================================
-  # PostgreSQL 15 + pgvector
+  # Qdrant Vector Database
   # ============================================================================
-  postgres:
-    image: pgvector/pgvector:pg15
-    container_name: postgres_pgvector_prod
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant_rag_prod
     restart: unless-stopped
     volumes:
-      - prod_pgvector_data:/var/lib/postgresql/data
-      - type: bind
-        source: ./scripts/db/init
-        target: /docker-entrypoint-initdb.d
-        read_only: true
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-rag_user}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-rag_password}
-      - POSTGRES_DB=${POSTGRES_DB:-rag_db}
-    env_file:
-      - ./.envs/.production/.postgres
+      - prod_qdrant_data:/qdrant/storage
     ports:
-      - "5432:5432"
+      - "6333:6333"
     networks:
       rag_network:
         ipv4_address: 172.28.0.20
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rag_user} -d ${POSTGRES_DB:-rag_db}"]
+      test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 10s
     deploy:
       resources:
         limits:
@@ -313,7 +303,7 @@ services:
     container_name: itips_rag_prod_backup
     restart: unless-stopped
     depends_on:
-      postgres:
+      qdrant:
         condition: service_healthy
       neo4j:
         condition: service_healthy

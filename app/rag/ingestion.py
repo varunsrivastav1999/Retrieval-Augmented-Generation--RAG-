@@ -452,22 +452,44 @@ def ingest_file(
                         vector = encode_image(img)
                         if vector:
                             img_hash = hash_chunk(str(img_bytes[:100]))
+                            
+                            doc_metadata = {
+                                "page_num": page.page_num, 
+                                "type": "image",
+                                "source": file_path,
+                                "embedding_model": embedding_model,
+                            }
+                            
                             img_chunk = DocumentChunk(
                                 tenant_id=tenant_id,
                                 doc_id=file_path,
                                 chunk_hash=img_hash,
                                 file_type=file_type,
                                 embedding_model=embedding_model,
-                                image_embedding=vector,
-                                doc_metadata={
-                                    "page_num": page.page_num, 
-                                    "type": "image",
-                                    "source": file_path,
-                                    "embedding_model": embedding_model,
-                                }
+                                doc_metadata=doc_metadata
                             )
                             db.add(img_chunk)
                             db.commit()
+                            
+                            from app.rag.qdrant_client import insert_qdrant_points
+                            from qdrant_client.http import models
+                            
+                            # Insert vector into Qdrant
+                            insert_qdrant_points(
+                                "image_chunks",
+                                [
+                                    models.PointStruct(
+                                        id=img_chunk.id,
+                                        vector=vector,
+                                        payload={
+                                            "tenant_id": tenant_id,
+                                            "doc_id": file_path,
+                                            "file_type": file_type,
+                                            "metadata": doc_metadata
+                                        }
+                                    )
+                                ]
+                            )
                             chunks_inserted += 1
                             chunks_total += 1
                     except IntegrityError:
@@ -521,77 +543,58 @@ def _process_chunk_batch(
     vectors = encode_texts(texts)
     inserted = 0
 
-    quantized_batch = []
-    if RAG_EMBEDDING_QUANTIZE == "int8":
-        from app.rag.quantization import quantize_vector_batch
-        q_bytes, q_scale, q_zp = quantize_vector_batch(vectors)
-        import json, base64
-        for qb in q_bytes:
-            b64 = base64.b64encode(qb).decode("ascii")
-            quantized_batch.append(json.dumps({"data": b64, "scale": q_scale, "zp": q_zp}))
+    from app.rag.qdrant_client import insert_qdrant_points
+    from qdrant_client.http import models
 
     for i, c in enumerate(pending_chunks):
-        kw = dict(
+        doc_metadata = {
+            "type": c["type"],
+            "page_count": page_count,
+            "page_num": c["page_num"],
+            "embedding_model": embedding_model,
+            "source": doc_id,
+            "file_type": file_type,
+            "is_parent": c.get("is_parent", False),
+            "entities": c.get("entities", []),
+        }
+        
+        chunk_obj = DocumentChunk(
             tenant_id=tenant_id,
             doc_id=doc_id,
             chunk_hash=c["hash"],
             text_content=c["text"],
             section=c["section"],
-            doc_metadata={
-                "type": c["type"],
-                "page_count": page_count,
-                "page_num": c["page_num"],
-                "embedding_model": embedding_model,
-                "source": doc_id,
-                "file_type": file_type,
-                "is_parent": c.get("is_parent", False),
-                "entities": c.get("entities", []),
-            },
+            doc_metadata=doc_metadata,
             embedding_model=embedding_model,
-            embedding=vectors[i],
             file_type=file_type,
         )
-        if quantized_batch:
-            kw["quantized_embedding"] = quantized_batch[i]
-        db.add(DocumentChunk(**kw))
-
-    try:
-        db.commit()
-        inserted = len(pending_chunks)
-    except Exception:
-        db.rollback()
-        for i, c in enumerate(pending_chunks):
-            try:
-                single_kw = dict(
-                    tenant_id=tenant_id,
-                    doc_id=doc_id,
-                    chunk_hash=c["hash"],
-                    text_content=c["text"],
-                    section=c["section"],
-                    doc_metadata={
-                        "type": c["type"],
-                        "page_count": page_count,
-                        "page_num": c["page_num"],
-                        "embedding_model": embedding_model,
-                        "source": doc_id,
-                        "file_type": file_type,
-                        "is_parent": c.get("is_parent", False),
-                        "entities": c.get("entities", []),
-                    },
-                    embedding_model=embedding_model,
-                    embedding=vectors[i],
-                    file_type=file_type,
-                )
-                if quantized_batch:
-                    single_kw["quantized_embedding"] = quantized_batch[i]
-                db.add(DocumentChunk(**single_kw))
-                db.commit()
-                inserted += 1
-            except IntegrityError:
-                db.rollback()
-            except Exception as e:
-                db.rollback()
-                print(f"[Ingest] Single chunk error: {e}")
+        
+        try:
+            db.add(chunk_obj)
+            db.commit()
+            
+            insert_qdrant_points(
+                "document_chunks",
+                [
+                    models.PointStruct(
+                        id=chunk_obj.id,
+                        vector=vectors[i],
+                        payload={
+                            "tenant_id": tenant_id,
+                            "doc_id": doc_id,
+                            "text_content": c["text"],
+                            "section": c["section"],
+                            "metadata": doc_metadata
+                        }
+                    )
+                ]
+            )
+            inserted += 1
+        except IntegrityError:
+            db.rollback()
+        except Exception as e:
+            db.rollback()
+            print(f"[Ingest] Single chunk error: {e}")
 
     return inserted
 
