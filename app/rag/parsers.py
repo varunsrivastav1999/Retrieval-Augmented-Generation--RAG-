@@ -330,40 +330,14 @@ def _extract_tables_pdfplumber(pdf_path: str, page_num: int) -> list:
                     continue
                 rows = []
                 
-                # First pass: clean cells
-                cleaned_table = []
+                # Simply clean the cells and convert to markdown
                 for row in table:
                     cleaned_row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
-                    cleaned_table.append(cleaned_row)
-                    
-                # Second pass: detect multi-row merged headers
-                if len(cleaned_table) > 1 and "" in cleaned_table[0]:
-                    merged_header = []
-                    last_val = ""
-                    for i in range(len(cleaned_table[0])):
-                        val0 = cleaned_table[0][i]
-                        if val0:
-                            last_val = val0
-                        else:
-                            val0 = last_val
-                        
-                        val1 = cleaned_table[1][i] if i < len(cleaned_table[1]) else ""
-                        if val0 and val1:
-                            merged_header.append(f"{val0} - {val1}")
-                        elif val0:
-                            merged_header.append(val0)
-                        else:
-                            merged_header.append(val1)
-                    
-                    cleaned_table[0] = merged_header
-                    cleaned_table.pop(1)
-
-                for row in cleaned_table:
-                    rows.append(" | ".join(row))
+                    rows.append(" | ".join(cleaned_row))
                     
                 if rows:
                     header = rows[0]
-                    col_count = len(cleaned_table[0]) if cleaned_table else 1
+                    col_count = len(table[0]) if table else 1
                     separator = " | ".join(["---"] * col_count)
                     table_text = f"[TABLE {table_idx + 1} - Page {page_num}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
                     tables_text.append(table_text.strip())
