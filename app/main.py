@@ -954,7 +954,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             if request.stream:
                 def stream_greeting():
                     yield f"data: {json.dumps({'token': answer})}\n\n"
-                    yield f"data: {json.dumps({'done': True, 'sources': [], 'grounding': grounding_result, 'verification': response_data['verification']})}\n\n"
+                    yield f"data: {json.dumps({'done': True, 'sources': [], 'grounding': grounding_result, 'verification': response_data['verification'], 'latency_ms': response_data.get('latency_ms', 0)})}\n\n"
                 return StreamingResponse(stream_greeting(), media_type="text/event-stream")
             return response_data
 
@@ -1144,7 +1144,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         if request.stream:
             def stream_not_found():
                 yield f"data: {json.dumps({'token': answer})}\n\n"
-                yield f"data: {json.dumps({'done': True, 'sources': [], 'grounding': grounding_result, 'verification': response_data['verification']})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'sources': [], 'grounding': grounding_result, 'verification': response_data['verification'], 'latency_ms': response_data.get('latency_ms', 0)})}\n\n"
             return StreamingResponse(stream_not_found(), media_type="text/event-stream")
 
         return response_data
