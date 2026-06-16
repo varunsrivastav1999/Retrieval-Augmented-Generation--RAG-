@@ -13,7 +13,8 @@ def init_qdrant_collections(dim: int = 1024):
     client = get_qdrant_client()
     collections = ["document_chunks", "image_chunks"]
     for col in collections:
-        if not client.collection_exists(col):
+        existing_collections = [c.name for c in client.get_collections().collections]
+        if col not in existing_collections:
             client.create_collection(
                 collection_name=col,
                 vectors_config=models.VectorParams(
