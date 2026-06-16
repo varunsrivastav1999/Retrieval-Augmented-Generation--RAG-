@@ -16,17 +16,26 @@ def get_chunks_at_level(db: Session, tenant_id: str, level: int):
     ).all()
 
 def _fetch_embeddings_from_qdrant(chunks):
-    """Fetch embeddings from Qdrant for a list of DocumentChunk objects."""
+    """Fetch embeddings from Qdrant for a list of DocumentChunk objects in batches."""
     if not chunks:
         return [], []
     client = get_qdrant_client()
     chunk_ids = [c.id for c in chunks]
-    results = client.retrieve(
-        collection_name="document_chunks",
-        ids=chunk_ids,
-        with_vectors=True,
-    )
-    id_to_vec = {r.id: r.vector for r in results}
+    
+    # Qdrant has a limit on how many points can be retrieved at once
+    batch_size = 5000
+    id_to_vec = {}
+    
+    for i in range(0, len(chunk_ids), batch_size):
+        batch_ids = chunk_ids[i:i + batch_size]
+        results = client.retrieve(
+            collection_name="document_chunks",
+            ids=batch_ids,
+            with_vectors=True,
+        )
+        for r in results:
+            id_to_vec[r.id] = r.vector
+
     embeddings = []
     valid_chunks = []
     for c in chunks:

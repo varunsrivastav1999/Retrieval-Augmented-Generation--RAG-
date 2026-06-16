@@ -157,55 +157,43 @@ def create_parent_child_chunks(text: str) -> List[Dict]:
     return result
 
 
-def chunk_table_per_row(table_md: str) -> List[str]:
+def chunk_table_per_row(table_md: str, table_index: int = 0) -> List[Dict]:
     """
     Chunk a markdown table into INDIVIDUAL ROW chunks.
-    Each chunk contains: [Table Title] + [Column Headers] + [Separator] + [1 Data Row]
+    Each chunk contains: [Table Title] + [Column Headers] + [Separator] + [Data Rows]
     
-    This is critical for lookup queries like "SNC2448L1125c door kit number".
-    When a table has 20+ rows, naive splitting might put the target row in a
-    different chunk from the headers, making the LLM unable to match columns.
-    Per-row chunking guarantees every data row is paired with its column names.
+    Returns list of dicts with "text" and "table_group" keys for cross-chunk linking.
     """
     lines = table_md.strip().split('\n')
-    # Need at least: title, header, separator, 1 data row
     if len(lines) < 4:
-        return [table_md]
+        return [{"text": table_md, "table_group": None}]
 
-    # Lines[0] = table title/info (e.g., "[TABLE 1 - Page 1]")
-    # Lines[1] = column headers
-    # Lines[2] = separator (---)
     header_block = "\n".join(lines[:3])
     data_rows = lines[3:]
 
     if not data_rows:
-        return [table_md]
+        return [{"text": table_md, "table_group": None}]
 
-    # If the table is small enough to fit within embedding token limits (≤25 rows)
-    # keep it as one solid chunk to preserve multi-row header context.
-    if len(data_rows) <= 25:
-        return [table_md]
+    # Keep tables up to 100 rows as a single chunk for completeness
+    # Embedding model handles up to 512 tokens per chunk (~4000 chars)
+    if len(data_rows) <= 100:
+        return [{"text": table_md, "table_group": table_index}]
 
-    # For massive tables: create multi-row blocks to preserve context
-    # while staying under 512 token limits for embeddings.
     row_chunks = []
-    chunk_size = 10
-    
-    # Check if the first row is a sub-header (common in PDFs where H W D is split)
-    # If it is, append it to the header block for all chunks
+    chunk_size = 25
+
     sub_header = ""
     if data_rows and len(data_rows[0].strip()) > 0:
         first_row = data_rows[0]
-        # Heuristic: if it has very few alphanumeric chars compared to pipes, it's likely a subheader
         alnum_count = sum(c.isalnum() for c in first_row)
-        if alnum_count < 20: 
+        if alnum_count < 20:
             sub_header = first_row + "\n"
             data_rows = data_rows[1:]
 
     for i in range(0, len(data_rows), chunk_size):
         block = "\n".join(data_rows[i:i+chunk_size])
         row_chunk = f"{header_block}\n{sub_header}{block}"
-        row_chunks.append(row_chunk.strip())
+        row_chunks.append({"text": row_chunk.strip(), "table_group": table_index})
 
     return row_chunks
 
@@ -380,16 +368,17 @@ def ingest_file(
                 
             # 2. Chunk tables into PER-ROW entries (each row gets column headers!)
             #    This is the KEY fix for lookup queries like "SNC2448L1125c door kit"
-            for table_md in page.tables:
+            for table_idx, table_md in enumerate(page.tables):
                 if table_md and table_md.strip():
-                    table_parts = chunk_table_per_row(table_md)
+                    table_parts = chunk_table_per_row(table_md, table_idx)
                     for t_part in table_parts:
                         page_chunks.append({
-                            "text": t_part,
+                            "text": t_part["text"],
                             "is_parent": True,
                             "parent_idx": None,
                             "child_idx": None,
                             "content_type": "table",
+                            "table_group": t_part.get("table_group"),
                         })
                         
             # 3. Add Image OCR text as standalone chunks
@@ -456,6 +445,7 @@ def ingest_file(
                     "is_parent": chunk_info.get("is_parent", False),
                     "parent_idx": chunk_info.get("parent_idx"),
                     "entities": extract_entities(chunk_text),
+                    "table_group": chunk_info.get("table_group"),
                 })
                 section += 1
                 
@@ -507,9 +497,34 @@ def ingest_file(
                             db.add(img_chunk)
                             pending_vision_chunks.append((img_chunk, vector, doc_metadata))
                             chunks_total += 1
+
+                            if len(pending_vision_chunks) >= BATCH_SIZE:
+                                from app.rag.qdrant_client import insert_qdrant_points
+                                from qdrant_client.http import models
+                                try:
+                                    db.flush()
+                                    db.commit()
+                                    points = []
+                                    for ic, vec, d_meta in pending_vision_chunks:
+                                        points.append(models.PointStruct(
+                                            id=ic.id,
+                                            vector=vec,
+                                            payload={
+                                                "tenant_id": tenant_id,
+                                                "doc_id": file_path,
+                                                "file_type": file_type,
+                                                "metadata": d_meta
+                                            }
+                                        ))
+                                    insert_qdrant_points("image_chunks", points)
+                                    chunks_inserted += len(pending_vision_chunks)
+                                except Exception as e:
+                                    db.rollback()
+                                    print(f"[Ingest] Failed to insert vision chunks: {e}")
+                                finally:
+                                    pending_vision_chunks = []
                     except Exception as e:
                         print(f"[Ingest] Vision extract failed: {e}")
-        
         # Flush pending vision batches
         if pending_vision_chunks:
             from app.rag.qdrant_client import insert_qdrant_points
@@ -595,6 +610,7 @@ def _process_chunk_batch(
             "file_type": file_type,
             "is_parent": c.get("is_parent", False),
             "entities": c.get("entities", []),
+            "table_group": c.get("table_group"),
         }
         
         chunk_obj = DocumentChunk(
@@ -624,6 +640,7 @@ def _process_chunk_batch(
                             "file_type": file_type,
                             "text_content": c["text"],
                             "section": c["section"],
+                            "table_group": c.get("table_group"),
                             "metadata": doc_metadata
                         }
                     )

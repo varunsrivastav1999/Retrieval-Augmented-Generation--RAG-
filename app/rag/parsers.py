@@ -496,6 +496,7 @@ def _parse_docx(file_path: str) -> ParseResult:
         current_text_parts = []
         current_tables = []
         current_image_texts = []
+        current_image_bytes = []
         page_num = 1
 
         table_idx = 0
@@ -518,11 +519,13 @@ def _parse_docx(file_path: str) -> ParseResult:
                                     text="\n".join(current_text_parts),
                                     tables=current_tables,
                                     image_texts=current_image_texts,
+                                    image_bytes=current_image_bytes,
                                 ))
                                 page_num += 1
                                 current_text_parts = []
                                 current_tables = []
                                 current_image_texts = []
+                                current_image_bytes = []
                         if para.style and para.style.name and para.style.name.startswith("Heading"):
                             level = para.style.name.replace("Heading", "").strip()
                             prefix = "#" * (int(level) if level.isdigit() else 1)
@@ -546,12 +549,13 @@ def _parse_docx(file_path: str) -> ParseResult:
             # Fallback if internals change
             pass
 
-        # Extract images via OCR
+        # Extract images via OCR and Vision
         if OCR_AVAILABLE:
             for rel in doc.part.rels.values():
                 if "image" in rel.reltype:
                     try:
                         image_data = rel.target_part.blob
+                        current_image_bytes.append(image_data)
                         img = Image.open(io.BytesIO(image_data))
                         if img.width >= 80 and img.height >= 80:
                             img = img.convert("L")
@@ -564,12 +568,13 @@ def _parse_docx(file_path: str) -> ParseResult:
                         continue
 
         # Add remaining content
-        if current_text_parts or current_tables or current_image_texts:
+        if current_text_parts or current_tables or current_image_texts or current_image_bytes:
             pages.append(PageContent(
                 page_num=page_num,
                 text="\n".join(current_text_parts),
                 tables=current_tables,
                 image_texts=current_image_texts,
+                image_bytes=current_image_bytes,
             ))
 
         return ParseResult(
@@ -664,6 +669,7 @@ def _parse_pptx(file_path: str) -> ParseResult:
             text_parts = []
             tables = []
             image_texts = []
+            image_bytes = []
 
             for shape in _iter_shapes(slide.shapes):
                 # Text frames
@@ -691,6 +697,7 @@ def _parse_pptx(file_path: str) -> ParseResult:
                 if shape.shape_type == 13 and OCR_AVAILABLE:  # PICTURE
                     try:
                         image_blob = shape.image.blob
+                        image_bytes.append(image_blob)
                         img = Image.open(io.BytesIO(image_blob))
                         img = img.convert("L")
                         ocr_text = pytesseract.image_to_string(img).strip()
@@ -715,12 +722,13 @@ def _parse_pptx(file_path: str) -> ParseResult:
                 if notes:
                     text_parts.append(f"[SPEAKER NOTES]\n{notes}")
 
-            if text_parts or tables or image_texts:
+            if text_parts or tables or image_texts or image_bytes:
                 pages.append(PageContent(
                     page_num=slide_num,
                     text="\n".join(text_parts),
                     tables=tables,
                     image_texts=image_texts,
+                    image_bytes=image_bytes,
                 ))
 
         return ParseResult(

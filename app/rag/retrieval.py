@@ -26,6 +26,7 @@ def _candidate_from_payload(point_id: str, payload: dict, distance: float) -> di
         "hybrid_score": 0.0,
         "dense_score": distance,
         "file_type": payload.get("file_type", metadata.get("file_type", "unknown")),
+        "table_group": payload.get("table_group", metadata.get("table_group")),
         "metadata": {
             "tenant_id": payload.get("tenant_id"),
             "source": payload.get("doc_id"),
@@ -35,6 +36,7 @@ def _candidate_from_payload(point_id: str, payload: dict, distance: float) -> di
             "embedding_model": metadata.get("embedding_model"),
             "file_type": payload.get("file_type", metadata.get("file_type", "unknown")),
             "entities": metadata.get("entities", []),
+            "table_group": payload.get("table_group", metadata.get("table_group")),
         }
     }
 
@@ -62,7 +64,6 @@ def _generate_hyde(query: str) -> str:
 def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 20, metadata_filters: dict = None, fast_path: bool = False) -> list:
     print(f"[Retrieval] Executing {'fast ' if fast_path else ''}hybrid search for tenant={tenant_id!r}, query={query!r}, filters={metadata_filters}")
     
-    query_vector = encode_text(query)
     qdrant = get_qdrant_client()
     
     hyde_text = None
@@ -70,11 +71,22 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
     vision_vector = None
     query_entities = []
     
-    if not fast_path:
-        hyde_text = _generate_hyde(query)
-        hyde_vector = encode_text(hyde_text) if hyde_text else None
-        vision_vector = encode_image_text_query(query)
-        query_entities = extract_entities(query)
+    if fast_path:
+        query_vector = encode_text(query)
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            fut_dense = executor.submit(encode_text, query)
+            fut_hyde = executor.submit(_generate_hyde, query)
+            fut_vision = executor.submit(encode_image_text_query, query)
+            fut_entities = executor.submit(extract_entities, query)
+            
+            query_vector = fut_dense.result()
+            hyde_text = fut_hyde.result()
+            hyde_vector = encode_text(hyde_text) if hyde_text else None
+            vision_vector = fut_vision.result()
+            query_entities = fut_entities.result()
+    
     
     candidate_limit = max(top_k * 8, 100)
     candidates = {}
@@ -168,6 +180,40 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
     for item in ranked:
         item["score"] = item["hybrid_score"]
 
+    # Table-aware expansion: if top results include table chunks, fetch all
+    # sibling chunks from the same table_group so the LLM sees the complete table
+    top_results = ranked[:top_k]
+    table_groups = set()
+    for item in top_results:
+        tg = item.get("table_group")
+        if tg is not None:
+            table_groups.add(tg)
+
+    if table_groups:
+        seen_ids = {item["id"] for item in top_results}
+        for tg in table_groups:
+            try:
+                sibling_results = qdrant.scroll(
+                    collection_name="document_chunks",
+                    scroll_filter=models.Filter(
+                        must=must_conditions + [
+                            models.FieldCondition(
+                                key="table_group",
+                                match=models.MatchValue(value=tg),
+                            )
+                        ]
+                    ),
+                    limit=200,
+                )[0]
+                for point in sibling_results:
+                    if point.id not in seen_ids:
+                        seen_ids.add(point.id)
+                        candidate = _candidate_from_payload(point.id, point.payload, 0.0)
+                        candidate["hybrid_score"] = 0.01  # low but non-zero to include
+                        ranked.append(candidate)
+            except Exception as e:
+                print(f"[Retrieval] Table sibling expansion failed for group {tg}: {e}")
+
     return ranked[:top_k]
 
 def perform_multi_query_search(db: Session, queries: list, tenant_id: str, top_k: int = 20, metadata_filters: dict = None, fast_path: bool = False) -> list:
@@ -180,14 +226,18 @@ def perform_multi_query_search(db: Session, queries: list, tenant_id: str, top_k
 
     all_candidates = {}
     
-    for q in queries:
-        results = perform_hybrid_search(db, q, tenant_id, top_k=top_k, metadata_filters=metadata_filters)
-        for rank, res in enumerate(results, start=1):
-            cid = res["id"]
-            if cid not in all_candidates:
-                all_candidates[cid] = res
-                all_candidates[cid]["fused_score"] = 0.0
-            all_candidates[cid]["fused_score"] += _rrf_score(rank)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(len(queries), 4)) as executor:
+        futures = [executor.submit(perform_hybrid_search, db, q, tenant_id, top_k, metadata_filters) for q in queries]
+        
+        for future in futures:
+            results = future.result()
+            for rank, res in enumerate(results, start=1):
+                cid = res["id"]
+                if cid not in all_candidates:
+                    all_candidates[cid] = res
+                    all_candidates[cid]["fused_score"] = 0.0
+                all_candidates[cid]["fused_score"] += _rrf_score(rank)
             
     ranked = sorted(
         all_candidates.values(),

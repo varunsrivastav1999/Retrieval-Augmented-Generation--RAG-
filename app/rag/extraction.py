@@ -99,40 +99,68 @@ def looks_like_extractable_page(text: str) -> bool:
     return match_count >= 4 or code_matches >= 5
 
 def _try_fix_truncated_json(text: str) -> Dict[str, Any]:
-    """Attempt to recover a truncated JSON object (model ran out of num_predict tokens)."""
+    """Recover truncated JSON: fix unterminated strings mid-output (not just last line)."""
     if not text:
         return {}
-    # Try closing dangling strings
-    fixed = text
-    # Count unclosed double quotes in the last line
-    lines = fixed.split('\n')
-    for i in range(len(lines) - 1, -1, -1):
-        line = lines[i]
-        # If odd number of double quotes, the string was cut off
-        if line.count('"') % 2 != 0:
-            lines[i] = line + '"'
-            break
-    fixed = '\n'.join(lines)
-    # Try to find the last complete outer JSON object
-    try:
-        return json.loads(fixed)
-    except json.JSONDecodeError:
-        pass
-    # Find the last complete '}' that closes the top-level object
+
+    fixed = text.rstrip()
+
+    # 1. Track string state across all characters to close any unclosed string
+    chars = []
+    in_string = False
+    escaped = False
+    for ch in fixed:
+        chars.append(ch)
+        if escaped:
+            escaped = False
+            continue
+        if ch == '\\':
+            escaped = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+
+    if in_string:
+        chars.append('"')
+
+    fixed = ''.join(chars)
+
+    # 2. Find the last complete top-level '}' respecting string boundaries
     depth = 0
     last_valid_end = -1
+    in_str = False
+    esc = False
     for i, ch in enumerate(fixed):
+        if esc:
+            esc = False
+            continue
+        if ch == '\\':
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
         if ch == '{':
             depth += 1
         elif ch == '}':
             depth -= 1
             if depth == 0:
                 last_valid_end = i
+
     if last_valid_end > 0:
         try:
             return json.loads(fixed[:last_valid_end + 1])
         except json.JSONDecodeError:
             pass
+
+    # 3. Last resort: try direct parse
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+
     return {}
 
 

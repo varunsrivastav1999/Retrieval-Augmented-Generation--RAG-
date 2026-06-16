@@ -138,8 +138,8 @@ INGESTION_WORKER_POLL_SECONDS = float(os.getenv("RAG_INGESTION_WORKER_POLL_SECON
 INGESTION_STALE_TIMEOUT_SECONDS = int(os.getenv("RAG_INGESTION_STALE_TIMEOUT_SECONDS", "1800"))
 DEFAULT_TOP_K = int(os.getenv("RAG_DEFAULT_TOP_K", "12"))
 MAX_TOP_K = int(os.getenv("RAG_MAX_TOP_K", "50"))
-BROAD_QUERY_TOP_K = int(os.getenv("RAG_BROAD_QUERY_TOP_K", "16"))
-SOURCE_LIMIT = int(os.getenv("RAG_SOURCE_LIMIT", "12"))
+BROAD_QUERY_TOP_K = int(os.getenv("RAG_BROAD_QUERY_TOP_K", "32"))
+SOURCE_LIMIT = int(os.getenv("RAG_SOURCE_LIMIT", "24"))
 # File size limit — prevents zip bombs and OOM
 MAX_UPLOAD_SIZE_BYTES = int(os.getenv("RAG_MAX_UPLOAD_SIZE_BYTES", str(5000 * 1024 * 1024)))  # 5000MB default
 
@@ -1127,39 +1127,18 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         sources = agent.sources
         grounding_result = agent.grounding_result
     
+    force_general = False
     if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
-        # BLOCKED — no relevant content in documents
+        force_general = True
         latency = int((time.time() - start_time) * 1000)
-        
-        answer = NOT_FOUND_RESPONSE
-        if ingest_summary and ingest_summary.get("queued"):
-            answer = (
-                f"I queued {ingest_summary['queued']} file(s) for ingestion. "
-                "Please wait for ingestion to complete, then ask again."
-            )
-
-        print(f"[API: OUT] Response: {answer}")
-        RAG_QUERY_TOTAL.labels(status="blocked").inc()
+        print(f"[API: Warning] Grounding failed or no context. Falling back to general knowledge.")
+        RAG_QUERY_TOTAL.labels(status="general_fallback").inc()
         RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency / 1000.0)
         RAG_GROUNDING_BLOCKED.inc()
         
-        response_data = {
-            "answer": answer,
-            "context": [],
-            "sources": [],
-            "latency_ms": latency,
-            "ingest": ingest_summary,
-            "grounding": grounding_result,
-            "verification": {"confidence": "low", "confidence_score": 0.0, "grounded_sentences": 0, "total_sentences": 0, "evidence": []},
-        }
-
-        if request.stream:
-            def stream_not_found():
-                yield f"data: {json.dumps({'token': answer})}\n\n"
-                yield f"data: {json.dumps({'done': True, 'sources': [], 'grounding': grounding_result, 'verification': response_data['verification'], 'latency_ms': response_data.get('latency_ms', 0)})}\n\n"
-            return StreamingResponse(stream_not_found(), media_type="text/event-stream")
-
-        return response_data
+        # We will use the LLM to generate a general answer
+        if not grounding_result:
+            grounding_result = {"is_grounded": False, "score": 0.0, "detail": "Fallback to general knowledge"}
 
     # ------------------------------------------------------------
     # Extractive Mode: skip LLM, return verbatim text from top chunk
@@ -1218,13 +1197,25 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     # ------------------------------------------------------------
     # Layer 12: LLM Answer Synthesis (Ollama)
     # ------------------------------------------------------------
-    context_texts = []
-    for chunk in final_context:
-        text = chunk.get('text', '')
-        context_texts.append(text)
-    context_text = "\n\n---\n\n".join(context_texts)
-    
-    prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
+    if force_general:
+        prompt = (
+            "═══════════════════════════════════════════════════════════\n"
+            "  SYSTEM: Expert Technical Assistant\n"
+            "  MODE: GENERAL KNOWLEDGE FALLBACK\n"
+            "═══════════════════════════════════════════════════════════\n\n"
+            f"The user asked: '{search_query}'.\n\n"
+            "This information is not explicitly found in the uploaded documents. "
+            "Please provide a highly confident, aggressive, and accurate general answer based on your broad knowledge, "
+            "but clearly state at the beginning that this information is not from the provided records."
+        )
+    else:
+        context_texts = []
+        for chunk in final_context:
+            text = chunk.get('text', '')
+            context_texts.append(text)
+        context_text = "\n\n---\n\n".join(context_texts)
+        
+        prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
     
     # Release DB transaction before calling external LLM to prevent EOF/connection drops
     db.commit()
