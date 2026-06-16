@@ -354,7 +354,8 @@ def ingest_file(
                             "text": t_part,
                             "is_parent": True,
                             "parent_idx": None,
-                            "child_idx": None
+                            "child_idx": None,
+                            "content_type": "table",
                         })
                         
             # 3. Add Image OCR text as standalone chunks
@@ -364,7 +365,8 @@ def ingest_file(
                         "text": img_txt,
                         "is_parent": True,
                         "parent_idx": None,
-                        "child_idx": None
+                        "child_idx": None,
+                        "content_type": "image_ocr",
                     })
 
             doc_title = os.path.basename(file_path)
@@ -399,15 +401,15 @@ def ingest_file(
                 # Detect content type
                 content_type = chunk_info.get("content_type", "text")
                 if content_type == "text":
-                    if chunk_text.startswith("[TABLE"):
+                    if raw_text.startswith("[TABLE"):
                         content_type = "table"
-                    elif chunk_text.startswith("[IMAGE OCR") or chunk_text.startswith("[FULL PAGE OCR"):
+                    elif raw_text.startswith("[IMAGE OCR") or raw_text.startswith("[FULL PAGE OCR"):
                         content_type = "image_ocr"
-                    elif chunk_text.startswith("[VIDEO SUBTITLE") or chunk_text.startswith("[SUBTITLE"):
+                    elif raw_text.startswith("[VIDEO SUBTITLE") or raw_text.startswith("[SUBTITLE"):
                         content_type = "subtitle"
-                    elif chunk_text.startswith("[EXCEL SHEET"):
+                    elif raw_text.startswith("[EXCEL SHEET"):
                         content_type = "table"
-                    elif chunk_text.startswith("[CSV DATA"):
+                    elif raw_text.startswith("[CSV DATA"):
                         content_type = "table"
 
                 pending_chunks.append({
@@ -582,6 +584,7 @@ def _process_chunk_batch(
                         payload={
                             "tenant_id": tenant_id,
                             "doc_id": doc_id,
+                            "file_type": file_type,
                             "text_content": c["text"],
                             "section": c["section"],
                             "metadata": doc_metadata

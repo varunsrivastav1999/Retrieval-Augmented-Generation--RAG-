@@ -3,6 +3,9 @@ from app.database import DocumentChunk
 from app.rag.model_loader import cosine_similarity, encode_text, encode_texts, get_embedding_model_id
 
 ENABLE_CONTEXT_EXPANSION = os.getenv("RAG_ENABLE_CONTEXT_EXPANSION", "true").lower() in {"1", "true", "yes", "on"}
+BROAD_CONTEXT_SOURCE_LIMIT = int(os.getenv("RAG_BROAD_CONTEXT_SOURCE_LIMIT", "1"))
+BROAD_CONTEXT_MAX_CHUNKS = int(os.getenv("RAG_BROAD_CONTEXT_MAX_CHUNKS", "32"))
+BROAD_CONTEXT_MAX_CHARS = int(os.getenv("RAG_BROAD_CONTEXT_MAX_CHARS", "26000"))
 
 def apply_mmr(query: str, chunks: list, diversity: float = 0.5) -> list:
     """
@@ -64,7 +67,7 @@ def compress_context(chunk: dict) -> dict:
         chunk["text"] = text[:max_chars] + "..."
     return chunk
 
-def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
+def assemble_context(query: str, reranked_chunks: list, db=None, broad_query: bool = False) -> list:
     """
     Layer 5: Context Assembly
     Target 60-70% fill of context window.
@@ -119,6 +122,9 @@ def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
             final_context.append(compressed)
             expanded_ids.add(chunk.get("id"))
 
+    if broad_query and db is not None:
+        _append_broad_document_context(final_context, expanded_ids, reranked_chunks, db)
+
     # 3. Format citations
     for chunk in final_context:
         metadata = chunk.get("metadata", {})
@@ -128,14 +134,79 @@ def assemble_context(query: str, reranked_chunks: list, db=None) -> list:
         
     return final_context
 
+def _append_broad_document_context(final_context: list, expanded_ids: set, seed_chunks: list, db) -> None:
+    """For setup/overview questions, include ordered coverage from the best source document."""
+    if len(final_context) >= BROAD_CONTEXT_MAX_CHUNKS:
+        return
+
+    source_order = []
+    source_tenants = {}
+    for chunk in seed_chunks:
+        metadata = chunk.get("metadata", {})
+        source = metadata.get("source")
+        if not source or source in source_tenants:
+            continue
+        source_order.append(source)
+        source_tenants[source] = metadata.get("tenant_id", "default")
+        if len(source_order) >= BROAD_CONTEXT_SOURCE_LIMIT:
+            break
+
+    if not source_order:
+        return
+
+    embedding_model = get_embedding_model_id()
+    current_chars = sum(len(chunk.get("text", "")) for chunk in final_context)
+    remaining_slots = max(0, BROAD_CONTEXT_MAX_CHUNKS - len(final_context))
+
+    for source in source_order:
+        if remaining_slots <= 0 or current_chars >= BROAD_CONTEXT_MAX_CHARS:
+            break
+        tenant_id = source_tenants[source]
+        try:
+            rows = (
+                db.query(DocumentChunk)
+                .filter(
+                    DocumentChunk.tenant_id == tenant_id,
+                    DocumentChunk.embedding_model == embedding_model,
+                    DocumentChunk.doc_id == source,
+                )
+                .order_by(DocumentChunk.section)
+                .limit(BROAD_CONTEXT_MAX_CHUNKS * 2)
+                .all()
+            )
+        except Exception as exc:
+            print(f"[Context] Broad document coverage failed: {exc}")
+            return
+
+        for row in rows:
+            if remaining_slots <= 0 or current_chars >= BROAD_CONTEXT_MAX_CHARS:
+                return
+            if row.id in expanded_ids:
+                continue
+
+            candidate = compress_context(_candidate_from_chunk(row))
+            text = candidate.get("text", "")
+            if current_chars + len(text) > BROAD_CONTEXT_MAX_CHARS and final_context:
+                continue
+
+            final_context.append(candidate)
+            expanded_ids.add(row.id)
+            current_chars += len(text)
+            remaining_slots -= 1
+
 def _candidate_from_chunk(chunk) -> dict:
+    metadata = chunk.doc_metadata or {}
     return {
         "id": chunk.id,
         "text": chunk.text_content,
         "metadata": {
             "source": chunk.doc_id,
             "section": chunk.section,
-            "page_num": (chunk.doc_metadata or {}).get("page_num"),
+            "page_num": metadata.get("page_num"),
+            "tenant_id": chunk.tenant_id,
+            "type": metadata.get("type", "text"),
+            "file_type": metadata.get("file_type", chunk.file_type),
+            "entities": metadata.get("entities", []),
         },
         "quantized_embedding": chunk.quantized_embedding if hasattr(chunk, "quantized_embedding") else None,
     }

@@ -1,5 +1,6 @@
 import os
 import uuid
+from typing import Iterable
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
@@ -29,6 +30,37 @@ def insert_qdrant_points(collection_name: str, points: list):
         collection_name=collection_name,
         points=points
     )
+
+def delete_qdrant_points_by_source(
+    tenant_id: str,
+    doc_ids: Iterable[str],
+    collections: tuple[str, ...] = ("document_chunks", "image_chunks"),
+) -> None:
+    """Delete all Qdrant vectors for source documents before a forced reindex."""
+    client = get_qdrant_client()
+    doc_id_list = sorted(set(doc_ids))
+    if not doc_id_list:
+        return
+        
+    source_filter = models.Filter(
+        must=[
+            models.FieldCondition(
+                key="tenant_id",
+                match=models.MatchValue(value=tenant_id),
+            ),
+            models.FieldCondition(
+                key="doc_id",
+                match=models.MatchAny(any=doc_id_list),
+            ),
+        ]
+    )
+    selector = models.FilterSelector(filter=source_filter)
+    for collection_name in collections:
+        client.delete(
+            collection_name=collection_name,
+            points_selector=selector,
+            wait=True,
+        )
 
 def delete_qdrant_points(tenant_id: str, doc_id: str):
     """Deletes vectors from Qdrant by tenant_id and doc_id for both collections."""
