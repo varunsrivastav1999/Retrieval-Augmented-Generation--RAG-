@@ -181,18 +181,31 @@ def chunk_table_per_row(table_md: str) -> List[str]:
     if not data_rows:
         return [table_md]
 
-    # If the table is small (≤5 data rows), keep it as one chunk
-    if len(data_rows) <= 5:
+    # If the table is small enough to fit within embedding token limits (≤25 rows)
+    # keep it as one solid chunk to preserve multi-row header context.
+    if len(data_rows) <= 25:
         return [table_md]
 
-    # For large tables: create per-row chunks
+    # For massive tables: create multi-row blocks to preserve context
+    # while staying under 512 token limits for embeddings.
     row_chunks = []
-    for row in data_rows:
-        row = row.strip()
-        if not row:
-            continue
-        row_chunk = f"{header_block}\n{row}"
-        row_chunks.append(row_chunk)
+    chunk_size = 10
+    
+    # Check if the first row is a sub-header (common in PDFs where H W D is split)
+    # If it is, append it to the header block for all chunks
+    sub_header = ""
+    if data_rows and len(data_rows[0].strip()) > 0:
+        first_row = data_rows[0]
+        # Heuristic: if it has very few alphanumeric chars compared to pipes, it's likely a subheader
+        alnum_count = sum(c.isalnum() for c in first_row)
+        if alnum_count < 20: 
+            sub_header = first_row + "\n"
+            data_rows = data_rows[1:]
+
+    for i in range(0, len(data_rows), chunk_size):
+        block = "\n".join(data_rows[i:i+chunk_size])
+        row_chunk = f"{header_block}\n{sub_header}{block}"
+        row_chunks.append(row_chunk.strip())
 
     return row_chunks
 
