@@ -409,3 +409,153 @@ def text_to_sql_filters(query: str) -> dict:
     return {}
 
 
+# ---------------------------------------------------------------------------
+# FLARE: Forward-looking Active Retrieval Augmented Generation
+# ---------------------------------------------------------------------------
+def flare_query_decomposition(original_query: str, retry_count: int, partial_answer: str = "") -> List[str]:
+    """
+    FLARE: Generate alternative search queries when initial retrieval fails.
+    
+    Retry 1: Extract keywords, drop question words (existing CRAG)
+    Retry 2: Generate 2 semantically different search angles via LLM
+    Retry 3: Decompose into sub-questions, each targeting a different aspect
+    
+    Returns list of queries to search.
+    """
+    if retry_count <= 1:
+        return [reformulate_query(original_query)]
+
+    if retry_count == 2:
+        # LLM-based: generate alternative search angles
+        prompt = f"""You are a search query rewriter for a technical document RAG system.
+The original query: "{original_query}"
+The search returned no relevant results.
+
+Generate exactly 2 alternative search queries that might find the answer in technical documentation.
+Each query should use different keywords, synonyms, and phrasing from the original.
+Return ONLY a JSON array of strings. No markdown, no explanation.
+
+Example: ["query one", "query two"]
+"""
+        payload = {
+            "model": OLLAMA_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.7, "num_predict": 200}
+        }
+        try:
+            response = requests.post(get_ollama_generate_url(), json=payload, timeout=10)
+            if response.status_code == 200:
+                text = response.json().get("response", "").strip()
+                if text.startswith("```json"): text = text[7:-3].strip()
+                elif text.startswith("```"): text = text[3:-3].strip()
+                queries = json.loads(text)
+                if isinstance(queries, list) and len(queries) >= 1:
+                    print(f"[FLARE] Retry 2: Generated alternative queries: {queries}")
+                    return queries[:2]
+        except Exception as e:
+            print(f"[FLARE] LLM query generation failed: {e}")
+
+        return [reformulate_query(original_query)]
+
+    # Retry 3+: decompose into sub-questions
+    prompt = f"""You are a query decomposer for a technical RAG system.
+The query: "{original_query}"
+
+Decompose this query into 3 simple fact-seeking sub-questions.
+Each sub-question should ask about ONE specific piece of information.
+Return ONLY a JSON array of 3 strings. No markdown, no explanation.
+
+Example: ["What is the part number for X?", "What is the torque specification?", "What material is used?"]
+"""
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0.5, "num_predict": 300}
+    }
+    try:
+        response = requests.post(get_ollama_generate_url(), json=payload, timeout=15)
+        if response.status_code == 200:
+            text = response.json().get("response", "").strip()
+            if text.startswith("```json"): text = text[7:-3].strip()
+            elif text.startswith("```"): text = text[3:-3].strip()
+            queries = json.loads(text)
+            if isinstance(queries, list) and len(queries) >= 1:
+                print(f"[FLARE] Retry 3: Decomposed into sub-queries: {queries}")
+                return queries[:3]
+    except Exception as e:
+        print(f"[FLARE] LLM decomposition failed: {e}")
+    return [reformulate_query(original_query)]
+
+
+def flare_mid_generation_retrieval(
+    partial_answer: str,
+    original_query: str,
+    existing_context: List[Dict],
+    min_sentence_len: int = 30,
+) -> Optional[str]:
+    """
+    FLARE mid-generation: extract claims from partial answer and generate
+    a targeted search query for ungrounded claims.
+
+    Returns a search query string if re-retrieval is needed, or None if
+    the partial answer is sufficiently grounded in existing context.
+
+    Algorithm:
+    1. Split partial_answer into sentences
+    2. For each sentence, check if key terms appear in existing context
+    3. If a sentence has < 50% term overlap with context, extract missing terms
+    4. Generate a targeted search query from the missing terms
+    """
+    if not partial_answer or len(partial_answer) < min_sentence_len:
+        return None
+
+    import re
+    # Split into sentences
+    sentences = re.split(r'(?<=[.!?])\s+', partial_answer)
+    if not sentences:
+        return None
+
+    # Build context text for overlap checking
+    context_text = " ".join(
+        c.get("text", "") for c in (existing_context or [])
+    ).lower()
+
+    # Check the latest sentence (most recent generation)
+    latest = sentences[-1].strip()
+    if len(latest) < min_sentence_len:
+        return None
+
+    # Extract significant terms from the latest sentence
+    terms = set(re.findall(r'[A-Za-z][A-Za-z0-9_-]{3,}', latest.lower()))
+    # Remove common words
+    stopwords = {"this", "that", "with", "from", "have", "been", "will",
+                 "would", "could", "should", "their", "there", "which",
+                 "what", "when", "where", "how", "does", "based", "also",
+                 "used", "using", "such", "each", "than", "then", "very"}
+    terms -= stopwords
+
+    if not terms:
+        return None
+
+    # Count overlap with existing context
+    matched = sum(1 for t in terms if t in context_text)
+    overlap_ratio = matched / len(terms)
+
+    # If overlap is below 40%, this sentence may be hallucinating
+    if overlap_ratio >= 0.4:
+        return None
+
+    # Extract missing terms (not found in context)
+    missing = [t for t in terms if t not in context_text]
+    if not missing:
+        return None
+
+    # Build targeted search query from original question + missing terms
+    flare_query = f"{original_query} {' '.join(missing[:5])}"
+    print(f"[FLARE] Mid-gen re-retrieval triggered. Overlap: {overlap_ratio:.0%} "
+          f"Missing terms: {missing[:5]}")
+    print(f"[FLARE] FLARE query: '{flare_query}'")
+    return flare_query
+

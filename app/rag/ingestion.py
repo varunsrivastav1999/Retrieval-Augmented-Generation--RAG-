@@ -214,43 +214,49 @@ def _strip_table_text_from_raw(raw_text: str, tables: List[str]) -> str:
     """
     Remove table content from PyMuPDF raw text when pdfplumber already
     extracted the same data as structured markdown.
-    
+
     PyMuPDF's get_text() garbles multi-column tables (columns get jumbled).
     If pdfplumber extracted the table cleanly, the raw text version is noise
     that dilutes search quality.
     """
     if not tables or not raw_text:
         return raw_text
-    
-    # Extract significant tokens from each table (model numbers, part numbers, etc.)
+
     import re
     table_tokens = set()
+    table_lines = set()
     for table_md in tables:
-        # Extract tokens that look like product codes / model numbers
         tokens = re.findall(r'[A-Za-z0-9]{2,}[A-Za-z0-9-]*', table_md)
         table_tokens.update(t.lower() for t in tokens)
-    
+        for line in table_md.split('\n'):
+            cleaned = line.strip()
+            if cleaned and not cleaned.startswith('[') and not cleaned.startswith('|---'):
+                table_lines.add(cleaned.lower())
+
     if not table_tokens:
         return raw_text
-    
-    # Remove raw text lines that are mostly composed of table tokens
+
     cleaned_lines = []
     for line in raw_text.split('\n'):
         line_stripped = line.strip()
         if not line_stripped:
             cleaned_lines.append(line)
             continue
-        
+
+        # Check exact match against a table line
+        if line_stripped.lower() in table_lines:
+            continue
+
+        # Fuzzy: if >40% of tokens appear in table tokens, it's duplicate
         line_tokens = re.findall(r'[A-Za-z0-9]{2,}[A-Za-z0-9-]*', line_stripped)
         if line_tokens:
             overlap = sum(1 for t in line_tokens if t.lower() in table_tokens)
             overlap_ratio = overlap / len(line_tokens)
-            # If >60% of tokens in this line are from the table, it's a duplicate
-            if overlap_ratio > 0.6 and len(line_tokens) >= 2:
+            if overlap_ratio > 0.4:
                 continue
-        
+
         cleaned_lines.append(line)
-    
+
     return '\n'.join(cleaned_lines)
 
 

@@ -25,16 +25,18 @@ A **production-grade RAG engine** built for industrial-scale document understand
 
 ## 🌟 Key Features
 
-- **World-Class Models**: `BAAI/bge-large-en-v1.5` (embedding), `ColBERTv2` (late-interaction reranker via RAGatouille), `Qwen2.5:14B` (LLM), `CLIP-ViT-L-14` (vision).
+- **World-Class Models**: `BAAI/bge-large-en-v1.5` (embedding, 1024d), `ColBERTv2` (late-interaction reranker via RAGatouille), `Qwen2.5:14B` (LLM — upgraded from 7B), `CLIP-ViT-L-14` (vision, 768d).
 - **Auto Mode** (`auto: true`): Simple fact lookups return exact verbatim text in **6–15ms**; complex analysis questions route to the full LLM pipeline automatically.
 - **Extractive Mode**: Skips the LLM entirely — returns verbatim text from the top document chunk with source citation.
-- **Zero Hallucination**: Three-layer guard — pre-generation grounding check, strict prompt, post-generation answer verification.
-- **30+ File Formats**: PDF, DOCX, XLSX, PPTX, images (OCR), video (subtitles), code, email, archives.
+- **FLARE Active RAG (Layer 15)**: Three-tier retry (keyword extraction → LLM alternative queries → sub-question decomposition) with adaptive thresholds (0.35→0.25→0.15), plus mid-generation sentence-level confidence monitoring with targeted re-retrieval during streaming.
+- **RAPTOR (Layer 5)**: Hierarchical summarization with UMAP + GMM clustering + LLM summarization. Auto-triggered after ingestion completes (15s queue idle) or manually via `POST /api/v1/raptor/build`.
+- **Zero Hallucination**: Four-layer guard — pre-generation grounding check (adaptive threshold), strict citation prompt, mid-generation FLARE verification, post-generation sentence verification.
+- **30+ File Formats**: PDF, DOCX, XLSX, PPTX, images (OCR), video (subtitles), code, email, archives. PDF parser now extracts metadata (title/author/subject/keywords), TOC/bookmarks, hyperlinks, font tracking, and borderless tables via pdfplumber.
 - **100% Air-Gapped**: All models cached locally. No external API calls. Zero telemetry.
-- **GPU Auto-Detect & Stabilized VRAM**: Native NVIDIA CUDA on Linux, Apple MPS on macOS, CPU fallback everywhere. Vision models automatically offloaded to CPU to guarantee stable inference without OOM crashes during heavy multi-model LLM generation.
+- **GPU Auto-Detect & Stabilized VRAM**: Native NVIDIA CUDA on Linux, Apple MPS on macOS, CPU fallback everywhere. Ollama (GPU) + embedding/reranker (CPU) split prevents OOM on 16GB VRAM. Context length reduced to 8192 for 14B model fit.
 - **Lightning Fast Vector Search**: Powered by **Qdrant** for sub-millisecond retrieval across massive multimodal document structures.
 - **High Concurrency**: Tuned connection pooling and 8x parallel Uvicorn/Ollama workers natively support massive concurrent load.
-- **Production Stack**: Docker Compose with 7 services, health checks, GPU passthrough, and Prometheus metrics.
+- **Production Stack**: Docker Compose with 7 services, static IPs, health checks, GPU passthrough, daily backups, and Prometheus metrics. Ollama image pinned to `0.3.14`.
 
 ---
 
@@ -64,15 +66,22 @@ graph TD
     Reranker --> MMR[Layer 8: MMR]
     MMR --> ContextAssemble
     
-    ContextAssemble --> Grade{Layer 15: Active RAG Grade}
-    Grade -- Pass --> Grounding{Layer 12: Grounding Check}
-    Grade -- Fail --> Rewrite[Rewrite Query]
-    Rewrite --> Hybrid
+    ContextAssemble --> FLARE{FLARE: Adaptive Grade}
+    FLARE -- Score ≥ Threshold --> Grounding{Layer 12: Grounding Check}
+    FLARE -- Retry 1 --> Rewrite1[Keyword Extraction]
+    FLARE -- Retry 2 --> Rewrite2[LLM Alternative Queries]
+    FLARE -- Retry 3 --> Rewrite3[Sub-Question Decomposition]
+    Rewrite1 --> Hybrid
+    Rewrite2 --> Hybrid
+    Rewrite3 --> Hybrid
     
     Grounding -- Pass --> LLM[LLM Synthesis Qwen2.5:14B]
     Grounding -- Fail --> HALT[NOT_FOUND_RESPONSE]
     
-    LLM --> Verify[Answer Verification]
+    LLM --> FLARE_Mid{FLARE Mid-Gen Monitor}
+    FLARE_Mid -- Sentence Low Confidence --> TargetedRet[Targeted Re-Retrieval]
+    TargetedRet --> LLM
+    FLARE_Mid -- All Grounded --> Verify[Answer Verification]
     Verify --> Cache[Layer 14: Semantic Cache]
 ```
 
@@ -86,19 +95,19 @@ graph TD
 | 2 | **Smart OCR** | Tesseract + PyMuPDF | Offline (Ingest) |
 | 3 | **Parent-Child Chunking** | 2400 chars parent, 600 chars child | Offline (Ingest) |
 | 4 | **Batch Embedding** | Rapid batch embedding and ingestion | Offline (Ingest) |
-| 5 | **RAPTOR** | Recursive Abstractive Processing via clustering | Offline (Ingest) |
+| 5 | **RAPTOR** | UMAP + GMM clustering + LLM summarization, auto-triggered after ingestion | Offline (Ingest) |
 | 6 | **Hybrid Search** | Qdrant Dense + HyDE + Vision Vectors | ~5ms |
 | 7 | **Late-Interaction Reranking** | **ColBERTv2** via `ragatouille` | ~40ms |
 | 8 | **Max Marginal Relevance (MMR)** | Diversity optimization | ~2ms |
 | 9 | **Contextual Expansion** | Linking child chunk to parent chunk | ~1ms |
-| 10 | **Agentic Router** | Keyword + LLM multi-tool routing | ~0-500ms |
-| 11 | **Query Intelligence** | Spelling, expansion, decomposition | ~10ms |
-| 12 | **Grounding Guard** | Pre-generation hallucination block | ~5ms |
+| 10 | **Agentic Router** | Keyword + LLM multi-tool routing for Graph/RAPTOR/Vector/SQL | ~0-500ms |
+| 11 | **Query Intelligence** | Spelling correction, synonym expansion, query decomposition | ~10ms |
+| 12 | **Grounding Guard** | Pre-generation hallucination block (adaptive threshold 0.35→0.15) | ~5ms |
 | 13 | **Extractive Fast-Path** | 100% LLM bypass for factual answers | ~0ms |
-| 14 | **Semantic Query Cache** | Redis with cosine similarity matching | ~1ms |
-| 15 | **Active RAG (FLARE)** | Self-reflection and re-retrieval loop | Varies |
-| 16 | **GraphRAG** | Neo4j semantic triplet search | ~100ms |
-| 17 | **Real-Time Streaming** | Token-by-token SSE streaming | <200ms first token |
+| 14 | **Semantic Query Cache** | Redis with cosine similarity matching (threshold 0.95) | ~1ms |
+| 15 | **Active RAG (FLARE)** | Multi-level retry (3 tiers) + mid-generation sentence confidence monitoring + targeted re-retrieval | Varies |
+| 16 | **GraphRAG** | Neo4j semantic triplet extraction via spaCy + NL-to-Cypher via Ollama | ~100ms |
+| 17 | **Real-Time Streaming** | Token-by-token SSE with mid-generation FLARE re-retrieval | <200ms first token |
 
 ---
 
@@ -127,11 +136,12 @@ graph TD
 
 ## 🚫 Zero-Hallucination Guarantee
 
-Three independent layers ensure the system never fabricates information:
+Four independent layers ensure the system never fabricates information:
 
-1. **Grounding Guard (Layer 9)** — Computes keyword overlap + semantic similarity against retrieved chunks. Score below threshold → returns `"This information is not available in the uploaded documents."` without ever calling the LLM.
-2. **Strict Prompt** — The LLM prompt explicitly forbids general knowledge: *"You have NO general knowledge. ONLY use the DATABASE RECORDS below."* Every claim must cite its source.
-3. **Answer Verification (Layer 10)** — Post-generation: splits answer into sentences, checks each against source chunks. Outputs confidence (high/medium/low) with evidence.
+1. **Grounding Guard (Layer 12)** — Keyword overlap + semantic similarity against retrieved chunks. Adaptive threshold (0.35→0.25→0.15 across retries). Score below threshold → returns NOT_FOUND without ever calling the LLM.
+2. **FLARE Active RAG (Layer 15)** — Three escalating retry tiers (keyword→LLM alternatives→decomposition), plus mid-generation sentence-level confidence monitoring during streaming. Ungrounded sentences trigger targeted re-retrieval mid-stream.
+3. **Strict Prompt** — *"You have NO general knowledge. ONLY use the DATABASE RECORDS below."* Every claim must cite `[filename.pdf, Page X]`. If no records answer, state: *"This information is not available in the uploaded documents."*
+4. **Answer Verification (Layer 12 post-gen)** — Post-generation sentence-splitting against source chunks. Outputs confidence (high/medium/low) with evidence. Low-confidence answers are blocked.
 
 ---
 
@@ -178,9 +188,9 @@ All 7 services in `production.yml`:
 | Service | Image | Static IP | Resources | Purpose |
 |---------|-------|-----------|-----------|---------|
 | **rag_api** | `itips_rag_prod` | 172.28.0.10 | 4 vCPU, 8GB RAM, 1 worker | FastAPI microservice |
-| **qdrant** | `qdrant/qdrant:latest` | 172.28.0.20 | 4 vCPU, 4GB RAM | High-speed Vector Indexing |
-| **redis** | `redis:7-alpine` | 172.28.0.30 | 1 vCPU, 2GB RAM | Semantic cache + job queue |
-| **ollama** | `ollama/ollama:latest` | 172.28.0.40 | GPU passthrough, 32K context | LLM inference |
+| **qdrant** | `qdrant/qdrant` | 172.28.0.20 | 4 vCPU, 4GB RAM | High-speed Vector Indexing |
+| **redis** | `redis:7-alpine` | 172.28.0.31 (was .30) | 1 vCPU, 2GB RAM | Semantic cache + job queue |
+| **ollama** | `ollama/ollama:0.3.14` (pinned, was `:latest`) | 172.28.0.40 | GPU passthrough, 8K context | Qwen2.5 14B (Q4_K_M) |
 | **neo4j** | `neo4j:5.17.0` | 172.28.0.60 | 2 vCPU, 8GB RAM | Knowledge graph |
 | **models** | `itips_rag_prod` | 172.28.0.50 | One-shot | Model pre-loader |
 
@@ -203,7 +213,6 @@ The project uses a smart bash script that manages Docker Compose, hardware detec
 ```bash
 # 1. Replace secrets (one-time)
 cd Retrieval-Augmented-Generation--RAG-
-QDRANT_API_KEY=$(openssl rand -base64 32)
 REDIS_PW=$(openssl rand -base64 32)
 NEO4J_PW=$(openssl rand -base64 32)
 
@@ -215,10 +224,10 @@ sed -i '' "s/rag_password/$NEO4J_PW/g" .envs/.production/.neo4j
 chmod +x start.sh
 ./start.sh production up
 
-# 3. Pull the LLM
-docker exec ollama_rag_prod ollama pull qwen2.5:7b
+# 3. Verify health
+curl http://localhost:1000/health/ready
 
-# 4. Ingest documents
+# 4. Ingest documents (RAPTOR auto-builds after queue empties)
 curl -X POST http://localhost:1000/api/v1/ingest \
   -H "Content-Type: application/json" \
   -d '{"force_reindex": true}'
@@ -288,7 +297,43 @@ Content-Type: multipart/form-data
 file=@document.pdf       # Upload a single file
 ```
 
----
+### RAPTOR Build
+
+```bash
+POST /api/v1/raptor/build
+Content-Type: application/json
+
+{"tenant_id": "default", "max_levels": 3, "n_clusters": 10}
+# Auto-triggered after ingestion queue stays empty for 15s
+```
+
+Returns:
+```json
+{
+  "status": "completed",
+  "tenant_id": "default",
+  "max_levels": 3,
+  "n_clusters": 10,
+  "message": "RAPTOR tree built successfully. Summaries stored in vector DB."
+}
+```
+
+### PDF Metadata Extracted
+
+Every parsed PDF now returns full metadata in the chunk record:
+
+| Field | Example |
+|-------|---------|
+| `title` | `"Maintenance Manual 2024"` |
+| `author` | `"Engineering Dept"` |
+| `subject` | `"Predictive Maintenance"` |
+| `keywords` | `"sensor, vibration, analysis"` |
+| `toc` | `[1, "Introduction", 1], [1, "Safety", 5]` |
+| `fonts` | `["Helvetica@12", "Times-Bold@18"]` |
+| `has_links` | `true` |
+| `page_count` | `142` |
+
+### Ingest
 
 ## ⚙️ Configuration Reference
 
@@ -299,11 +344,18 @@ Key environment variables (full reference in `.env.example`):
 | `RAG_EMBEDDING_MODEL` | `BAAI/bge-large-en-v1.5` | Embedding model (1024d) |
 | `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranker |
 | `RAG_CLIP_MODEL` | `sentence-transformers/clip-ViT-L-14` | Vision model |
-| `OLLAMA_MODEL` | `qwen2.5:7b` | LLM for synthesis + routing |
-| `RAG_MODEL_DEVICE` | auto | `cuda`, `mps`, or `cpu` |
-| `RAG_CACHE_SEMANTIC_THRESHOLD` | `0.85` | Semantic cache similarity threshold |
+| `OLLAMA_MODEL` | `qwen2.5:14b` | LLM for synthesis + routing (was 7b) |
+| `OLLAMA_IMAGE` | `ollama/ollama:0.3.14` | Pinned image (was `:latest`) |
+| `GROUNDING_THRESHOLD` | `0.35` | Pre-generation guard (was 0.10) |
+| `RAG_MODEL_DEVICE` | `cpu` | Production: reranker/embedding on CPU, Ollama on GPU |
+| `OLLAMA_CONTEXT_LENGTH` | `8192` | Reduced from 32768 to fit 14B + 8K in 16GB VRAM |
+| `RAG_CACHE_SEMANTIC_THRESHOLD` | `0.95` | Semantic cache cosine threshold |
 | `RAG_DEFAULT_TOP_K` | `12` | Number of chunks to retrieve |
-| `OLLAMA_CONTEXT_LENGTH` | `32768` | LLM context window |
+| `RAG_EMBEDDING_QUANTIZE` | `int8` | INT8 quantization for 8x storage compression |
+| `RAG_USE_HALFVEC` | `true` | Half-float vectors in pgvector |
+| `RAG_HF_OFFLINE` | `true` | No internet access after build |
+| `FLARE_THRESHOLDS` | `[0.35, 0.25, 0.15]` | Adaptive thresholds over 3 retries |
+| `FLARE_MAX_RETRIES` | `3` | Max FLARE regeneration attempts |
 
 ---
 

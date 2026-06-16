@@ -73,7 +73,8 @@ from app.rag.grounding import (
     verify_answer_grounding,
 )
 from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported_file
-from app.rag.query_intelligence import intelligent_query_pipeline, reformulate_query, text_to_sql_filters
+from app.rag.query_intelligence import intelligent_query_pipeline, reformulate_query, text_to_sql_filters, flare_query_decomposition, flare_mid_generation_retrieval
+from app.rag.raptor import build_raptor_tree
 
 app = FastAPI(
     title="Enterprise Level RAG 17-Layer Microservice",
@@ -734,6 +735,36 @@ def list_supported_formats():
     }
 
 
+# ---------------------------------------------------------------------------
+# Layer 5: RAPTOR Hierarchical Tree Builder
+# ---------------------------------------------------------------------------
+class RaptorBuildRequest(BaseModel):
+    tenant_id: str = Field(default="default", description="Tenant namespace")
+    max_levels: int = Field(default=3, ge=1, le=10, description="Max RAPTOR tree depth")
+    n_clusters: int = Field(default=10, ge=2, le=100, description="Number of clusters per level")
+
+
+@app.post("/api/v1/raptor/build")
+def build_raptor_index(request: RaptorBuildRequest, db: Session = Depends(get_db)):
+    """Trigger RAPTOR hierarchical summarization on ingested chunks."""
+    try:
+        build_raptor_tree(
+            db=db,
+            tenant_id=request.tenant_id,
+            max_levels=request.max_levels,
+            n_clusters=request.n_clusters,
+        )
+        return {
+            "status": "completed",
+            "tenant_id": request.tenant_id,
+            "max_levels": request.max_levels,
+            "n_clusters": request.n_clusters,
+            "message": "RAPTOR tree built successfully. Summaries stored in vector DB.",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"RAPTOR build failed: {str(e)}")
+
+
 @app.get("/health/live")
 def live_health():
     return {"status": "ok"}
@@ -965,7 +996,10 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         # Layer 13: Query Intelligence (Spelling, Expansion, Decomposition)
         query_intel = intelligent_query_pipeline(search_query)
         
-        # --- FULL AGENTIC STATE MACHINE (multi-query, HyDE, BM25, reranker, CRAG) ---
+        # --- FULL AGENTIC STATE MACHINE (multi-query, HyDE, BM25, reranker, FLARE) ---
+        MAX_FLARE_RETRIES = 3
+        FLARE_THRESHOLDS = [0.35, 0.25, 0.15]  # Decreasing threshold per retry
+        
         class AgentState:
             def __init__(self):
                 self.current_state = "route"
@@ -1026,20 +1060,34 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 agent.current_state = "grade"
                 
             elif agent.current_state == "grade":
+                # FLARE: adaptive threshold based on retry count
+                threshold = FLARE_THRESHOLDS[min(agent.retry_count, len(FLARE_THRESHOLDS) - 1)]
                 agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
                 score = agent.grounding_result.get("score", 0.0)
-                print(f"[Agent:Evaluator] Try {agent.retry_count+1} Score: {score}")
+                print(f"[FLARE] Try {agent.retry_count+1}/{MAX_FLARE_RETRIES+1} Score: {score} (threshold: {threshold})")
                 
-                if agent.grounding_result["is_grounded"] or (agent.retry_count >= 1 and score >= 0.20):
+                if agent.grounding_result["is_grounded"] or score >= threshold:
                     agent.current_state = "generate" if agent.final_context else "end"
                 else:
-                    agent.current_state = "rewrite"
+                    agent.retry_count += 1
+                    if agent.retry_count > MAX_FLARE_RETRIES:
+                        print(f"[FLARE] Max retries ({MAX_FLARE_RETRIES}) reached. Accepting if score >= 0.10.")
+                        if score >= 0.10 and agent.final_context:
+                            agent.current_state = "generate"
+                        else:
+                            agent.current_state = "end"
+                    else:
+                        agent.current_state = "rewrite"
                     
             elif agent.current_state == "rewrite":
-                print("[Agent:Rewriter] Rewriting query for retry...")
-                reformulated = reformulate_query(search_query)
-                agent.queries_to_search = [reformulated]
-                agent.retry_count += 1
+                print(f"[FLARE] Retry {agent.retry_count}/{MAX_FLARE_RETRIES}: generating alternative queries...")
+                # FLARE: escalate query strategy per retry
+                agent.queries_to_search = flare_query_decomposition(
+                    original_query=search_query,
+                    retry_count=agent.retry_count,
+                )
+                # Expand the search pool on retries (more chunks)
+                effective_top_k = min(effective_top_k * agent.retry_count, 48)
                 agent.current_state = "retrieve"
 
         final_context = agent.final_context
@@ -1147,6 +1195,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
 
     if request.stream:
         def stream_llm():
+            nonlocal final_context, sources, effective_top_k
             payload = {
                 "model": OLLAMA_MODEL,
                 "system": "",
@@ -1156,14 +1205,16 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                     "num_predict": OLLAMA_NUM_PREDICT,
                     "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "8192")),
                     "temperature": 0.0,
-                    "num_gpu": 99,       # Force 100% of layers to GPU compute
+                    "num_gpu": 99,
                 }
             }
             answer_acc = ""
+            flare_retrieved_chunks = []
             
             try:
                 response = requests.post(OLLAMA_URL, json=payload, stream=True, timeout=OLLAMA_TIMEOUT_SECONDS)
                 if response.status_code == 200:
+                    token_buffer = ""
                     for line in response.iter_lines():
                         if line:
                             data = json.loads(line.decode("utf-8"))
@@ -1176,6 +1227,31 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                             token = data.get("response", "")
                             answer_acc += token
                             yield f"data: {json.dumps({'token': token})}\n\n"
+                            
+                            # FLARE: mid-generation sentence-level confidence check
+                            token_buffer += token
+                            if len(token_buffer) >= 40 and (token.endswith('.') or token.endswith('!') or token.endswith('?')):
+                                flare_query = flare_mid_generation_retrieval(
+                                    partial_answer=answer_acc,
+                                    original_query=search_query,
+                                    existing_context=final_context + flare_retrieved_chunks,
+                                )
+                                if flare_query and flare_query.strip():
+                                    print(f"[FLARE] Mid-generation re-retrieval for: '{flare_query}'")
+                                    new_chunks = perform_multi_query_search(
+                                        db, [flare_query], tenant_id,
+                                        top_k=effective_top_k,
+                                        metadata_filters=None,
+                                    )
+                                    if new_chunks:
+                                        new_reranked = rerank_results(flare_query, new_chunks, top_n=3)
+                                        for nc in new_reranked:
+                                            if nc not in flare_retrieved_chunks:
+                                                flare_retrieved_chunks.append(nc)
+                                                flare_note = f"\n[FLARE re-retrieved: {nc.get('text', '')[:200]}]"
+                                                answer_acc += flare_note
+                                                yield f"data: {json.dumps({'token': flare_note})}\n\n"
+                                token_buffer = ""
                 else:
                     err = f"Ollama Error: {response.text}"
                     yield f"data: {json.dumps({'token': err})}\n\n"
@@ -1188,6 +1264,30 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 
             # Final safety check
             answer_acc = answer_acc.strip()
+            
+            # FLARE post-generation: if new chunks were retrieved, do a final regeneration pass
+            if flare_retrieved_chunks:
+                enriched_context = final_context + flare_retrieved_chunks
+                enriched_texts = [c.get('text', '') for c in enriched_context]
+                enriched_text = "\n\n---\n\n".join(enriched_texts)
+                flare_prompt = build_strict_grounding_prompt(search_query, enriched_text, broad_query)
+                print(f"[FLARE] Post-generation pass with {len(flare_retrieved_chunks)} new chunks.")
+                try:
+                    final_payload = {
+                        "model": OLLAMA_MODEL,
+                        "system": "",
+                        "prompt": flare_prompt,
+                        "stream": False,
+                        "options": {"num_predict": OLLAMA_NUM_PREDICT, "temperature": 0.0, "num_gpu": 99}
+                    }
+                    final_resp = requests.post(OLLAMA_URL, json=final_payload, timeout=OLLAMA_TIMEOUT_SECONDS)
+                    if final_resp.status_code == 200:
+                        answer_acc = final_resp.json().get("response", "").strip()
+                        yield f"data: {json.dumps({'token': f'[FLARE corrected] {answer_acc}'})}\n\n"
+                except Exception as flare_err:
+                    print(f"[FLARE] Final pass failed: {flare_err}")
+                final_context = enriched_context
+                sources = _context_sources(enriched_context)
             
             # Verification and Caching after generation
             verification = verify_answer_grounding(answer_acc, final_context)
@@ -1209,23 +1309,62 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         return StreamingResponse(stream_llm(), media_type="text/event-stream")
 
     # Non-streaming fallback
-    payload = {
-        "model": OLLAMA_MODEL,
-        "system": "",
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "num_predict": OLLAMA_NUM_PREDICT,
-            "temperature": 0.0,
-            "num_gpu": 99,
-            "num_ctx": 4096,
-        }
-    }
+    flare_retrieved_chunks = []
     answer = ""
     try:
+        payload = {
+            "model": OLLAMA_MODEL,
+            "system": "",
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "num_predict": OLLAMA_NUM_PREDICT,
+                "temperature": 0.0,
+                "num_gpu": 99,
+                "num_ctx": 4096,
+            }
+        }
         response = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT_SECONDS)
         if response.status_code == 200:
             answer = response.json().get("response", "").strip()
+            
+            # FLARE: post-generation sentence-level re-retrieval
+            flare_query = flare_mid_generation_retrieval(
+                partial_answer=answer,
+                original_query=search_query,
+                existing_context=final_context,
+            )
+            if flare_query and flare_query.strip():
+                print(f"[FLARE] Post-generation re-retrieval for: '{flare_query}'")
+                new_chunks = perform_multi_query_search(
+                    db, [flare_query], tenant_id,
+                    top_k=effective_top_k,
+                    metadata_filters=None,
+                )
+                if new_chunks:
+                    new_reranked = rerank_results(flare_query, new_chunks, top_n=3)
+                    for nc in new_reranked:
+                        if nc not in flare_retrieved_chunks:
+                            flare_retrieved_chunks.append(nc)
+            
+            if flare_retrieved_chunks:
+                enriched_context = final_context + flare_retrieved_chunks
+                enriched_texts = [c.get('text', '') for c in enriched_context]
+                enriched_text = "\n\n---\n\n".join(enriched_texts)
+                flare_prompt = build_strict_grounding_prompt(search_query, enriched_text, broad_query)
+                print(f"[FLARE] Regenerating answer with {len(flare_retrieved_chunks)} new chunks.")
+                final_payload = {
+                    "model": OLLAMA_MODEL,
+                    "system": "",
+                    "prompt": flare_prompt,
+                    "stream": False,
+                    "options": {"num_predict": OLLAMA_NUM_PREDICT, "temperature": 0.0, "num_gpu": 99}
+                }
+                final_resp = requests.post(OLLAMA_URL, json=final_payload, timeout=OLLAMA_TIMEOUT_SECONDS)
+                if final_resp.status_code == 200:
+                    answer = final_resp.json().get("response", "").strip()
+                final_context = enriched_context
+                sources = _context_sources(enriched_context)
             
             # Post-process strip
             lower = answer.lower()

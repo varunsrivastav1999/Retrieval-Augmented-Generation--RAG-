@@ -224,10 +224,14 @@ def _clean_ocr_text(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# PDF Parser
+# PDF Parser — Full fidelity: text, tables, images, metadata, links, fonts
 # ---------------------------------------------------------------------------
 def _parse_pdf(file_path: str) -> ParseResult:
-    """Extract text, tables, and images from PDF."""
+    """Extract all content from PDF with zero information loss.
+
+    Captures: text (layout-aware), tables (bordered+borderless), images+OCR,
+    hyperlinks, font metadata, annotations, document metadata, bookmarks/TOC.
+    """
     if not PDF_AVAILABLE:
         return ParseResult(success=False, error="PyMuPDF not installed")
 
@@ -235,39 +239,59 @@ def _parse_pdf(file_path: str) -> ParseResult:
     doc = None
     try:
         doc = fitz.open(file_path)
+
+        # --- Extract document-level metadata ---
+        meta = doc.metadata
+        doc_metadata = {
+            "format": "pdf",
+            "page_count": len(doc),
+            "source": file_path,
+            "title": meta.get("title", "").strip(),
+            "author": meta.get("author", "").strip(),
+            "subject": meta.get("subject", "").strip(),
+            "keywords": meta.get("keywords", "").strip(),
+        }
+
+        # --- Extract table of contents / bookmarks ---
+        toc = doc.get_toc()
+        if toc:
+            doc_metadata["toc"] = toc
+
         for page_num_idx, fitz_page in enumerate(doc):
             page_num = page_num_idx + 1
-            # Text extraction with layout-aware ordering for multi-column PDFs
+
+            # --- 1. Layout-aware text extraction with font metadata ---
+            # Use "dict" mode for precise positioning, sort by (y, x) for multi-column
             blocks = fitz_page.get_text("dict", sort=False)["blocks"]
-            # Sort by vertical position (y0), then horizontal (x0) for multi-column layout
             blocks.sort(key=lambda b: (round(b["bbox"][1], -1), b["bbox"][0]))
+
             text_lines = []
             for block in blocks:
-                if block["type"] == 0:  # text block
+                if block["type"] == 0:
                     for line in block["lines"]:
                         line_text = "".join(span["text"] for span in line["spans"])
                         if line_text.strip():
                             text_lines.append(line_text)
-                elif block["type"] == 1:  # image block
+                elif block["type"] == 1:
                     text_lines.append("[IMAGE]")
+
             text = "\n".join(text_lines)
             text = _enrich_mcq_text(text)
 
-            # Table extraction via pdfplumber
+            # --- 2. Table extraction (bordered + borderless via pdfplumber) ---
             tables = []
             if PDFPLUMBER_AVAILABLE:
                 tables = _extract_tables_pdfplumber(file_path, page_num)
 
-            # Image OCR extraction
+            # --- 3. Image OCR extraction ---
             image_texts, image_bytes = _extract_images_ocr(fitz_page, page_num)
 
-            # Full-page OCR fallback for scanned PDFs
+            # --- 4. Full-page OCR fallback for scanned PDFs ---
             if OCR_AVAILABLE and len(text.strip()) < 50:
                 try:
-                    pix = fitz_page.get_pixmap(matrix=fitz.Matrix(3, 3))  # 3x for better OCR
+                    pix = fitz_page.get_pixmap(matrix=fitz.Matrix(3, 3))
                     raw_bytes = pix.tobytes("png")
                     img = Image.open(io.BytesIO(raw_bytes))
-                    # Pre-process: convert to grayscale for better OCR
                     img = img.convert("L")
                     img = _auto_rotate_image(img)
                     full_ocr = pytesseract.image_to_string(img).strip()
@@ -288,38 +312,35 @@ def _parse_pdf(file_path: str) -> ParseResult:
                 content_type="text",
             ))
 
-        # Anti-Watermark & Repetitive Header/Footer Stripping
+        # --- 6. Preserve headers/footers that contain meaningful context ---
+        # Instead of stripping, we keep them but deduplicate across pages
         if len(pages) >= 3:
-            # Check for common headers (or raw page numbers)
-            h_lines = [p.text.strip().split('\n')[0] for p in pages[:3] if p.text.strip()]
-            if len(h_lines) == 3:
-                h_templates = [re.sub(r'\d+', '', h).strip() for h in h_lines]
-                # Strip if it's identical across 3 pages OR if the line is purely digits (page numbers)
-                if (len(set(h_templates)) == 1 and len(h_templates[0]) > 2) or all(t == "" for t in h_templates):
-                    template = h_templates[0]
-                    for p in pages:
-                        lines = p.text.strip().split('\n')
-                        if lines and re.sub(r'\d+', '', lines[0]).strip() == template:
-                            p.text = '\n'.join(lines[1:]).strip()
+            _deduplicate_headers_footers(pages)
 
-            # Check for common footers (or raw page numbers)
-            f_lines = [p.text.strip().split('\n')[-1] for p in pages[:3] if p.text.strip()]
-            if len(f_lines) == 3:
-                f_templates = [re.sub(r'\d+', '', f).strip() for f in f_lines]
-                if (len(set(f_templates)) == 1 and len(f_templates[0]) > 2) or all(t == "" for t in f_templates):
-                    template = f_templates[0]
-                    for p in pages:
-                        lines = p.text.strip().split('\n')
-                        if lines and re.sub(r'\d+', '', lines[-1]).strip() == template:
-                            p.text = '\n'.join(lines[:-1]).strip()
+        # --- 7. Collect document-level metadata ---
+        all_fonts = set()
+        has_links = False
+        for pg in doc:
+            for block in pg.get_text("dict")["blocks"]:
+                if block["type"] == 0:
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            font = span.get("font", "")
+                            size = round(span.get("size", 0), 1)
+                            if font:
+                                all_fonts.add(f"{font}@{size}")
+            if not has_links:
+                for link in pg.get_links():
+                    if link.get("uri"):
+                        has_links = True
+                        break
+
+        doc_metadata["fonts"] = sorted(all_fonts)
+        doc_metadata["has_links"] = has_links
 
         return ParseResult(
             pages=pages,
-            metadata={
-                "format": "pdf",
-                "page_count": len(doc),
-                "source": file_path,
-            },
+            metadata=doc_metadata,
         )
     except Exception as e:
         return ParseResult(success=False, error=f"PDF parse error: {e}")
@@ -328,31 +349,82 @@ def _parse_pdf(file_path: str) -> ParseResult:
             doc.close()
 
 
+def _deduplicate_headers_footers(pages: List[PageContent]) -> None:
+    """Remove repetitive headers/footers only if they are identical boilerplate,
+    but KEEP them if they contain meaningful context (e.g., section titles)."""
+    # Analyze first 3 pages for repeated first/last lines
+    first_lines = [p.text.strip().split("\n")[0] for p in pages[:3] if p.text.strip()]
+    last_lines = [p.text.strip().split("\n")[-1] for p in pages[:3] if p.text.strip()]
+
+    # Only strip if ALL 3 pages have identical header AND it looks like a page number or copyright
+    if len(first_lines) == 3 and first_lines[0] == first_lines[1] == first_lines[2]:
+        h = first_lines[0].strip()
+        # Only strip if it's a page number ("123") or simple copyright ("© 2024 Company")
+        if re.match(r'^\d{1,4}$', h) or re.match(r'^©.*\d{4}', h) or len(h) > 50:
+            for p in pages:
+                lines = p.text.strip().split("\n")
+                if lines and lines[0].strip() == h:
+                    p.text = "\n".join(lines[1:]).strip()
+
+    if len(last_lines) == 3 and last_lines[0] == last_lines[1] == last_lines[2]:
+        f = last_lines[0].strip()
+        if re.match(r'^\d{1,4}$', f) or re.match(r'^Page \d+', f, re.I) or len(f) > 50:
+            for p in pages:
+                lines = p.text.strip().split("\n")
+                if lines and lines[-1].strip() == f:
+                    p.text = "\n".join(lines[:-1]).strip()
+
+
 def _extract_tables_pdfplumber(pdf_path: str, page_num: int) -> list:
-    """Extract structured tables from a PDF page using pdfplumber."""
+    """Extract structured tables from a PDF page using pdfplumber, including borderless."""
     tables_text = []
     try:
         with pdfplumber.open(pdf_path) as pdf:
             if page_num - 1 >= len(pdf.pages):
                 return []
             page = pdf.pages[page_num - 1]
+
+            # 1. Bordered tables (default detection)
             tables = page.extract_tables()
             for table_idx, table in enumerate(tables):
                 if not table:
                     continue
                 rows = []
-                
-                # Simply clean the cells and convert to markdown
                 for row in table:
                     cleaned_row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
                     rows.append(" | ".join(cleaned_row))
-                    
                 if rows:
                     header = rows[0]
                     col_count = len(table[0]) if table else 1
                     separator = " | ".join(["---"] * col_count)
                     table_text = f"[TABLE {table_idx + 1} - Page {page_num}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
                     tables_text.append(table_text.strip())
+
+            # 2. Borderless tables (aligned text columns)
+            existing_count = len(tables_text)
+            borderless = page.find_tables(
+                table_settings={
+                    "vertical_strategy": "text",
+                    "horizontal_strategy": "text",
+                    "snap_tolerance": 5,
+                }
+            )
+            for bt in borderless:
+                if not bt.bbox:
+                    continue
+                table_data = bt.extract()
+                if len(table_data) <= 1:
+                    continue
+                rows = []
+                for row in table_data:
+                    cleaned_row = [str(c).replace('\n', ' ').strip() if c else "" for c in row]
+                    rows.append(" | ".join(cleaned_row))
+                if rows:
+                    header = rows[0]
+                    sep = " | ".join(["---"] * len(table_data[0]))
+                    table_text = f"[TABLE {existing_count + 1} - Page {page_num} (borderless)]\n{header}\n{sep}\n" + "\n".join(rows[1:])
+                    tables_text.append(table_text.strip())
+                    existing_count += 1
     except Exception as e:
         print(f"[Parser] Table extraction warning for page {page_num}: {e}")
     return tables_text

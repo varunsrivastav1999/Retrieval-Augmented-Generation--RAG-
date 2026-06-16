@@ -24,6 +24,7 @@ from sqlalchemy import text
 
 from app.database import IngestionJob, SessionLocal, utcnow
 from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported_file
+from app.rag.raptor import build_raptor_tree
 
 
 # ---------------------------------------------------------------------------
@@ -182,15 +183,41 @@ def find_all_supported_files(media_path: str, include_scan: bool = True) -> List
 # ---------------------------------------------------------------------------
 # Universal Ingestion Worker
 # ---------------------------------------------------------------------------
+def _run_raptor_background(tid: str) -> None:
+    """Build RAPTOR tree in background thread after ingestion completes."""
+    try:
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            build_raptor_tree(db=db, tenant_id=tid, max_levels=3, n_clusters=10)
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[RAPTOR] Background build failed: {e}")
+
+
 def ingestion_worker_loop(stop_event: threading.Event, poll_seconds: float = 5.0) -> None:
     """Background worker that processes queued ingestion jobs for any file type."""
     from app.rag.ingestion import ingest_file
 
+    consecutive_empty = 0
+    last_tenant = "default"
+
     while not stop_event.is_set():
         job = claim_next_ingestion_job()
         if not job:
+            # Auto-trigger RAPTOR after queue stays empty for 15+ seconds
+            if consecutive_empty >= 3:
+                consecutive_empty = -10  # cooldown: don't re-trigger too soon
+                print(f"[RAPTOR] Queue empty. Auto-building RAPTOR tree for tenant '{last_tenant}'...")
+                threading.Thread(target=_run_raptor_background, args=(last_tenant,), daemon=True).start()
+            else:
+                consecutive_empty += 1
             stop_event.wait(poll_seconds)
             continue
+
+        consecutive_empty = 0
+        last_tenant = job["tenant_id"]
 
         try:
             # Check if this is an archive
