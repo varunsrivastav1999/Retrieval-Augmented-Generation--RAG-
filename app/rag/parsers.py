@@ -304,11 +304,34 @@ def _parse_pdf(file_path: str) -> ParseResult:
 
             # --- 2. Table extraction (bordered + borderless via pdfplumber) ---
             tables = []
+            tables_bboxes = []
             if pdfplumber_pdf is not None and page_num - 1 < len(pdfplumber_pdf.pages):
-                tables = _extract_tables_pdfplumber(pdfplumber_pdf.pages[page_num - 1], page_num)
+                tables, tables_bboxes = _extract_tables_pdfplumber(pdfplumber_pdf.pages[page_num - 1], page_num)
 
             # --- 3. Image OCR extraction ---
-            image_texts, image_bytes = _extract_images_ocr(fitz_page, page_num)
+            image_texts, image_bytes, image_bboxes = _extract_images_ocr(fitz_page, page_num)
+            
+            # --- 3.5. Spatial Bounding Box Mapping ---
+            # Tie floating images directly to their aligned tables based on vertical Y-coordinates
+            if tables and image_bboxes:
+                for img_idx, img_rect in enumerate(image_bboxes):
+                    if not img_rect:
+                        continue
+                    
+                    # fitz.Rect is (x0, y0, x1, y1) where y0 is top.
+                    img_y0, img_y1 = img_rect.y0, img_rect.y1
+                    img_center_y = (img_y0 + img_y1) / 2
+                    
+                    for table_idx, bbox in enumerate(tables_bboxes):
+                        if not bbox: continue
+                        # pdfplumber bbox is (x0, top, x1, bottom)
+                        t_top, t_bottom = bbox[1], bbox[3]
+                        
+                        # If the image's vertical center falls within the table's vertical bounds
+                        if t_top <= img_center_y <= t_bottom:
+                            tag = f"\n[NOTE: Associated Product Image {img_idx + 1} aligns with this table]"
+                            if tag not in tables[table_idx]:
+                                tables[table_idx] += tag
 
             # --- 4. Full-page OCR fallback for scanned PDFs ---
             if OCR_AVAILABLE and len(text.strip()) < 50:
@@ -382,28 +405,52 @@ def _deduplicate_headers_footers(pages: List[PageContent]) -> None:
                     p.text = "\n".join(lines[:-1]).strip()
 
 
-def _extract_tables_pdfplumber(pdf_page, page_num: int) -> list:
-    """Extract structured tables from a pdfplumber page, including borderless."""
+def _extract_tables_pdfplumber(pdf_page, page_num: int) -> tuple:
+    """Extract structured tables from a pdfplumber page, including borderless. Returns (tables_text, tables_bboxes)."""
     tables_text = []
+    tables_bboxes = []
     try:
-        # 1. Bordered tables (default detection)
-        tables = pdf_page.extract_tables()
-        for table_idx, table in enumerate(tables):
+        # 1. Bordered tables (with advanced detection for complex catalogue grids)
+        found_tables = pdf_page.find_tables(table_settings={
+            "vertical_strategy": "lines",
+            "horizontal_strategy": "lines",
+            "intersection_y_tolerance": 15,
+            "intersection_x_tolerance": 15,
+        })
+        
+        for table_idx, tbl_obj in enumerate(found_tables):
+            table = tbl_obj.extract()
             if not table:
                 continue
             rows = []
+            previous_row = None
             for row in table:
                 if row is None:
                     continue
+                    
+                # Clean row cells
                 cleaned_row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
+                
+                # --- Row-Span Propagation Algorithm ---
+                # If a cell is blank but the row above had data (and we are not in the header),
+                # it's likely a vertically merged cell. We inherit the value to preserve DB query integrity.
+                if previous_row and len(cleaned_row) == len(previous_row):
+                    # Only propagate if at least one other column in this row HAS data (it's not just an empty spacer row)
+                    if any(cleaned_row):
+                        for i in range(len(cleaned_row)):
+                            if not cleaned_row[i] and previous_row[i]:
+                                cleaned_row[i] = previous_row[i]
+                
                 rows.append(" | ".join(cleaned_row))
+                previous_row = cleaned_row
+
             if rows:
                 header = rows[0]
-                first_row = table[0]
-                col_count = len(first_row) if first_row else len(rows[0].split(" | "))
+                col_count = len(table[0]) if table[0] else len(rows[0].split(" | "))
                 separator = " | ".join(["---"] * col_count)
                 table_text = f"[TABLE {table_idx + 1} - Page {page_num}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
                 tables_text.append(table_text.strip())
+                tables_bboxes.append(tbl_obj.bbox)
 
         # 2. Borderless tables (aligned text columns)
         existing_count = len(tables_text)
@@ -417,35 +464,61 @@ def _extract_tables_pdfplumber(pdf_page, page_num: int) -> list:
         for bt in borderless:
             if not bt.bbox:
                 continue
+            # Skip if this bounding box significantly overlaps with an already found bordered table
+            is_duplicate = False
+            for existing_bbox in tables_bboxes:
+                # Simple overlap check
+                if (bt.bbox[0] < existing_bbox[2] and bt.bbox[2] > existing_bbox[0] and
+                    bt.bbox[1] < existing_bbox[3] and bt.bbox[3] > existing_bbox[1]):
+                    is_duplicate = True
+                    break
+            if is_duplicate:
+                continue
+
             table_data = bt.extract()
             if table_data is None or len(table_data) <= 1:
                 continue
             if table_data[0] is None:
                 continue
+                
             rows = []
+            previous_row = None
             for row in table_data:
                 if row is None:
                     continue
                 cleaned_row = [str(c).replace('\n', ' ').strip() if c else "" for c in row]
+                
+                # Row-Span Propagation
+                if previous_row and len(cleaned_row) == len(previous_row):
+                    if any(cleaned_row):
+                        for i in range(len(cleaned_row)):
+                            if not cleaned_row[i] and previous_row[i]:
+                                cleaned_row[i] = previous_row[i]
+                                
                 rows.append(" | ".join(cleaned_row))
+                previous_row = cleaned_row
+                
             if rows:
                 header = rows[0]
                 sep = " | ".join(["---"] * len(table_data[0]))
                 table_text = f"[TABLE {existing_count + 1} - Page {page_num} (borderless)]\n{header}\n{sep}\n" + "\n".join(rows[1:])
                 tables_text.append(table_text.strip())
+                tables_bboxes.append(bt.bbox)
                 existing_count += 1
+                
     except Exception as e:
         print(f"[Parser] Table extraction warning for page {page_num}: {e}")
-    return tables_text
+    return tables_text, tables_bboxes
 
 
 def _extract_images_ocr(fitz_page, page_num: int, min_size: int = 80) -> tuple:
-    """Extract text from images embedded in a PDF page via OCR, and return raw bytes for Vision."""
+    """Extract text from images embedded in a PDF page via OCR, and return raw bytes + bboxes for Vision Spatial Mapping."""
     if not OCR_AVAILABLE:
-        return [], []
+        return [], [], []
 
     image_texts = []
     image_bytes = []
+    image_bboxes = []
     try:
         image_list = fitz_page.get_images(full=True)
         doc = fitz_page.parent
@@ -453,6 +526,11 @@ def _extract_images_ocr(fitz_page, page_num: int, min_size: int = 80) -> tuple:
         for img_idx, img_info in enumerate(image_list):
             xref = img_info[0]
             try:
+                # 1. Get Bounding Box
+                rects = fitz_page.get_image_rects(xref)
+                bbox = rects[0] if rects else None
+                
+                # 2. Extract image bytes
                 base_image = doc.extract_image(xref)
                 if not base_image:
                     continue
@@ -473,13 +551,14 @@ def _extract_images_ocr(fitz_page, page_num: int, min_size: int = 80) -> tuple:
                     image_texts.append(
                         f"[IMAGE OCR - Page {page_num}, Image {img_idx + 1}]\n{ocr_text}"
                     )
-                # Always save image bytes for Multi-modal CLIP embeddings
+                # Always save image bytes and their spatial location
                 image_bytes.append(base_image["image"])
+                image_bboxes.append(bbox)
             except Exception:
                 continue
     except Exception as e:
         print(f"[Parser] Image OCR warning for page {page_num}: {e}")
-    return image_texts, image_bytes
+    return image_texts, image_bytes, image_bboxes
 
 
 # ---------------------------------------------------------------------------
