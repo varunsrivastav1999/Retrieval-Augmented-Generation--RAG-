@@ -332,6 +332,7 @@ def _as_vector(value: Any) -> List[float]:
     return [float(item) for item in value]
 
 
+@lru_cache(maxsize=128)
 def encode_text(text: str, quantize: bool = False) -> List[float]:
     vec = _as_vector(get_embedding_model().encode(text))
     if quantize and RAG_EMBEDDING_QUANTIZE == "int8":

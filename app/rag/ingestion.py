@@ -329,6 +329,16 @@ def ingest_file(
             except Exception as e:
                 print(f"[Contextual Retrieval] Failed to generate context: {e}")
 
+        # force_reindex: delete all existing chunks for this document before re-ingesting
+        if force_reindex:
+            deleted = db.query(DocumentChunk).filter(
+                DocumentChunk.tenant_id == tenant_id,
+                DocumentChunk.doc_id == file_path,
+            ).delete(synchronize_session=False)
+            if deleted:
+                print(f"[Ingest] force_reindex: deleted {deleted} existing chunks for {file_path}")
+            db.commit()
+
         for page_idx, page in enumerate(parse_result.pages):
             page_chunks = []
             

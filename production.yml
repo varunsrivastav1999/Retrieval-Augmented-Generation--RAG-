@@ -190,7 +190,7 @@ services:
       - "6379:6379"
     networks:
       rag_network:
-        ipv4_address: 172.28.0.30
+        ipv4_address: 172.28.0.31
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-mysecurepassword}", "ping"]
       interval: 10s

@@ -1030,7 +1030,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 score = agent.grounding_result.get("score", 0.0)
                 print(f"[Agent:Evaluator] Try {agent.retry_count+1} Score: {score}")
                 
-                if agent.grounding_result["is_grounded"] or agent.retry_count >= 1:
+                if agent.grounding_result["is_grounded"] or (agent.retry_count >= 1 and score >= 0.20):
                     agent.current_state = "generate" if agent.final_context else "end"
                 else:
                     agent.current_state = "rewrite"

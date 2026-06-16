@@ -237,8 +237,20 @@ def _parse_pdf(file_path: str) -> ParseResult:
         doc = fitz.open(file_path)
         for page_num_idx, fitz_page in enumerate(doc):
             page_num = page_num_idx + 1
-            # Text extraction
-            text = fitz_page.get_text() or ""
+            # Text extraction with layout-aware ordering for multi-column PDFs
+            blocks = fitz_page.get_text("dict", sort=False)["blocks"]
+            # Sort by vertical position (y0), then horizontal (x0) for multi-column layout
+            blocks.sort(key=lambda b: (round(b["bbox"][1], -1), b["bbox"][0]))
+            text_lines = []
+            for block in blocks:
+                if block["type"] == 0:  # text block
+                    for line in block["lines"]:
+                        line_text = "".join(span["text"] for span in line["spans"])
+                        if line_text.strip():
+                            text_lines.append(line_text)
+                elif block["type"] == 1:  # image block
+                    text_lines.append("[IMAGE]")
+            text = "\n".join(text_lines)
             text = _enrich_mcq_text(text)
 
             # Table extraction via pdfplumber
@@ -554,12 +566,22 @@ def _parse_pptx(file_path: str) -> ParseResult:
         prs = Presentation(file_path)
         pages = []
 
+        def _iter_shapes(shapes):
+            for shape in shapes:
+                yield shape
+                if shape.shape_type == 6:  # GROUP
+                    try:
+                        yield from _iter_shapes(shape.shapes)
+                    except Exception:
+                        pass
+
         for slide_idx, slide in enumerate(prs.slides):
             slide_num = slide_idx + 1
             text_parts = []
             tables = []
+            image_texts = []
 
-            for shape in slide.shapes:
+            for shape in _iter_shapes(slide.shapes):
                 # Text frames
                 if shape.has_text_frame:
                     for paragraph in shape.text_frame.paragraphs:
@@ -581,17 +603,30 @@ def _parse_pptx(file_path: str) -> ParseResult:
                         table_md = f"[TABLE - Slide {slide_num}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
                         tables.append(table_md)
 
+                # Images: extract and OCR
+                if shape.shape_type == 13 and OCR_AVAILABLE:  # PICTURE
+                    try:
+                        image_blob = shape.image.blob
+                        img = Image.open(io.BytesIO(image_blob))
+                        img = img.convert("L")
+                        ocr_text = pytesseract.image_to_string(img).strip()
+                        if ocr_text:
+                            image_texts.append(f"[IMAGE OCR - Slide {slide_num}]\n{ocr_text}")
+                    except Exception as e:
+                        print(f"[Parser] PPTX image OCR failed slide {slide_num}: {e}")
+
             # Slide notes
             if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
                 notes = slide.notes_slide.notes_text_frame.text.strip()
                 if notes:
                     text_parts.append(f"[SPEAKER NOTES]\n{notes}")
 
-            if text_parts or tables:
+            if text_parts or tables or image_texts:
                 pages.append(PageContent(
                     page_num=slide_num,
                     text="\n".join(text_parts),
                     tables=tables,
+                    image_texts=image_texts,
                 ))
 
         return ParseResult(

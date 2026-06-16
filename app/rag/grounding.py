@@ -24,7 +24,7 @@ from app.rag.model_loader import cosine_similarity, encode_text, encode_texts
 # Configuration
 # ---------------------------------------------------------------------------
 # Minimum grounding score to proceed with LLM generation
-GROUNDING_THRESHOLD = 0.10
+GROUNDING_THRESHOLD = 0.35
 
 # Minimum confidence to return an answer
 CONFIDENCE_THRESHOLD = 0.10
@@ -106,7 +106,7 @@ def compute_grounding_score(
     effective_threshold = GROUNDING_THRESHOLD
     query_lower = query.lower().split()
     if len(query_lower) <= 3 or any(w in VAGUE_QUERY_WORDS for w in query_lower):
-        effective_threshold = max(0.15, GROUNDING_THRESHOLD - 0.1)
+        effective_threshold = GROUNDING_THRESHOLD - 0.1
 
     is_grounded = combined_score >= effective_threshold
 
@@ -246,8 +246,12 @@ def build_strict_grounding_prompt(
             "1. You are an expert technical assistant. Provide a highly confident, accurate, and user-perspective answer.\n"
             "2. Analyze and synthesize information ACROSS multiple records aggressively to find the answer.\n"
             "3. If the answer is implied or scattered across records, draw logical conclusions and state them confidently.\n"
-            "4. Preserve all markdown formatting, tables, lists, and images exactly as they appear in the records.\n"
-            "5. Group related information from the same document together.\n"
+            "4. YOU MUST CITE THE SOURCE for every factual claim using the format [filename.pdf, Page X]. "
+            "Do not make claims without citing a specific source.\n"
+            "5. Preserve all markdown formatting, tables, lists, and images exactly as they appear in the records.\n"
+            "6. Group related information from the same document together.\n"
+            "7. If no information in the provided records can answer the question, state: "
+            "'This information is not available in the uploaded documents.' Do NOT make up an answer.\n"
             f"{topic_line}\n"
             "-----------------------------------------------------------\n"
             f"DATABASE RECORDS:\n{context_text}\n"
@@ -265,12 +269,16 @@ def build_strict_grounding_prompt(
         "1. You are an expert technical assistant. Provide a highly confident, accurate, and user-perspective answer.\n"
         "2. Be aggressive in extracting the answer from the records. If the answer is implied by the context, state it confidently.\n"
         "3. DO NOT repeat the same information multiple times.\n"
-        "4. Preserve all markdown formatting, tables, lists, and images exactly as they appear.\n"
-        "5. TABLE LOOKUP RULE: When the question asks about a specific model number, part number,\n"
+        "4. YOU MUST CITE THE SOURCE for every factual claim using the format [filename.pdf, Page X]. "
+        "Do not make claims without citing a specific source.\n"
+        "5. Preserve all markdown formatting, tables, lists, and images exactly as they appear.\n"
+        "6. TABLE LOOKUP RULE: When the question asks about a specific model number, part number,\n"
         "   or product code (e.g., SNC2448L1125), find the EXACT row in the table that contains\n"
         "   that identifier. Then read the value from the requested column by matching the\n"
         "   column headers. Do NOT use values from different rows.\n"
-        "6. DO NOT start your answer with phrases like 'Based on the provided records'. Start directly and confidently.\n"
+        "7. DO NOT start your answer with phrases like 'Based on the provided records'. Start directly and confidently.\n"
+        "8. If no information in the provided records can answer the question, state: "
+        "'This information is not available in the uploaded documents.' Do NOT make up an answer.\n"
         f"{topic_line}\n"
         "-----------------------------------------------------------\n"
         f"DATABASE RECORDS:\n{context_text}\n"
