@@ -1,14 +1,15 @@
 <div align="center">
   <h1>Enterprise Level RAG — World-Class 17-Layer Production Engine</h1>
   <p><strong>Developed & Owned by: Varun Srivastav</strong></p>
-  <p><strong>Zero-Hallucination · Sub-10ms Extractive Mode · 30+ Formats · 100% Air-Gapped · 200+ Concurrent Users</strong></p>
+  <p><strong>Zero-Hallucination · Sub-10ms Extractive Mode · 30+ Formats · 100% Air-Gapped · High Concurrency</strong></p>
 
   <p>
     <img src="https://img.shields.io/badge/Architecture-17--Layer_RAG-blue" alt="17-Layer RAG" />
     <img src="https://img.shields.io/badge/Embedding-BAAI/bge--large--en--v1.5-8A2BE2" alt="bge-large" />
     <img src="https://img.shields.io/badge/Reranker-bge--reranker--v2--m3-8A2BE2" alt="bge-reranker" />
     <img src="https://img.shields.io/badge/LLM-Qwen2.5:14B-FF6B35" alt="Qwen2.5" />
-    <img src="https://img.shields.io/badge/VectorDB-pgvector-336791?logo=postgresql" alt="pgvector" />
+    <img src="https://img.shields.io/badge/VectorDB-Qdrant-FE4155?logo=qdrant" alt="Qdrant" />
+    <img src="https://img.shields.io/badge/MetaDB-SQLite-003B57?logo=sqlite" alt="SQLite" />
     <img src="https://img.shields.io/badge/GraphDB-Neo4j-008CC1?logo=neo4j" alt="Neo4j" />
     <img src="https://img.shields.io/badge/Cache-Redis-red?logo=redis" alt="Redis" />
     <img src="https://img.shields.io/badge/GPU-CUDA/MPS/CPU-brightgreen" alt="GPU" />
@@ -22,22 +23,22 @@ A **production-grade RAG engine** built for industrial-scale document understand
 
 ---
 
-## Features
+## 🌟 Key Features
 
-- **World-Class Models**: `BAAI/bge-large-en-v1.5` (embedding), `ColBERTv2` (late-interaction reranker via RAGatouille), `Qwen2.5:14B` (LLM), `CLIP-ViT-L-14` (vision)
-- **Auto Mode** (`auto: true`): Simple fact lookups return exact verbatim text in **6–15ms**; complex analysis questions route to the full LLM pipeline automatically
-- **Extractive Mode**: Skips the LLM entirely — returns verbatim text from the top document chunk with source citation
-- **Zero Hallucination**: Three-layer guard — pre-generation grounding check, strict prompt, post-generation answer verification
-- **30+ File Formats**: PDF, DOCX, XLSX, PPTX, images (OCR), video (subtitles), code, email, archives
+- **World-Class Models**: `BAAI/bge-large-en-v1.5` (embedding), `ColBERTv2` (late-interaction reranker via RAGatouille), `Qwen2.5:14B` (LLM), `CLIP-ViT-L-14` (vision).
+- **Auto Mode** (`auto: true`): Simple fact lookups return exact verbatim text in **6–15ms**; complex analysis questions route to the full LLM pipeline automatically.
+- **Extractive Mode**: Skips the LLM entirely — returns verbatim text from the top document chunk with source citation.
+- **Zero Hallucination**: Three-layer guard — pre-generation grounding check, strict prompt, post-generation answer verification.
+- **30+ File Formats**: PDF, DOCX, XLSX, PPTX, images (OCR), video (subtitles), code, email, archives.
 - **100% Air-Gapped**: All models cached locally. No external API calls. Zero telemetry.
-- **GPU Auto-Detect**: NVIDIA CUDA on Linux, Apple MPS on macOS, CPU fallback everywhere
-- **TurboQuant**: Int8 quantization compresses embeddings 4x with ~98% accuracy; halfvec storage in pgvector
-- **High Concurrency**: Tuned connection pooling (50-100 pgvector connections) and 8x parallel Uvicorn/Ollama workers natively supports **200+ concurrent users**.
-- **Production Stack**: Docker Compose with 7 services, health checks, GPU passthrough, automated backups, Prometheus metrics
+- **GPU Auto-Detect & Stabilized VRAM**: Native NVIDIA CUDA on Linux, Apple MPS on macOS, CPU fallback everywhere. Vision models automatically offloaded to CPU to guarantee stable inference without OOM crashes during heavy multi-model LLM generation.
+- **Lightning Fast Vector Search**: Powered by **Qdrant** for sub-millisecond retrieval across massive multimodal document structures.
+- **High Concurrency**: Tuned connection pooling and 8x parallel Uvicorn/Ollama workers natively support massive concurrent load.
+- **Production Stack**: Docker Compose with 7 services, health checks, GPU passthrough, and Prometheus metrics.
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 ```mermaid
 graph TD
@@ -58,8 +59,8 @@ graph TD
     ExtMeta --> Hybrid[Layer 6: Hybrid Search]
     
     Router -- Vector --> Hybrid
-    Hybrid --> PGV[(pgvector HNSW)]
-    PGV --> Reranker[Layer 7: ColBERT Reranker]
+    Hybrid --> Qdrant[(Qdrant Vector DB)]
+    Qdrant --> Reranker[Layer 7: ColBERT Reranker]
     Reranker --> MMR[Layer 8: MMR]
     MMR --> ContextAssemble
     
@@ -77,16 +78,16 @@ graph TD
 
 ---
 
-## 17 Layers
+## 🛡️ 17 Processing Layers
 
 | Layer | Name | Model / Technique | Latency Impact |
 |-------|------|-------------------|----------------|
 | 1 | **Universal Parser** | PDF, DOCX, XLSX, images, video subtitles | Offline (Ingest) |
 | 2 | **Smart OCR** | Tesseract + PyMuPDF | Offline (Ingest) |
 | 3 | **Parent-Child Chunking** | 2400 chars parent, 600 chars child | Offline (Ingest) |
-| 4 | **Batch Embedding** | 32-batch pgvector insertion with int8 quant | Offline (Ingest) |
+| 4 | **Batch Embedding** | Rapid batch embedding and ingestion | Offline (Ingest) |
 | 5 | **RAPTOR** | Recursive Abstractive Processing via clustering | Offline (Ingest) |
-| 6 | **Hybrid Search** | HNSW dense + BM25 full-text + trigram | ~5ms |
+| 6 | **Hybrid Search** | Qdrant Dense + HyDE + Vision Vectors | ~5ms |
 | 7 | **Late-Interaction Reranking** | **ColBERTv2** via `ragatouille` | ~40ms |
 | 8 | **Max Marginal Relevance (MMR)** | Diversity optimization | ~2ms |
 | 9 | **Contextual Expansion** | Linking child chunk to parent chunk | ~1ms |
@@ -101,17 +102,17 @@ graph TD
 
 ---
 
-## Performance
+## ⚡ Performance
 
 | Mode | Latency | What happens | Use case |
 |------|---------|-------------|----------|
 | **Cache hit** | **<1ms** | Returns cached response | Repeated queries |
-| **Extractive auto** | **6–15ms** | HNSW search → verbatim chunk text + source | *"What is DC sensor?"*, *"Define MTTR"* |
+| **Extractive auto** | **6–15ms** | Qdrant search → verbatim chunk text + source | *"What is DC sensor?"*, *"Define MTTR"* |
 | **Extractive forced** | **6–15ms** | Same, bypasses auto-detection | When you want exact text |
-| **Full LLM analysis** | **500ms–3s** | Multi-query → HyDE → rerank → LLM → verify | *"Compare predictive maintenance approaches across documents"* |
+| **Full LLM analysis** | **500ms–3s** | Multi-query → HyDE → rerank → LLM → verify | *"Compare predictive maintenance approaches"* |
 | **Streaming** | **First token <200ms** | SSE token-by-token | Real-time UX |
 
-### Models
+### Under the Hood
 
 | Component | Model | Why it's world-class |
 |-----------|-------|---------------------|
@@ -119,19 +120,12 @@ graph TD
 | **Reranker** | `ColBERTv2` (`colbert-ir/colbertv2.0`) | Late-interaction reranker, vast improvement over cross-encoders for technical docs |
 | **LLM** | `Qwen2.5:14B` (Q4_K_M) | 128K context, top instruction-following at 14B |
 | **Vision** | `CLIP-ViT-L-14` | 4x larger than ViT-B-32, far better image understanding |
-
-### Vector Search Indexes (pgvector)
-
-| Index | Type | Parameters |
-|-------|------|------------|
-| HNSW (dense) | `vector_cosine_ops` | `m=16, ef_construction=64` |
-| GIN (full-text) | `tsvector` | English stemmed |
-| GIN (trigram) | `gin_trgm_ops` | Fuzzy matching |
-| B-tree | `(tenant_id, file_type, embedding_model)` | Multi-column filter |
+| **Vector DB**| `Qdrant` | Industry-leading vector retrieval speeds |
+| **Meta DB** | `SQLite` | Ultra-lightweight tracking without the overhead of heavy RDBMS |
 
 ---
 
-## Zero-Hallucination Guarantee
+## 🚫 Zero-Hallucination Guarantee
 
 Three independent layers ensure the system never fabricates information:
 
@@ -141,7 +135,7 @@ Three independent layers ensure the system never fabricates information:
 
 ---
 
-## File Support — 30+ Formats
+## 📂 File Support — 30+ Formats
 
 All parsing is 100% offline. No cloud APIs.
 
@@ -161,43 +155,38 @@ All parsing is 100% offline. No cloud APIs.
 
 **Images, tables, and diagrams** embedded in documents (PDF/DOCX/PPTX) are extracted via PyMuPDF image extraction + Tesseract OCR, and separately indexed through the CLIP vision model for visual similarity search.
 
-### Universal Enterprise Document Extractor
-To prevent schema loss and hallucination on complex formatting (like electrical catalogs, SCADA manuals, or financial balance sheets):
-- **Deduplication:** The pipeline uses `pdfplumber` for clean markdown extraction and automatically strips garbled table data from PyMuPDF's raw text to prevent vector noise.
-- **Universal LLM Pre-Processing:** For dense, highly misaligned OCR clusters, an intelligent LLM pre-processing node is triggered via keywords. It forces raw text into strict, nested JSON arrays prior to chunking, fully resolving clustered rows, extracting SCADA UI signals, HR metrics, and reconciling financial discrepancies.
-- **Semantic Metadata Chunks:** Each extracted component is formatted into a highly readable `Key: Value` string embedded with its global document context (e.g., Fiscal Period, Category) to guarantee exact lookups.
-
 ---
 
-## GPU Support
+## 💻 GPU Support & VRAM Stability
 
 | Hardware | Detection | Docker Support |
 |----------|-----------|----------------|
-| **NVIDIA CUDA** (Linux) | Auto via `torch.cuda.is_available()` | Supported. Full GPU passthrough via `nvidia-container-toolkit`. Ollama is forced to use `num_gpu=99` to ensure 100% of compute layers are offloaded from CPU. |
+| **NVIDIA CUDA** (Linux) | Auto via `torch.cuda.is_available()` | Supported. Full GPU passthrough via `nvidia-container-toolkit`. Ollama uses `num_gpu=99` to offload 100% compute to GPU. |
 | **Apple MPS** (macOS native) | Auto via `torch.backends.mps.is_available()` | Not Supported. MPS unavailable in Docker (CPU fallback with clear warning) |
 | **CPU** (fallback) | Default when no GPU detected | Supported. Always works |
+
+> **VRAM Stabilization:** The CLIP vision model is dynamically forced to run on the **CPU** rather than the GPU. This prevents sudden Out-Of-Memory (OOM) PyTorch crashes when multiple queries invoke the LLM, Reranker, and Embedder simultaneously on GPUs with tight memory constraints (e.g., 16GB VRAM).
 
 Set `RAG_MODEL_DEVICE=cuda` or `RAG_MODEL_DEVICE=mps` to override. Leave empty for auto-detection.
 
 ---
 
-## Production Stack
+## 🛠️ Production Stack
 
 All 7 services in `production.yml`:
 
 | Service | Image | Static IP | Resources | Purpose |
 |---------|-------|-----------|-----------|---------|
-| **rag_api** | `itips_rag_prod` | 172.28.0.10 | 4 vCPU, 8GB RAM, 4 workers | FastAPI microservice |
-| **postgres** | `pgvector/pgvector:pg15` | 172.28.0.20 | 4 vCPU, 4GB RAM | HNSW + GIN + trigram indexes |
+| **rag_api** | `itips_rag_prod` | 172.28.0.10 | 4 vCPU, 8GB RAM, 1 worker | FastAPI microservice |
+| **qdrant** | `qdrant/qdrant:latest` | 172.28.0.20 | 4 vCPU, 4GB RAM | High-speed Vector Indexing |
 | **redis** | `redis:7-alpine` | 172.28.0.30 | 1 vCPU, 2GB RAM | Semantic cache + job queue |
 | **ollama** | `ollama/ollama:latest` | 172.28.0.40 | GPU passthrough, 32K context | LLM inference |
 | **neo4j** | `neo4j:5.17.0` | 172.28.0.60 | 2 vCPU, 8GB RAM | Knowledge graph |
 | **models** | `itips_rag_prod` | 172.28.0.50 | One-shot | Model pre-loader |
-| **backup** | `itips_rag_prod` | rag_network | Minimal | Daily backup at 02:00, 30-day retention |
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ### The Smart Start Script (`start.sh`)
 The project uses a smart bash script that manages Docker Compose, hardware detection, and image building to prevent disk-space exhaustion.
@@ -209,16 +198,15 @@ The project uses a smart bash script that manages Docker Compose, hardware detec
 | `./start.sh production build` | Forces a full image rebuild. | **YES** |
 | `./start.sh production clean` | Nuclear cleanup. Removes all old Docker images, volumes, and build cache. | N/A |
 
-### Production
+### Production Setup
 
 ```bash
 # 1. Replace secrets (one-time)
 cd Retrieval-Augmented-Generation--RAG-
-POSTGRES_PW=$(openssl rand -base64 32)
+QDRANT_API_KEY=$(openssl rand -base64 32)
 REDIS_PW=$(openssl rand -base64 32)
 NEO4J_PW=$(openssl rand -base64 32)
-sed -i '' "s/rag_password/$POSTGRES_PW/g" .envs/.production/.postgres
-sed -i '' "s/rag_password/$POSTGRES_PW/g" .envs/.production/.rag
+
 sed -i '' "s/mysecurepassword/$REDIS_PW/g" .envs/.production/.redis
 sed -i '' "s/mysecurepassword/$REDIS_PW/g" .envs/.production/.rag
 sed -i '' "s/rag_password/$NEO4J_PW/g" .envs/.production/.neo4j
@@ -252,7 +240,7 @@ chmod +x start.sh
 
 ---
 
-## API
+## 🔌 API Documentation
 
 ### Query
 
@@ -263,7 +251,7 @@ Content-Type: application/json
 {
   "query": "What is predictive maintenance",
   "auto": true,          # Auto-detect: simple → 10ms extractive, complex → LLM
-  "fast_path": false,    # Force fast HNSW-only (skip HyDE/BM25/reranker/LLM)
+  "fast_path": false,    # Force fast Dense-only (skip HyDE/Vision/reranker/LLM)
   "extractive": false,   # Force verbatim text from top chunk (skip LLM)
   "tenant_id": "default",
   "top_k": 12,
@@ -300,39 +288,26 @@ Content-Type: multipart/form-data
 file=@document.pdf       # Upload a single file
 ```
 
-### Health & Monitoring
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /health/live` | Liveness probe |
-| `GET /health/ready` | Readiness probe (checks all dependencies) |
-| `GET /metrics` | Prometheus metrics |
-| `GET /api/v1/formats` | List supported file formats |
-
 ---
 
-## Configuration
+## ⚙️ Configuration Reference
 
 Key environment variables (full reference in `.env.example`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RAG_EMBEDDING_MODEL` | `BAAI/bge-large-en-v1.5` | Embedding model (1024d) |
-| `RAG_EMBEDDING_DIM` | `1024` | Embedding dimension |
 | `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranker |
 | `RAG_CLIP_MODEL` | `sentence-transformers/clip-ViT-L-14` | Vision model |
 | `OLLAMA_MODEL` | `qwen2.5:7b` | LLM for synthesis + routing |
 | `RAG_MODEL_DEVICE` | auto | `cuda`, `mps`, or `cpu` |
-| `RAG_EMBEDDING_QUANTIZE` | `int8` | `int8` enables 4x vector compression |
-| `RAG_USE_HALFVEC` | `true` | `true` stores embeddings as float16 in pgvector |
 | `RAG_CACHE_SEMANTIC_THRESHOLD` | `0.85` | Semantic cache similarity threshold |
 | `RAG_DEFAULT_TOP_K` | `12` | Number of chunks to retrieve |
 | `OLLAMA_CONTEXT_LENGTH` | `32768` | LLM context window |
-| `RAG_CORS_ORIGINS` | `*` | Allowed CORS origins |
 
 ---
 
-## Monitoring
+## 📊 Monitoring
 
 Prometheus metrics at `/metrics`:
 
@@ -347,70 +322,18 @@ Prometheus metrics at `/metrics`:
 
 ---
 
-## Directory Structure
+## 🔐 Security
 
-```
-.
-├── Dockerfile                     # Multi-stage (builder + runtime), non-root user
-├── production.yml                 # Full production stack — 7 services
-├── local.yml                      # Development stack — hot-reload
-├── requirements.txt
-├── Modelfile                      # Custom Ollama model definition
-│
-├── app/
-│   ├── main.py                    # FastAPI app, state machine, cache, streaming, auto mode
-│   ├── database.py                # SQLAlchemy models, pgvector, schema migrations
-│   └── rag/
-│       ├── quantization.py        # TurboQuant: int8 scalar quantizer
-│       ├── router.py              # Two-tier semantic router (keyword + LLM)
-│       ├── retrieval.py           # Hybrid search, HyDE, multi-query RRF fusion
-│       ├── reranker.py            # Cross-encoder reranking
-│       ├── context.py             # MMR, compression, window expansion
-│       ├── grounding.py           # Pre-generation check + post-generation verification
-│       ├── query_intelligence.py  # Spelling, expansion, decomposition, CRAG rewrite
-│       ├── ingestion.py           # Universal file parser, chunking, embedding, RAPTOR
-│       ├── parsers.py             # 30+ format parsers (PDF, DOCX, XLSX, images, video)
-│       ├── model_loader.py        # HF model loading, device auto-detect, fallbacks
-│       ├── graph.py               # Neo4j knowledge graph, text-to-cypher, triplets
-│       └── jobs.py                # Background ingestion worker, job queue
-│
-├── .envs/
-│   ├── .local/                    # Development env files (relaxed security)
-│   │   ├── .rag
-│   │   ├── .postgres
-│   │   ├── .redis
-│   │   └── .neo4j
-│   └── .production/               # Production env files
-│       ├── .rag
-│       ├── .postgres
-│       ├── .redis
-│       └── .neo4j
-│
-├── scripts/
-│   ├── db/init/
-│   │   ├── 01-init-pgvector.sql    # HNSW, GIN, trigram indexes
-│   │   └── 02-tuning.sql           # PostgreSQL performance tuning
-│   └── backup/
-│       ├── run.sh                  # Automated backup (pg_dump + neo4j-admin dump)
-│       └── restore.sh              # Restore from backup
-│
-└── .env.example                    # Complete environment variable reference
-```
+- **100% air-gapped**: All models cached locally, zero external API calls.
+- **Non-root user** in Docker container.
+- **Secrets externalized** to `.envs/.production/`.
+- **Read-only model cache** mount in runtime.
+- **CORS restricted** in production.
+- **Redis password authentication** in production.
 
 ---
 
-## Security
-
-- **100% air-gapped**: All models cached locally, zero external API calls
-- **Non-root user** in Docker container
-- **Secrets externalized** to `.envs/.production/`
-- **Read-only model cache** mount in runtime
-- **CORS restricted** in production
-- **Redis password authentication** in production
-- **PostgreSQL password authentication**
-
----
-
-## License
+## 📄 License
 
 MIT — See [LICENSE](./LICENSE) for details.
+
