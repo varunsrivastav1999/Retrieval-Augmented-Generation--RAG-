@@ -2,11 +2,10 @@
 # =============================================================================
 # Enterprise Level RAG — Restore from Backup
 # =============================================================================
-# Usage:
-#   ./scripts/backup/restore.sh [sqlite|neo4j|all] <backup_file>
+#   ./scripts/backup/restore.sh [pg|neo4j|all] <backup_file>
 #
 # Examples:
-#   ./scripts/backup/restore.sh sqlite /backup/sqlite/rag_sqlite_20250101_020000.db
+#   ./scripts/backup/restore.sh pg /backup/postgres/rag_pg_20250101_020000.dump
 #   ./scripts/backup/restore.sh neo4j /backup/neo4j/rag_neo4j_20250101_020000.dump
 #   ./scripts/backup/restore.sh all
 # =============================================================================
@@ -14,24 +13,34 @@
 set -e
 
 BACKUP_DIR="${BACKUP_DIR:-/backup}"
+PGHOST="${PGHOST:-postgres}"
+PGUSER="${PGUSER:-rag_user}"
+PGDATABASE="${PGDATABASE:-rag_db}"
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
-restore_sqlite() {
+restore_postgres() {
   local file="$1"
   if [ -z "$file" ]; then
-    file=$(ls -t "${BACKUP_DIR}/sqlite"/rag_sqlite_*.db 2>/dev/null | head -1)
+    file=$(ls -t "${BACKUP_DIR}/postgres"/rag_pg_*.dump 2>/dev/null | head -1)
   fi
   if [ -z "$file" ] || [ ! -f "$file" ]; then
-    log "ERROR: No SQLite backup file found at ${file:-$BACKUP_DIR/sqlite/}"
+    log "ERROR: No PostgreSQL backup file found at ${file:-$BACKUP_DIR/postgres/}"
     exit 1
   fi
 
-  log "Restoring SQLite from: $file"
-  cp "$file" "/app/rag_db.sqlite3"
-  log "SQLite restore complete."
+  log "Restoring PostgreSQL from: $file"
+  PGPASSWORD="${PGPASSWORD}" pg_restore \
+    -h "${PGHOST}" \
+    -U "${PGUSER}" \
+    -d "${PGDATABASE}" \
+    --clean \
+    --if-exists \
+    --jobs=4 \
+    -v "$file" 2>&1 | tail -20
+  log "PostgreSQL restore complete."
 }
 
 restore_neo4j() {
@@ -51,14 +60,14 @@ restore_neo4j() {
 }
 
 case "${1:-all}" in
-  sqlite)
-    restore_sqlite "$2"
+  pg|postgres)
+    restore_postgres "$2"
     ;;
   neo4j)
     restore_neo4j "$2"
     ;;
   all|*)
-    restore_sqlite "$2"
+    restore_postgres "$2"
     restore_neo4j "$3"
     ;;
 esac

@@ -1,0 +1,7 @@
+# PostgreSQL (local credentials)
+# -----------------------------------------------------------------------------
+POSTGRES_HOST=postgres
+POSTGRES_DB=rag_db
+POSTGRES_USER=rag_user
+POSTGRES_PASSWORD=rag_password
+POSTGRES_PORT=5432

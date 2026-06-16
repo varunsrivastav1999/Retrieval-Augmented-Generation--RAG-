@@ -13,24 +13,40 @@ set -e
 BACKUP_DIR="${BACKUP_DIR:-/backup}"
 RETENTION_DAYS="${RETENTION_DAYS:-30}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+PGHOST="${PGHOST:-}"
+PGUSER="${PGUSER:-rag_user}"
+PGDATABASE="${PGDATABASE:-rag_db}"
 
-mkdir -p "${BACKUP_DIR}/sqlite" "${BACKUP_DIR}/neo4j" "${BACKUP_DIR}/logs"
+mkdir -p "${BACKUP_DIR}/postgres" "${BACKUP_DIR}/neo4j" "${BACKUP_DIR}/logs"
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "${BACKUP_DIR}/logs/backup.log"
 }
 
-# --- SQLite Backup --------------------------------------------------------
-backup_sqlite() {
-  local filename="rag_sqlite_${TIMESTAMP}.db"
-  log "Starting SQLite backup: ${filename}"
-  
-  if [ -f "/app/rag_db.sqlite3" ]; then
-    cp "/app/rag_db.sqlite3" "${BACKUP_DIR}/sqlite/${filename}"
-    local size=$(du -h "${BACKUP_DIR}/sqlite/${filename}" | cut -f1)
-    log "SQLite backup complete: ${filename} (${size})"
+# --- PostgreSQL Backup --------------------------------------------------------
+backup_postgres() {
+  if [ -z "$PGHOST" ] || [ "$PGHOST" = "" ]; then
+    log "PGHOST not set. Skipping PostgreSQL backup."
+    return
+  fi
+
+  local filename="rag_pg_${TIMESTAMP}.dump"
+  log "Starting PostgreSQL backup: ${filename}"
+
+  PGPASSWORD="${PGPASSWORD}" pg_dump \
+    -h "${PGHOST}" \
+    -U "${PGUSER}" \
+    -d "${PGDATABASE}" \
+    -F c \
+    -Z 9 \
+    -f "${BACKUP_DIR}/postgres/${filename}" \
+    -v 2>> "${BACKUP_DIR}/logs/pg_dump.log" || true
+
+  if [ -f "${BACKUP_DIR}/postgres/${filename}" ]; then
+    local size=$(du -h "${BACKUP_DIR}/postgres/${filename}" | cut -f1)
+    log "PostgreSQL backup complete: ${filename} (${size})"
   else
-    log "SQLite database file not found at /app/rag_db.sqlite3. Skipping."
+    log "PostgreSQL backup failed."
   fi
 }
 
@@ -52,9 +68,9 @@ backup_neo4j() {
 cleanup_old_backups() {
   log "Cleaning backups older than ${RETENTION_DAYS} days..."
 
-  local sqlite_count=$(find "${BACKUP_DIR}/sqlite" -name "rag_sqlite_*.db" -type f -mtime +${RETENTION_DAYS} | wc -l)
-  find "${BACKUP_DIR}/sqlite" -name "rag_sqlite_*.db" -type f -mtime +${RETENTION_DAYS} -delete
-  log "Deleted ${sqlite_count} old SQLite backup(s)"
+  local pg_count=$(find "${BACKUP_DIR}/postgres" -name "rag_pg_*.dump" -type f -mtime +${RETENTION_DAYS} 2>/dev/null | wc -l)
+  find "${BACKUP_DIR}/postgres" -name "rag_pg_*.dump" -type f -mtime +${RETENTION_DAYS} -delete 2>/dev/null || true
+  log "Deleted ${pg_count} old PostgreSQL backup(s)"
 
   local neo4j_count=$(find "${BACKUP_DIR}/neo4j" -name "rag_neo4j_*.dump" -type f -mtime +${RETENTION_DAYS} | wc -l)
   find "${BACKUP_DIR}/neo4j" -name "rag_neo4j_*.dump" -type f -mtime +${RETENTION_DAYS} -delete
@@ -64,7 +80,7 @@ cleanup_old_backups() {
 # --- Main ---------------------------------------------------------------------
 log "=== Backup Run Started ==="
 
-backup_sqlite
+backup_postgres
 backup_neo4j
 cleanup_old_backups
 

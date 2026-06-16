@@ -9,7 +9,7 @@
     <img src="https://img.shields.io/badge/Reranker-bge--reranker--v2--m3-8A2BE2" alt="bge-reranker" />
     <img src="https://img.shields.io/badge/LLM-Qwen2.5:14B-FF6B35" alt="Qwen2.5" />
     <img src="https://img.shields.io/badge/VectorDB-Qdrant-FE4155?logo=qdrant" alt="Qdrant" />
-    <img src="https://img.shields.io/badge/MetaDB-SQLite-003B57?logo=sqlite" alt="SQLite" />
+    <img src="https://img.shields.io/badge/MetaDB-PostgreSQL-336791?logo=postgresql" alt="PostgreSQL" />
     <img src="https://img.shields.io/badge/GraphDB-Neo4j-008CC1?logo=neo4j" alt="Neo4j" />
     <img src="https://img.shields.io/badge/Cache-Redis-red?logo=redis" alt="Redis" />
     <img src="https://img.shields.io/badge/GPU-CUDA/MPS/CPU-brightgreen" alt="GPU" />

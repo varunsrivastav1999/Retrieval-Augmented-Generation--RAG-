@@ -15,10 +15,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./rag_db.sqlite3")
-if "postgres" in DATABASE_URL:
-    print("[DB] Overriding legacy postgres DATABASE_URL to use SQLite.")
-    DATABASE_URL = "sqlite:///./rag_db.sqlite3"
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://rag_user:rag_password@postgres:5432/rag_db")
 
 EMBEDDING_DIM = int(os.getenv("RAG_EMBEDDING_DIM", "1024"))
 LEGACY_EMBEDDING_MODEL = os.getenv(
@@ -26,7 +23,7 @@ LEGACY_EMBEDDING_MODEL = os.getenv(
     "sentence-transformers/all-MiniLM-L6-v2",
 )
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
