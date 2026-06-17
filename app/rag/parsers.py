@@ -16,6 +16,8 @@ import subprocess
 import email
 from email import policy
 import urllib.request
+import requests
+import base64
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -252,7 +254,18 @@ def _normalize_superscripts(text: str) -> str:
         return text
     # Handle multi-character replacements first
     text = text.replace('¹⁄', '1/').replace('³⁄', '3/').replace('⁵⁄', '5/').replace('⁷⁄', '7/')
-    return text.translate(_SUPERSCRIPT_MAP)
+    text = text.translate(_SUPERSCRIPT_MAP)
+    
+    # --- RegEx Enhancement: Splitting Merged Columns ---
+    # Detects when a Catalogue/Model Number is jammed against a Measurement (Amperage/Voltage)
+    # e.g., "EQL40200D100A" -> "EQL40200D | 100A"
+    # Matches: [Model ID 4-10 chars] followed optionally by space, then [Number][A|V|W]
+    text = re.sub(r'\b([A-Z0-9]{4,12})\s*(\d{1,4}[AVW])\b', r'\1 | \2', text)
+    
+    # Detects Model Number jammed against a dimensional string or phase e.g. "SNC2448L1125 1 Phase"
+    text = re.sub(r'\b([A-Z0-9]{4,12})\s*(\d{1}\s*Phase)\b', r'\1 | \2', text)
+    
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +395,21 @@ def _parse_pdf(file_path: str) -> ParseResult:
                     page_headings,
                     last_seen_topic
                 )
+                
+                # --- 2.5. Vision LLM Table Extraction ---
+                # If tables were detected, we send the page image to vLLM (Qwen2-VL) for perfect extraction.
+                # This fixes heavily nested tables and merged columns natively via AI vision.
+                if tables and os.getenv("USE_VLLM_VISION", "true").lower() == "true":
+                    try:
+                        pix = fitz_page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                        raw_bytes = pix.tobytes("png")
+                        b64_img = base64.b64encode(raw_bytes).decode('utf-8')
+                        vllm_md = _extract_tables_vllm(b64_img)
+                        if vllm_md and " | " in vllm_md:  # Sanity check that it returned a table
+                            topic_str = f"[SECTION TOPIC: {last_seen_topic}]\n" if last_seen_topic else ""
+                            tables = [f"[TABLE 1 - Page {page_num} (Vision Extracted)]\n{topic_str}{vllm_md}"]
+                    except Exception as ve:
+                        print(f"[Parser] vLLM extraction skipped for page {page_num}: {ve}")
 
             # --- 3. Image OCR extraction ---
             image_texts, image_bytes, image_bboxes = _extract_images_ocr(fitz_page, page_num)
@@ -478,6 +506,36 @@ def _deduplicate_headers_footers(pages: List[PageContent]) -> None:
                 lines = p.text.strip().split("\n")
                 if lines and lines[-1].strip() == f:
                     p.text = "\n".join(lines[:-1]).strip()
+
+
+def _extract_tables_vllm(image_base64: str) -> Optional[str]:
+    """Call local offline vLLM endpoint with Qwen2-VL for table extraction."""
+    # This URL points to the vLLM docker container inside the same network
+    # We fallback to localhost if running outside docker
+    url = os.getenv("VLLM_API_URL", "http://vllm_rag_prod:8000/v1/chat/completions")
+    try:
+        payload = {
+            "model": "Qwen/Qwen2-VL-7B-Instruct-AWQ",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Extract all tables in this image into perfectly formatted Markdown. Preserve all headers, merged cells, and data relationships exactly as they appear. Do not include any explanation, only the Markdown table."},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}
+                    ]
+                }
+            ],
+            "max_tokens": 2000,
+            "temperature": 0.0
+        }
+        response = requests.post(url, json=payload, timeout=60)
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"].strip()
+        else:
+            print(f"[VLLM] Error: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"[VLLM] Exception: {e}")
+    return None
 
 
 def _extract_tables_pdfplumber(pdf_page, page_num: int, page_headings: list = None, last_seen_topic: str = None) -> tuple:

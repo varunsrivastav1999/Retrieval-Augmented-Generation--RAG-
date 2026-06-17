@@ -247,6 +247,44 @@ services:
         max-file: "3"
 
   # ============================================================================
+  # vLLM — Vision LLM Server (GPU-Accelerated)
+  # ============================================================================
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm_rag_prod
+    restart: unless-stopped
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    command: >
+      --model Qwen/Qwen2-VL-7B-Instruct-AWQ
+      --quantization awq
+      --max-model-len 4096
+      --gpu-memory-utilization 0.5
+      --port 8000
+    volumes:
+      - prod_ollama_data:/root/.cache/huggingface
+    ports:
+      - "8000:8000"
+    networks:
+      rag_network:
+        ipv4_address: 172.28.0.45
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/models"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # ============================================================================
   # Model Pre-Loader (runs once, exits)
   # ============================================================================
   models:
