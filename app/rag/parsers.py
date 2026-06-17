@@ -33,8 +33,11 @@ except ImportError:
 try:
     from magic_pdf.pipe.UNIPipe import UNIPipe
     MINERU_AVAILABLE = True
-except ImportError:
+    MINERU_IMPORT_ERROR = None
+except ImportError as e:
     MINERU_AVAILABLE = False
+    MINERU_IMPORT_ERROR = str(e)
+
 
 
 
@@ -281,7 +284,7 @@ def _is_heading(text: str, font: str, size: float) -> bool:
 def _parse_mineru(file_path: str) -> ParseResult:
     """Extract content from PDF using MinerU (magic-pdf)."""
     if not MINERU_AVAILABLE:
-        return ParseResult(success=False, error="magic-pdf not installed")
+        return ParseResult(success=False, error=f"magic-pdf not installed. Import error: {MINERU_IMPORT_ERROR}")
 
     import tempfile
     import json
