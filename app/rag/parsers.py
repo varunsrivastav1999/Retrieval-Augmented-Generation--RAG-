@@ -256,6 +256,29 @@ def _normalize_superscripts(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Topic/Heading Tracker Heuristics
+# ---------------------------------------------------------------------------
+def _is_heading(text: str, font: str, size: float) -> bool:
+    """Heuristic to determine if a text span is a section heading."""
+    text_clean = text.strip()
+    if not text_clean or len(text_clean) > 120 or len(text_clean) < 3:
+        return False
+    
+    # Headings rarely end in standard sentence-ending punctuation
+    if text_clean.endswith('.') or text_clean.endswith('?'):
+        return False
+        
+    font_lower = font.lower()
+    is_bold = 'bold' in font_lower or 'black' in font_lower or 'heavy' in font_lower
+    
+    # A heading is either bold, or noticeably larger than base text (~9-10pt is standard)
+    if is_bold or size > 11.5:
+        return True
+        
+    return False
+
+
+# ---------------------------------------------------------------------------
 # PDF Parser — Full fidelity: text, tables, images, metadata, links, fonts
 # ---------------------------------------------------------------------------
 def _parse_pdf(file_path: str) -> ParseResult:
@@ -300,8 +323,12 @@ def _parse_pdf(file_path: str) -> ParseResult:
         if toc:
             doc_metadata["toc"] = toc
 
+        # Global tracker for document-level topics across pages
+        last_seen_topic = None
+
         for page_num_idx, fitz_page in enumerate(doc):
             page_num = page_num_idx + 1
+            page_headings = []
 
             # --- 1. Layout-aware text extraction with font metadata ---
             blocks = fitz_page.get_text("dict", sort=False)["blocks"]
@@ -311,14 +338,26 @@ def _parse_pdf(file_path: str) -> ParseResult:
             for block in blocks:
                 if block["type"] == 0:
                     for line in block["lines"]:
+                        line_text = ""
+                        max_size = 0
+                        dominant_font = ""
                         for span in line["spans"]:
                             font = span.get("font", "")
                             size = round(span.get("size", 0), 1)
                             if font:
                                 all_fonts.add(f"{font}@{size}")
-                        line_text = "".join(span["text"] for span in line["spans"])
-                        if line_text.strip():
-                            text_lines.append(line_text)
+                            if size > max_size:
+                                max_size = size
+                                dominant_font = font
+                            line_text += span["text"]
+                            
+                        line_clean = line_text.strip()
+                        if line_clean:
+                            text_lines.append(line_clean)
+                            if _is_heading(line_clean, dominant_font, max_size):
+                                heading_y = line["bbox"][1]
+                                page_headings.append({"text": line_clean, "y": heading_y})
+                                last_seen_topic = line_clean
                 elif block["type"] == 1:
                     text_lines.append("[IMAGE]")
 
@@ -337,7 +376,12 @@ def _parse_pdf(file_path: str) -> ParseResult:
             tables = []
             tables_bboxes = []
             if pdfplumber_pdf is not None and page_num - 1 < len(pdfplumber_pdf.pages):
-                tables, tables_bboxes = _extract_tables_pdfplumber(pdfplumber_pdf.pages[page_num - 1], page_num)
+                tables, tables_bboxes = _extract_tables_pdfplumber(
+                    pdfplumber_pdf.pages[page_num - 1], 
+                    page_num,
+                    page_headings,
+                    last_seen_topic
+                )
 
             # --- 3. Image OCR extraction ---
             image_texts, image_bytes, image_bboxes = _extract_images_ocr(fitz_page, page_num)
@@ -436,7 +480,7 @@ def _deduplicate_headers_footers(pages: List[PageContent]) -> None:
                     p.text = "\n".join(lines[:-1]).strip()
 
 
-def _extract_tables_pdfplumber(pdf_page, page_num: int) -> tuple:
+def _extract_tables_pdfplumber(pdf_page, page_num: int, page_headings: list = None, last_seen_topic: str = None) -> tuple:
     """Extract structured tables from a pdfplumber page, including borderless. Returns (tables_text, tables_bboxes)."""
     tables_text = []
     tables_bboxes = []
@@ -455,12 +499,28 @@ def _extract_tables_pdfplumber(pdf_page, page_num: int) -> tuple:
                 continue
             rows = []
             previous_row = None
+            current_table_sub_topic = None
+            
             for row in table:
                 if row is None:
                     continue
                     
                 # Clean row cells and normalize superscripts (e.g., EQL40200D³ → EQL40200D3)
                 cleaned_row = [_normalize_superscripts(str(cell).replace('\n', ' ').strip()) if cell else "" for cell in row]
+                
+                # --- Intra-Table Sub-Topic Detection ---
+                # Manuals often put section headers INSIDE the grid (a row with only 1 wide cell)
+                non_empty = [c for c in cleaned_row if c]
+                if len(non_empty) == 1 and len(non_empty[0]) > 3 and not previous_row:
+                     current_table_sub_topic = non_empty[0]
+                     continue  # It's a header row, don't append it as a regular data row
+                elif len(non_empty) == 1 and len(non_empty[0]) > 3:
+                     # Even if not the first row, it might be a section break inside the table
+                     # but we must be careful not to trigger on sparse data rows. 
+                     # For safety, if it's longer than 15 chars, it's likely a sub-topic.
+                     if len(non_empty[0]) > 15:
+                         current_table_sub_topic = non_empty[0]
+                         continue
                 
                 # --- Row-Span Propagation Algorithm ---
                 # If a cell is blank but the row above had data (and we are not in the header),
@@ -472,14 +532,33 @@ def _extract_tables_pdfplumber(pdf_page, page_num: int) -> tuple:
                             if not cleaned_row[i] and previous_row[i]:
                                 cleaned_row[i] = previous_row[i]
                 
+                # Prepend the active intra-table sub-topic to the first column to preserve context
+                if current_table_sub_topic and any(cleaned_row):
+                    # Inject sub-topic without breaking markdown structure
+                    first_non_empty_idx = next((i for i, c in enumerate(cleaned_row) if c), 0)
+                    if not cleaned_row[first_non_empty_idx].startswith(f"[{current_table_sub_topic}]"):
+                        cleaned_row[first_non_empty_idx] = f"[{current_table_sub_topic}] {cleaned_row[first_non_empty_idx]}"
+                
                 rows.append(" | ".join(cleaned_row))
                 previous_row = cleaned_row
 
             if rows:
                 header = rows[0]
+                
+                # --- Spatial Page Heading Mapping ---
+                # Find the closest spatial heading directly above the table
+                table_top = tbl_obj.bbox[1]  # y0
+                closest_heading = last_seen_topic
+                if page_headings:
+                    above = [h for h in page_headings if h["y"] < table_top]
+                    if above:
+                        closest_heading = sorted(above, key=lambda h: h["y"], reverse=True)[0]["text"]
+                        
+                topic_str = f"[SECTION TOPIC: {closest_heading}]\n" if closest_heading else ""
+                
                 col_count = len(table[0]) if table[0] else len(rows[0].split(" | "))
                 separator = " | ".join(["---"] * col_count)
-                table_text = f"[TABLE {table_idx + 1} - Page {page_num}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
+                table_text = f"[TABLE {table_idx + 1} - Page {page_num}]\n{topic_str}{header}\n{separator}\n" + "\n".join(rows[1:])
                 tables_text.append(table_text.strip())
                 tables_bboxes.append(tbl_obj.bbox)
 
@@ -514,10 +593,21 @@ def _extract_tables_pdfplumber(pdf_page, page_num: int) -> tuple:
                 
             rows = []
             previous_row = None
+            current_table_sub_topic = None
+            
             for row in table_data:
                 if row is None:
                     continue
                 cleaned_row = [_normalize_superscripts(str(c).replace('\n', ' ').strip()) if c else "" for c in row]
+                
+                # --- Intra-Table Sub-Topic Detection ---
+                non_empty = [c for c in cleaned_row if c]
+                if len(non_empty) == 1 and len(non_empty[0]) > 3 and not previous_row:
+                     current_table_sub_topic = non_empty[0]
+                     continue
+                elif len(non_empty) == 1 and len(non_empty[0]) > 15:
+                     current_table_sub_topic = non_empty[0]
+                     continue
                 
                 # Row-Span Propagation
                 if previous_row and len(cleaned_row) == len(previous_row):
@@ -526,13 +616,30 @@ def _extract_tables_pdfplumber(pdf_page, page_num: int) -> tuple:
                             if not cleaned_row[i] and previous_row[i]:
                                 cleaned_row[i] = previous_row[i]
                                 
+                # Prepend the active intra-table sub-topic
+                if current_table_sub_topic and any(cleaned_row):
+                    first_non_empty_idx = next((i for i, c in enumerate(cleaned_row) if c), 0)
+                    if not cleaned_row[first_non_empty_idx].startswith(f"[{current_table_sub_topic}]"):
+                        cleaned_row[first_non_empty_idx] = f"[{current_table_sub_topic}] {cleaned_row[first_non_empty_idx]}"
+                                
                 rows.append(" | ".join(cleaned_row))
                 previous_row = cleaned_row
                 
             if rows:
                 header = rows[0]
+                
+                # --- Spatial Page Heading Mapping ---
+                table_top = bt.bbox[1]  # y0
+                closest_heading = last_seen_topic
+                if page_headings:
+                    above = [h for h in page_headings if h["y"] < table_top]
+                    if above:
+                        closest_heading = sorted(above, key=lambda h: h["y"], reverse=True)[0]["text"]
+                        
+                topic_str = f"[SECTION TOPIC: {closest_heading}]\n" if closest_heading else ""
+                
                 sep = " | ".join(["---"] * len(table_data[0]))
-                table_text = f"[TABLE {existing_count + 1} - Page {page_num} (borderless)]\n{header}\n{sep}\n" + "\n".join(rows[1:])
+                table_text = f"[TABLE {existing_count + 1} - Page {page_num} (borderless)]\n{topic_str}{header}\n{sep}\n" + "\n".join(rows[1:])
                 tables_text.append(table_text.strip())
                 tables_bboxes.append(bt.bbox)
                 existing_count += 1
