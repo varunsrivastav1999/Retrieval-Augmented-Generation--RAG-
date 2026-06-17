@@ -75,6 +75,7 @@ services:
       - RAG_USE_HALFVEC=true
       - RAG_EMBEDDING_QUANTIZE=true
       - NUMBA_CACHE_DIR=/tmp
+      - RAG_MODEL_DEVICE=cpu
     env_file:
       - ./.envs/.production/.rag
       - ./.envs/.production/.postgres
@@ -266,7 +267,7 @@ services:
       --model Qwen/Qwen2-VL-7B-Instruct-AWQ
       --quantization awq
       --max-model-len 8192
-      --gpu-memory-utilization 0.40
+      --gpu-memory-utilization 0.45
       --port 8000
     volumes:
       - prod_ollama_data:/root/.cache/huggingface
