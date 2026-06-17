@@ -226,6 +226,35 @@ def _clean_ocr_text(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Superscript/Subscript Normalization
+# ---------------------------------------------------------------------------
+# Unicode superscript/subscript characters that PDFs commonly emit in catalogue
+# model numbers (e.g., EQL40200D³, ½, ¼). These MUST be normalized to plain
+# ASCII so that keyword search for "EQL40200D" matches "EQL40200D3".
+_SUPERSCRIPT_MAP = str.maketrans({
+    '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
+    '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9',
+    '₀': '0', '₁': '1', '₂': '2', '₃': '3', '₄': '4',
+    '₅': '5', '₆': '6', '₇': '7', '₈': '8', '₉': '9',
+    '½': '1/2', '¼': '1/4', '¾': '3/4',
+    '⅛': '1/8', '⅜': '3/8', '⅝': '5/8', '⅞': '7/8',
+    '⅓': '1/3', '⅔': '2/3',
+    '¹⁄': '1/', '³⁄': '3/', '⁵⁄': '5/', '⁷⁄': '7/',
+    '®': '(R)', '™': '(TM)', '©': '(C)',
+    '①': '(1)', '②': '(2)', '③': '(3)', '④': '(4)', '⑤': '(5)',
+    '⑥': '(6)', '⑦': '(7)', '⑧': '(8)', '⑨': '(9)', '⑩': '(10)',
+})
+
+
+def _normalize_superscripts(text: str) -> str:
+    """Normalize Unicode superscripts, subscripts, fractions, and circled numbers
+    to plain ASCII equivalents for accurate keyword matching."""
+    if not text:
+        return text
+    return text.translate(_SUPERSCRIPT_MAP)
+
+
+# ---------------------------------------------------------------------------
 # PDF Parser — Full fidelity: text, tables, images, metadata, links, fonts
 # ---------------------------------------------------------------------------
 def _parse_pdf(file_path: str) -> ParseResult:
@@ -294,6 +323,7 @@ def _parse_pdf(file_path: str) -> ParseResult:
 
             text = "\n".join(text_lines)
             text = _enrich_mcq_text(text)
+            text = _normalize_superscripts(text)
 
             # Check for hyperlinks on this page
             if not has_links:
@@ -428,8 +458,8 @@ def _extract_tables_pdfplumber(pdf_page, page_num: int) -> tuple:
                 if row is None:
                     continue
                     
-                # Clean row cells
-                cleaned_row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
+                # Clean row cells and normalize superscripts (e.g., EQL40200D³ → EQL40200D3)
+                cleaned_row = [_normalize_superscripts(str(cell).replace('\n', ' ').strip()) if cell else "" for cell in row]
                 
                 # --- Row-Span Propagation Algorithm ---
                 # If a cell is blank but the row above had data (and we are not in the header),
@@ -486,7 +516,7 @@ def _extract_tables_pdfplumber(pdf_page, page_num: int) -> tuple:
             for row in table_data:
                 if row is None:
                     continue
-                cleaned_row = [str(c).replace('\n', ' ').strip() if c else "" for c in row]
+                cleaned_row = [_normalize_superscripts(str(c).replace('\n', ' ').strip()) if c else "" for c in row]
                 
                 # Row-Span Propagation
                 if previous_row and len(cleaned_row) == len(previous_row):

@@ -399,10 +399,8 @@ def ingest_file(
                 if not raw_text.strip():
                     continue
 
-                # Contextual Chunk Header: Prepend doc title, page, and Global Context
+                # Contextual Chunk Header: Prepend doc title and page
                 header = f"[{doc_title}, Page {page.page_num}]"
-                if doc_context_summary:
-                    header += f"\n[GLOBAL CONTEXT: {doc_context_summary}]"
                 chunk_text = f"{header}\n{raw_text}"
 
                 chunks_total += 1
@@ -446,6 +444,7 @@ def ingest_file(
                     "parent_idx": chunk_info.get("parent_idx"),
                     "entities": extract_entities(chunk_text),
                     "table_group": chunk_info.get("table_group"),
+                    "global_context": doc_context_summary,
                 })
                 section += 1
                 

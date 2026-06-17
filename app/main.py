@@ -1275,9 +1275,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                                         for nc in new_reranked:
                                             if nc not in flare_retrieved_chunks:
                                                 flare_retrieved_chunks.append(nc)
-                                                flare_note = f"\n[FLARE re-retrieved: {nc.get('text', '')[:200]}]"
-                                                answer_acc += flare_note
-                                                yield f"data: {json.dumps({'token': flare_note})}\n\n"
+                                                # NOTE: Do NOT yield FLARE notes to the user stream.
+                                                # They are kept internal-only for the post-generation regeneration pass.
                                 token_buffer = ""
                 else:
                     err = f"Ollama Error: {response.text}"
@@ -1309,8 +1308,12 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                     }
                     final_resp = requests.post(OLLAMA_URL, json=final_payload, timeout=OLLAMA_TIMEOUT_SECONDS)
                     if final_resp.status_code == 200:
-                        answer_acc = final_resp.json().get("response", "").strip()
-                        yield f"data: {json.dumps({'token': f'[FLARE corrected] {answer_acc}'})}\n\n"
+                        corrected_answer = final_resp.json().get("response", "").strip()
+                        if corrected_answer:
+                            answer_acc = corrected_answer
+                            # Stream the corrected answer cleanly without [FLARE corrected] prefix
+                            nl = '\n\n---\n\n'
+                            yield f"data: {json.dumps({'token': nl + corrected_answer})}\n\n"
                 except Exception as flare_err:
                     print(f"[FLARE] Final pass failed: {flare_err}")
                 final_context = enriched_context
