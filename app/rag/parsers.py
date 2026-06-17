@@ -25,34 +25,12 @@ from typing import List, Optional
 # Optional imports — each format gracefully degrades if library missing
 # ---------------------------------------------------------------------------
 try:
-    import fitz  # PyMuPDF
-    PDF_AVAILABLE = True
+    from docling.document_converter import DocumentConverter
+    DOCLING_AVAILABLE = True
 except ImportError:
-    PDF_AVAILABLE = False
+    DOCLING_AVAILABLE = False
 
-try:
-    import pdfplumber
-    PDFPLUMBER_AVAILABLE = True
-except ImportError:
-    PDFPLUMBER_AVAILABLE = False
 
-try:
-    from docx import Document as DocxDocument
-    DOCX_AVAILABLE = True
-except ImportError:
-    DOCX_AVAILABLE = False
-
-try:
-    from openpyxl import load_workbook
-    XLSX_AVAILABLE = True
-except ImportError:
-    XLSX_AVAILABLE = False
-
-try:
-    from pptx import Presentation
-    PPTX_AVAILABLE = True
-except ImportError:
-    PPTX_AVAILABLE = False
 
 try:
     from PIL import Image
@@ -294,728 +272,92 @@ def _is_heading(text: str, font: str, size: float) -> bool:
 # ---------------------------------------------------------------------------
 # PDF Parser — Full fidelity: text, tables, images, metadata, links, fonts
 # ---------------------------------------------------------------------------
-def _parse_pdf(file_path: str) -> ParseResult:
-    """Extract all content from PDF with zero information loss.
-
-    Captures: text (layout-aware), tables (bordered+borderless), images+OCR,
-    hyperlinks, font metadata, annotations, document metadata, bookmarks/TOC.
+def _parse_docling(file_path: str) -> ParseResult:
+    """Extract all content from PDF using IBM Docling.
+    Captures: text (layout-aware), tables (perfect structure), images.
+    Replaces older PyMuPDF + pdfplumber + vLLM pipeline.
     """
-    if not PDF_AVAILABLE:
-        return ParseResult(success=False, error="PyMuPDF not installed")
+    if not DOCLING_AVAILABLE:
+        return ParseResult(success=False, error="docling not installed")
 
-    pages = []
-    doc = None
-    all_fonts = set()
-    has_links = False
-    pdfplumber_pdf = None
     try:
-        doc = fitz.open(file_path)
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.accelerator_options import AcceleratorOptions, AcceleratorDevice
+        from app.rag.model_loader import get_optimal_device
 
-        # Open pdfplumber once for all pages (avoids O(N) file opens)
-        if PDFPLUMBER_AVAILABLE:
-            try:
-                import pdfplumber as _pdfplumber
-                pdfplumber_pdf = _pdfplumber.open(file_path)
-            except Exception as e:
-                print(f"[Parser] pdfplumber open failed: {e}")
+        # Enforce GPU acceleration if available
+        optimal = get_optimal_device()
+        device_mapping = {
+            "cuda": AcceleratorDevice.CUDA,
+            "mps": AcceleratorDevice.MPS,
+            "cpu": AcceleratorDevice.CPU
+        }
+        accel_device = device_mapping.get(optimal, AcceleratorDevice.AUTO)
 
-        # --- Extract document-level metadata ---
-        meta = doc.metadata
+        pipeline_options = PdfPipelineOptions()
+        pipeline_options.accelerator_options = AcceleratorOptions(
+            num_threads=8,
+            device=accel_device
+        )
+        
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            }
+        )
+        result = converter.convert(file_path)
+        doc = result.document
+
+        pages_dict = {}
+
+        # Iterate through all layout items detected by Docling
+        for item, level in doc.iterate_items():
+            page_no = 1
+            if hasattr(item, "prov") and item.prov:
+                page_no = item.prov[0].page_no
+
+            if page_no not in pages_dict:
+                pages_dict[page_no] = PageContent(page_num=page_no, text="", tables=[], image_texts=[], image_bytes=[])
+
+            page_content = pages_dict[page_no]
+            item_type = type(item).__name__
+
+            if item_type == "TableItem":
+                table_md = item.export_to_markdown()
+                # Apply same superscripts / merged cell text normalizations
+                table_md = _normalize_superscripts(table_md)
+                table_text = f"[TABLE - Page {page_no}]\n{table_md}"
+                page_content.tables.append(table_text)
+            
+            elif item_type == "PictureItem":
+                if hasattr(item, "caption") and item.caption:
+                    caption_text = _normalize_superscripts(item.caption.text)
+                    page_content.image_texts.append(f"[IMAGE CAPTION - Page {page_no}]\n{caption_text}")
+            
+            elif item_type in ["TextItem", "SectionHeaderItem"]:
+                clean_text = _enrich_mcq_text(item.text)
+                clean_text = _normalize_superscripts(clean_text)
+                page_content.text += clean_text + "\n"
+
+        pages = [pages_dict[k] for k in sorted(pages_dict.keys())]
+
         doc_metadata = {
             "format": "pdf",
-            "page_count": len(doc),
+            "page_count": len(pages),
             "source": file_path,
-            "title": meta.get("title", "").strip(),
-            "author": meta.get("author", "").strip(),
-            "subject": meta.get("subject", "").strip(),
-            "keywords": meta.get("keywords", "").strip(),
         }
-
-        # --- Extract table of contents / bookmarks ---
-        toc = doc.get_toc()
-        if toc:
-            doc_metadata["toc"] = toc
-
-        # Global tracker for document-level topics across pages
-        last_seen_topic = None
-
-        for page_num_idx, fitz_page in enumerate(doc):
-            page_num = page_num_idx + 1
-            page_headings = []
-
-            # --- 1. Layout-aware text extraction with font metadata ---
-            blocks = fitz_page.get_text("dict", sort=False)["blocks"]
-            blocks.sort(key=lambda b: (round(b["bbox"][1], -1), b["bbox"][0]))
-
-            text_lines = []
-            for block in blocks:
-                if block["type"] == 0:
-                    for line in block["lines"]:
-                        line_text = ""
-                        max_size = 0
-                        dominant_font = ""
-                        for span in line["spans"]:
-                            font = span.get("font", "")
-                            size = round(span.get("size", 0), 1)
-                            if font:
-                                all_fonts.add(f"{font}@{size}")
-                            if size > max_size:
-                                max_size = size
-                                dominant_font = font
-                            line_text += span["text"]
-                            
-                        line_clean = line_text.strip()
-                        if line_clean:
-                            text_lines.append(line_clean)
-                            if _is_heading(line_clean, dominant_font, max_size):
-                                heading_y = line["bbox"][1]
-                                page_headings.append({"text": line_clean, "y": heading_y})
-                                last_seen_topic = line_clean
-                elif block["type"] == 1:
-                    text_lines.append("[IMAGE]")
-
-            text = "\n".join(text_lines)
-            text = _enrich_mcq_text(text)
-            text = _normalize_superscripts(text)
-
-            # Check for hyperlinks on this page
-            if not has_links:
-                for link in fitz_page.get_links():
-                    if link.get("uri"):
-                        has_links = True
-                        break
-
-            # --- 2. Table extraction (bordered + borderless via pdfplumber) ---
-            tables = []
-            tables_bboxes = []
-            if pdfplumber_pdf is not None and page_num - 1 < len(pdfplumber_pdf.pages):
-                tables, tables_bboxes = _extract_tables_pdfplumber(
-                    pdfplumber_pdf.pages[page_num - 1], 
-                    page_num,
-                    page_headings,
-                    last_seen_topic
-                )
-                
-                # --- 2.5. Vision LLM Table Extraction ---
-                # If tables were detected, we send the page image to vLLM (Qwen2-VL) for perfect extraction.
-                # This fixes heavily nested tables and merged columns natively via AI vision.
-                if tables and os.getenv("USE_VLLM_VISION", "true").lower() == "true":
-                    try:
-                        pix = fitz_page.get_pixmap(matrix=fitz.Matrix(2, 2))
-                        raw_bytes = pix.tobytes("png")
-                        b64_img = base64.b64encode(raw_bytes).decode('utf-8')
-                        vllm_md = _extract_tables_vllm(b64_img)
-                        if vllm_md and " | " in vllm_md:  # Sanity check that it returned a table
-                            topic_str = f"[SECTION TOPIC: {last_seen_topic}]\n" if last_seen_topic else ""
-                            tables = [f"[TABLE 1 - Page {page_num} (Vision Extracted)]\n{topic_str}{vllm_md}"]
-                    except Exception as ve:
-                        print(f"[Parser] vLLM extraction skipped for page {page_num}: {ve}")
-
-            # --- 3. Image OCR extraction ---
-            image_texts, image_bytes, image_bboxes = _extract_images_ocr(fitz_page, page_num)
-            
-            # --- 3.5. Spatial Bounding Box Mapping ---
-            # Tie floating images directly to their aligned tables based on vertical Y-coordinates
-            if tables and image_bboxes:
-                for img_idx, img_rect in enumerate(image_bboxes):
-                    if not img_rect:
-                        continue
-                    
-                    # fitz.Rect is (x0, y0, x1, y1) where y0 is top.
-                    img_y0, img_y1 = img_rect.y0, img_rect.y1
-                    img_center_y = (img_y0 + img_y1) / 2
-                    
-                    for table_idx, bbox in enumerate(tables_bboxes):
-                        if not bbox: continue
-                        # pdfplumber bbox is (x0, top, x1, bottom)
-                        t_top, t_bottom = bbox[1], bbox[3]
-                        
-                        # If the image's vertical center falls within the table's vertical bounds
-                        if t_top <= img_center_y <= t_bottom:
-                            tag = f"\n[NOTE: Associated Product Image {img_idx + 1} aligns with this table]"
-                            if tag not in tables[table_idx]:
-                                tables[table_idx] += tag
-
-            # --- 4. Full-page OCR fallback for scanned PDFs ---
-            if OCR_AVAILABLE and len(text.strip()) < 50:
-                try:
-                    pix = fitz_page.get_pixmap(matrix=fitz.Matrix(3, 3))
-                    raw_bytes = pix.tobytes("png")
-                    img = Image.open(io.BytesIO(raw_bytes))
-                    img = img.convert("L")
-                    img = _auto_rotate_image(img)
-                    full_ocr = pytesseract.image_to_string(img).strip()
-                    full_ocr = _clean_ocr_text(full_ocr)
-                    full_ocr = _enrich_mcq_text(full_ocr)
-                    if full_ocr and len(full_ocr) > 20:
-                        image_texts.append(f"[FULL PAGE OCR - Page {page_num}]\n{full_ocr}")
-                        image_bytes.append(raw_bytes)
-                except Exception as e:
-                    print(f"[Parser] Full-page OCR failed for page {page_num}: {e}")
-
-            pages.append(PageContent(
-                page_num=page_num,
-                text=text,
-                tables=tables,
-                image_texts=image_texts,
-                image_bytes=image_bytes,
-                content_type="text",
-            ))
-
-        # --- 6. Preserve headers/footers that contain meaningful context ---
-        if len(pages) >= 3:
-            _deduplicate_headers_footers(pages)
-
-        doc_metadata["fonts"] = sorted(all_fonts)
-        doc_metadata["has_links"] = has_links
 
         return ParseResult(
             pages=pages,
             metadata=doc_metadata,
         )
     except Exception as e:
-        return ParseResult(success=False, error=f"PDF parse error: {e}")
-    finally:
-        if doc is not None:
-            doc.close()
-        if pdfplumber_pdf is not None:
-            pdfplumber_pdf.close()
+        return ParseResult(success=False, error=f"Docling PDF parse error: {e}")
 
 
-def _deduplicate_headers_footers(pages: List[PageContent]) -> None:
-    """Remove repetitive headers/footers only if they are identical boilerplate,
-    but KEEP them if they contain meaningful context (e.g., section titles)."""
-    # Analyze first 3 pages for repeated first/last lines
-    first_lines = [p.text.strip().split("\n")[0] for p in pages[:3] if p.text.strip()]
-    last_lines = [p.text.strip().split("\n")[-1] for p in pages[:3] if p.text.strip()]
 
-    # Only strip if ALL 3 pages have identical header AND it looks like a page number or copyright
-    if len(first_lines) == 3 and first_lines[0] == first_lines[1] == first_lines[2]:
-        h = first_lines[0].strip()
-        # Only strip boilerplate: page numbers or simple copyright notices
-        if re.match(r'^\d{1,4}$', h) or re.match(r'^©.*\d{4}', h):
-            for p in pages:
-                lines = p.text.strip().split("\n")
-                if lines and lines[0].strip() == h:
-                    p.text = "\n".join(lines[1:]).strip()
-
-    if len(last_lines) == 3 and last_lines[0] == last_lines[1] == last_lines[2]:
-        f = last_lines[0].strip()
-        if re.match(r'^\d{1,4}$', f) or re.match(r'^Page \d+', f, re.I):
-            for p in pages:
-                lines = p.text.strip().split("\n")
-                if lines and lines[-1].strip() == f:
-                    p.text = "\n".join(lines[:-1]).strip()
-
-
-def _extract_tables_vllm(image_base64: str) -> Optional[str]:
-    """Call local offline vLLM endpoint with Qwen2-VL for table extraction."""
-    # This URL points to the vLLM docker container inside the same network
-    # We fallback to localhost if running outside docker
-    url = os.getenv("VLLM_API_URL", "http://vllm_rag_prod:8000/v1/chat/completions")
-    try:
-        payload = {
-            "model": "Qwen/Qwen2-VL-2B-Instruct-AWQ",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Extract all tables in this image into perfectly formatted Markdown. Preserve all headers, merged cells, and data relationships exactly as they appear. Do not include any explanation, only the Markdown table."},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}
-                    ]
-                }
-            ],
-            "max_tokens": 8000,
-            "temperature": 0.0
-        }
-        response = requests.post(url, json=payload, timeout=300)
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"].strip()
-        else:
-            print(f"[VLLM] Error: {response.status_code} - {response.text}")
-    except Exception as e:
-        print(f"[VLLM] Exception: {e}")
-    return None
-
-
-def _extract_tables_pdfplumber(pdf_page, page_num: int, page_headings: list = None, last_seen_topic: str = None) -> tuple:
-    """Extract structured tables from a pdfplumber page, including borderless. Returns (tables_text, tables_bboxes)."""
-    tables_text = []
-    tables_bboxes = []
-    try:
-        # 1. Bordered tables (with advanced detection for complex catalogue grids)
-        found_tables = pdf_page.find_tables(table_settings={
-            "vertical_strategy": "lines",
-            "horizontal_strategy": "lines",
-            "intersection_y_tolerance": 15,
-            "intersection_x_tolerance": 15,
-        })
-        
-        for table_idx, tbl_obj in enumerate(found_tables):
-            table = tbl_obj.extract()
-            if not table:
-                continue
-            rows = []
-            previous_row = None
-            current_table_sub_topic = None
-            
-            for row in table:
-                if row is None:
-                    continue
-                    
-                # Clean row cells and normalize superscripts (e.g., EQL40200D³ → EQL40200D3)
-                cleaned_row = [_normalize_superscripts(str(cell).replace('\n', ' ').strip()) if cell else "" for cell in row]
-                
-                # --- Intra-Table Sub-Topic Detection ---
-                # Manuals often put section headers INSIDE the grid (a row with only 1 wide cell)
-                non_empty = [c for c in cleaned_row if c]
-                if len(non_empty) == 1 and len(non_empty[0]) > 3 and not previous_row:
-                     current_table_sub_topic = non_empty[0]
-                     continue  # It's a header row, don't append it as a regular data row
-                elif len(non_empty) == 1 and len(non_empty[0]) > 3:
-                     # Even if not the first row, it might be a section break inside the table
-                     # but we must be careful not to trigger on sparse data rows. 
-                     # For safety, if it's longer than 15 chars, it's likely a sub-topic.
-                     if len(non_empty[0]) > 15:
-                         current_table_sub_topic = non_empty[0]
-                         continue
-                
-                # --- Row-Span Propagation Algorithm ---
-                # If a cell is blank but the row above had data (and we are not in the header),
-                # it's likely a vertically merged cell. We inherit the value to preserve DB query integrity.
-                if previous_row and len(cleaned_row) == len(previous_row):
-                    # Only propagate if at least one other column in this row HAS data (it's not just an empty spacer row)
-                    if any(cleaned_row):
-                        for i in range(len(cleaned_row)):
-                            if not cleaned_row[i] and previous_row[i]:
-                                cleaned_row[i] = previous_row[i]
-                
-                # Prepend the active intra-table sub-topic to the first column to preserve context
-                if current_table_sub_topic and any(cleaned_row):
-                    # Inject sub-topic without breaking markdown structure
-                    first_non_empty_idx = next((i for i, c in enumerate(cleaned_row) if c), 0)
-                    if not cleaned_row[first_non_empty_idx].startswith(f"[{current_table_sub_topic}]"):
-                        cleaned_row[first_non_empty_idx] = f"[{current_table_sub_topic}] {cleaned_row[first_non_empty_idx]}"
-                
-                rows.append(" | ".join(cleaned_row))
-                previous_row = cleaned_row
-
-            if rows:
-                header = rows[0]
-                
-                # --- Spatial Page Heading Mapping ---
-                # Find the closest spatial heading directly above the table
-                table_top = tbl_obj.bbox[1]  # y0
-                closest_heading = last_seen_topic
-                if page_headings:
-                    above = [h for h in page_headings if h["y"] < table_top]
-                    if above:
-                        closest_heading = sorted(above, key=lambda h: h["y"], reverse=True)[0]["text"]
-                        
-                topic_str = f"[SECTION TOPIC: {closest_heading}]\n" if closest_heading else ""
-                
-                col_count = len(table[0]) if table[0] else len(rows[0].split(" | "))
-                separator = " | ".join(["---"] * col_count)
-                table_text = f"[TABLE {table_idx + 1} - Page {page_num}]\n{topic_str}{header}\n{separator}\n" + "\n".join(rows[1:])
-                tables_text.append(table_text.strip())
-                tables_bboxes.append(tbl_obj.bbox)
-
-        # 2. Borderless tables (aligned text columns)
-        existing_count = len(tables_text)
-        borderless = pdf_page.find_tables(
-            table_settings={
-                "vertical_strategy": "text",
-                "horizontal_strategy": "text",
-                "snap_tolerance": 5,
-            }
-        )
-        for bt in borderless:
-            if not bt.bbox:
-                continue
-            # Skip if this bounding box significantly overlaps with an already found bordered table
-            is_duplicate = False
-            for existing_bbox in tables_bboxes:
-                # Simple overlap check
-                if (bt.bbox[0] < existing_bbox[2] and bt.bbox[2] > existing_bbox[0] and
-                    bt.bbox[1] < existing_bbox[3] and bt.bbox[3] > existing_bbox[1]):
-                    is_duplicate = True
-                    break
-            if is_duplicate:
-                continue
-
-            table_data = bt.extract()
-            if table_data is None or len(table_data) <= 1:
-                continue
-            if table_data[0] is None:
-                continue
-                
-            rows = []
-            previous_row = None
-            current_table_sub_topic = None
-            
-            for row in table_data:
-                if row is None:
-                    continue
-                cleaned_row = [_normalize_superscripts(str(c).replace('\n', ' ').strip()) if c else "" for c in row]
-                
-                # --- Intra-Table Sub-Topic Detection ---
-                non_empty = [c for c in cleaned_row if c]
-                if len(non_empty) == 1 and len(non_empty[0]) > 3 and not previous_row:
-                     current_table_sub_topic = non_empty[0]
-                     continue
-                elif len(non_empty) == 1 and len(non_empty[0]) > 15:
-                     current_table_sub_topic = non_empty[0]
-                     continue
-                
-                # Row-Span Propagation
-                if previous_row and len(cleaned_row) == len(previous_row):
-                    if any(cleaned_row):
-                        for i in range(len(cleaned_row)):
-                            if not cleaned_row[i] and previous_row[i]:
-                                cleaned_row[i] = previous_row[i]
-                                
-                # Prepend the active intra-table sub-topic
-                if current_table_sub_topic and any(cleaned_row):
-                    first_non_empty_idx = next((i for i, c in enumerate(cleaned_row) if c), 0)
-                    if not cleaned_row[first_non_empty_idx].startswith(f"[{current_table_sub_topic}]"):
-                        cleaned_row[first_non_empty_idx] = f"[{current_table_sub_topic}] {cleaned_row[first_non_empty_idx]}"
-                                
-                rows.append(" | ".join(cleaned_row))
-                previous_row = cleaned_row
-                
-            if rows:
-                header = rows[0]
-                
-                # --- Spatial Page Heading Mapping ---
-                table_top = bt.bbox[1]  # y0
-                closest_heading = last_seen_topic
-                if page_headings:
-                    above = [h for h in page_headings if h["y"] < table_top]
-                    if above:
-                        closest_heading = sorted(above, key=lambda h: h["y"], reverse=True)[0]["text"]
-                        
-                topic_str = f"[SECTION TOPIC: {closest_heading}]\n" if closest_heading else ""
-                
-                sep = " | ".join(["---"] * len(table_data[0]))
-                table_text = f"[TABLE {existing_count + 1} - Page {page_num} (borderless)]\n{topic_str}{header}\n{sep}\n" + "\n".join(rows[1:])
-                tables_text.append(table_text.strip())
-                tables_bboxes.append(bt.bbox)
-                existing_count += 1
-                
-    except Exception as e:
-        print(f"[Parser] Table extraction warning for page {page_num}: {e}")
-    return tables_text, tables_bboxes
-
-
-def _extract_images_ocr(fitz_page, page_num: int, min_size: int = 80) -> tuple:
-    """Extract text from images embedded in a PDF page via OCR, and return raw bytes + bboxes for Vision Spatial Mapping."""
-    if not OCR_AVAILABLE:
-        return [], [], []
-
-    image_texts = []
-    image_bytes = []
-    image_bboxes = []
-    try:
-        image_list = fitz_page.get_images(full=True)
-        doc = fitz_page.parent
-
-        for img_idx, img_info in enumerate(image_list):
-            xref = img_info[0]
-            try:
-                # 1. Get Bounding Box
-                rects = fitz_page.get_image_rects(xref)
-                bbox = rects[0] if rects else None
-                
-                # 2. Extract image bytes
-                base_image = doc.extract_image(xref)
-                if not base_image:
-                    continue
-
-                width = base_image.get("width", 0)
-                height = base_image.get("height", 0)
-                if width < min_size or height < min_size:
-                    continue
-
-                img = Image.open(io.BytesIO(base_image["image"]))
-                # Pre-process for better OCR
-                img = img.convert("L")  # Grayscale
-                img = _auto_rotate_image(img)
-                ocr_text = pytesseract.image_to_string(img).strip()
-                ocr_text = _enrich_mcq_text(ocr_text)
-
-                if ocr_text and len(ocr_text) > 15:
-                    image_texts.append(
-                        f"[IMAGE OCR - Page {page_num}, Image {img_idx + 1}]\n{ocr_text}"
-                    )
-                # Always save image bytes and their spatial location
-                image_bytes.append(base_image["image"])
-                image_bboxes.append(bbox)
-            except Exception:
-                continue
-    except Exception as e:
-        print(f"[Parser] Image OCR warning for page {page_num}: {e}")
-    return image_texts, image_bytes, image_bboxes
-
-
-# ---------------------------------------------------------------------------
-# DOCX Parser
-# ---------------------------------------------------------------------------
-def _parse_docx(file_path: str) -> ParseResult:
-    """Extract text and tables from DOCX files."""
-    if not DOCX_AVAILABLE:
-        return ParseResult(success=False, error="python-docx not installed")
-
-    try:
-        doc = DocxDocument(file_path)
-        pages = []
-        current_text_parts = []
-        current_tables = []
-        current_image_texts = []
-        current_image_bytes = []
-        page_num = 1
-
-        table_idx = 0
-        try:
-            from docx.oxml.table import CT_Tbl
-            from docx.oxml.text.paragraph import CT_P
-            from docx.text.paragraph import Paragraph
-            from docx.table import Table
-            
-            for child in doc.element.body:
-                if isinstance(child, CT_P):
-                    para = Paragraph(child, doc)
-                    text = para.text.strip()
-                    text = _enrich_mcq_text(text)
-                    if text:
-                        if para.paragraph_format.page_break_before:
-                            if current_text_parts or current_tables:
-                                pages.append(PageContent(
-                                    page_num=page_num,
-                                    text="\n".join(current_text_parts),
-                                    tables=current_tables,
-                                    image_texts=current_image_texts,
-                                    image_bytes=current_image_bytes,
-                                ))
-                                page_num += 1
-                                current_text_parts = []
-                                current_tables = []
-                                current_image_texts = []
-                                current_image_bytes = []
-                        if para.style and para.style.name and para.style.name.startswith("Heading"):
-                            level = para.style.name.replace("Heading", "").strip()
-                            prefix = "#" * (int(level) if level.isdigit() else 1)
-                            current_text_parts.append(f"{prefix} {text}")
-                        else:
-                            current_text_parts.append(text)
-                            
-                elif isinstance(child, CT_Tbl):
-                    table = Table(child, doc)
-                    table_idx += 1
-                    rows = []
-                    for row in table.rows:
-                        cells = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
-                        rows.append(" | ".join(cells))
-                    if rows:
-                        header = rows[0]
-                        separator = " | ".join(["---"] * len(table.rows[0].cells))
-                        table_md = f"[TABLE {table_idx}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
-                        current_tables.append(table_md.strip())
-        except ImportError:
-            # Fallback if internals change
-            pass
-
-        # Extract images via OCR and Vision
-        if OCR_AVAILABLE:
-            for rel in doc.part.rels.values():
-                if "image" in rel.reltype:
-                    try:
-                        image_data = rel.target_part.blob
-                        current_image_bytes.append(image_data)
-                        img = Image.open(io.BytesIO(image_data))
-                        if img.width >= 80 and img.height >= 80:
-                            img = img.convert("L")
-                            img = _auto_rotate_image(img)
-                            ocr_text = pytesseract.image_to_string(img).strip()
-                            ocr_text = _enrich_mcq_text(ocr_text)
-                            if ocr_text and len(ocr_text) > 15:
-                                current_image_texts.append(f"[IMAGE OCR]\n{ocr_text}")
-                    except Exception:
-                        continue
-
-        # Add remaining content
-        if current_text_parts or current_tables or current_image_texts or current_image_bytes:
-            pages.append(PageContent(
-                page_num=page_num,
-                text="\n".join(current_text_parts),
-                tables=current_tables,
-                image_texts=current_image_texts,
-                image_bytes=current_image_bytes,
-            ))
-
-        return ParseResult(
-            pages=pages,
-            metadata={
-                "format": "docx",
-                "page_count": len(pages),
-                "source": file_path,
-            },
-        )
-    except Exception as e:
-        return ParseResult(success=False, error=f"DOCX parse error: {e}")
-
-
-# ---------------------------------------------------------------------------
-# XLSX / Excel Parser
-# ---------------------------------------------------------------------------
-def _parse_xlsx(file_path: str) -> ParseResult:
-    """Extract all sheets from Excel as markdown tables."""
-    if not XLSX_AVAILABLE:
-        return ParseResult(success=False, error="openpyxl not installed")
-
-    wb = None
-    try:
-        wb = load_workbook(file_path, read_only=True, data_only=True)
-        pages = []
-
-        for sheet_idx, sheet_name in enumerate(wb.sheetnames):
-            ws = wb[sheet_name]
-            rows = []
-            for row in ws.iter_rows(values_only=True):
-                cells = [str(cell).replace('\n', ' ').strip() if cell is not None else "" for cell in row]
-                if any(cells):
-                    rows.append(" | ".join(cells))
-
-            if not rows:
-                continue
-
-            header = rows[0]
-            col_count = len(rows[0].split(" | "))
-            separator = " | ".join(["---"] * col_count)
-            table_md = f"[EXCEL SHEET: {sheet_name}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
-
-            pages.append(PageContent(
-                page_num=sheet_idx + 1,
-                text=f"Sheet: {sheet_name}\n\n{table_md}",
-                tables=[table_md],
-                content_type="table",
-            ))
-
-        return ParseResult(
-            pages=pages,
-            metadata={
-                "format": "xlsx",
-                "page_count": len(pages),
-                "sheet_names": wb.sheetnames if hasattr(wb, 'sheetnames') else [],
-                "source": file_path,
-            },
-        )
-    except Exception as e:
-        return ParseResult(success=False, error=f"XLSX parse error: {e}")
-    finally:
-        if wb is not None:
-            wb.close()
-
-
-# ---------------------------------------------------------------------------
-# PPTX Parser
-# ---------------------------------------------------------------------------
-def _parse_pptx(file_path: str) -> ParseResult:
-    """Extract text, notes, and tables from PowerPoint files."""
-    if not PPTX_AVAILABLE:
-        return ParseResult(success=False, error="python-pptx not installed")
-
-    try:
-        prs = Presentation(file_path)
-        pages = []
-
-        def _iter_shapes(shapes, _depth=0):
-            if _depth > 10:
-                return
-            for shape in shapes:
-                yield shape
-                if shape.shape_type == 6:  # GROUP
-                    try:
-                        yield from _iter_shapes(shape.shapes, _depth + 1)
-                    except Exception:
-                        pass
-
-        for slide_idx, slide in enumerate(prs.slides):
-            slide_num = slide_idx + 1
-            text_parts = []
-            tables = []
-            image_texts = []
-            image_bytes = []
-
-            for shape in _iter_shapes(slide.shapes):
-                # Text frames
-                if shape.has_text_frame:
-                    for paragraph in shape.text_frame.paragraphs:
-                        para_text = paragraph.text.strip()
-                        para_text = _enrich_mcq_text(para_text)
-                        if para_text:
-                            text_parts.append(para_text)
-
-                # Tables
-                if shape.has_table:
-                    table = shape.table
-                    rows = []
-                    for row in table.rows:
-                        cells = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
-                        rows.append(" | ".join(cells))
-                    if rows:
-                        header = rows[0]
-                        separator = " | ".join(["---"] * len(table.rows[0].cells))
-                        table_md = f"[TABLE - Slide {slide_num}]\n{header}\n{separator}\n" + "\n".join(rows[1:])
-                        tables.append(table_md)
-
-                # Images: extract and OCR
-                if shape.shape_type == 13 and OCR_AVAILABLE:  # PICTURE
-                    try:
-                        image_blob = shape.image.blob
-                        image_bytes.append(image_blob)
-                        img = Image.open(io.BytesIO(image_blob))
-                        img = img.convert("L")
-                        ocr_text = pytesseract.image_to_string(img).strip()
-                        if ocr_text:
-                            image_texts.append(f"[IMAGE OCR - Slide {slide_num}]\n{ocr_text}")
-                    except Exception as e:
-                        print(f"[Parser] PPTX image OCR failed slide {slide_num}: {e}")
-
-                # XML_RAW fallback for SmartArt, charts, embedded objects
-                if not shape.has_text_frame and not shape.has_table and shape.shape_type != 13:
-                    try:
-                        xml_raw = shape._element.xml
-                        text_matches = re.findall(r'<a:t[^>]*>([^<]+)</a:t>', xml_raw)
-                        if text_matches:
-                            text_parts.append("[SMARTART/CHART] " + " ".join(text_matches))
-                    except Exception:
-                        pass
-
-            # Slide notes
-            if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
-                notes = slide.notes_slide.notes_text_frame.text.strip()
-                if notes:
-                    text_parts.append(f"[SPEAKER NOTES]\n{notes}")
-
-            if text_parts or tables or image_texts or image_bytes:
-                pages.append(PageContent(
-                    page_num=slide_num,
-                    text="\n".join(text_parts),
-                    tables=tables,
-                    image_texts=image_texts,
-                    image_bytes=image_bytes,
-                ))
-
-        return ParseResult(
-            pages=pages,
-            metadata={
-                "format": "pptx",
-                "page_count": len(prs.slides),
-                "source": file_path,
-            },
-        )
-    except Exception as e:
-        return ParseResult(success=False, error=f"PPTX parse error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -1571,15 +913,16 @@ def _parse_archive(file_path: str) -> ParseResult:
 # Main Entry Point — Universal Parser
 # ---------------------------------------------------------------------------
 PARSER_REGISTRY = {
-    ".pdf": _parse_pdf,
-    ".docx": _parse_docx,
-    ".doc": _parse_docx,  # Best-effort with python-docx
-    ".xlsx": _parse_xlsx,
-    ".xls": _parse_xlsx,   # Best-effort with openpyxl
+    ".pdf": _parse_docling,
+    ".docx": _parse_docling,
+    ".doc": _parse_docling,
+    ".xlsx": _parse_docling,
+    ".xls": _parse_docling,
+    ".pptx": _parse_docling,
+    ".ppt": _parse_docling,
+    ".html": _parse_docling,
+    ".htm": _parse_docling,
     ".csv": _parse_csv,
-    ".pptx": _parse_pptx,
-    ".ppt": _parse_pptx,   # Best-effort with python-pptx
-    # Text formats
     ".txt": _parse_text,
     ".text": _parse_text,
     ".md": _parse_text,

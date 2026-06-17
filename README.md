@@ -31,7 +31,7 @@ A **production-grade RAG engine** built for industrial-scale document understand
 - **FLARE Active RAG (Layer 15)**: Three-tier retry (keyword extraction → LLM alternative queries → sub-question decomposition) with adaptive thresholds (0.35→0.25→0.15), plus mid-generation sentence-level confidence monitoring with targeted re-retrieval during streaming.
 - **RAPTOR (Layer 5)**: Hierarchical summarization with UMAP + GMM clustering + LLM summarization. Auto-triggered after ingestion completes (15s queue idle) or manually via `POST /api/v1/raptor/build`.
 - **Zero Hallucination**: Four-layer guard — pre-generation grounding check (adaptive threshold), strict citation prompt, mid-generation FLARE verification, post-generation sentence verification.
-- **30+ File Formats**: PDF, DOCX, XLSX, PPTX, images (OCR), video (subtitles), code, email, archives. PDF parser now extracts metadata (title/author/subject/keywords), TOC/bookmarks, hyperlinks, font tracking, and borderless tables via pdfplumber.
+- **30+ File Formats**: Powered by IBM Docling for flawless PDF/layout extraction. Also supports DOCX, XLSX, PPTX, images (OCR), video (subtitles), code, email, archives. Perfectly handles complex tables and nested grids.
 - **100% Air-Gapped**: All models cached locally. No external API calls. Zero telemetry.
 - **GPU Auto-Detect & Stabilized VRAM**: Native NVIDIA CUDA on Linux, Apple MPS on macOS, CPU fallback everywhere. Ollama (GPU) + embedding/reranker (CPU) split prevents OOM on 16GB VRAM. Context length reduced to 8192 for 14B model fit.
 - **Lightning Fast Vector Search**: Powered by **Qdrant** for sub-millisecond retrieval across massive multimodal document structures.
@@ -91,8 +91,8 @@ graph TD
 
 | Layer | Name | Model / Technique | Latency Impact |
 |-------|------|-------------------|----------------|
-| 1 | **Universal Parser** | PDF, DOCX, XLSX, images, video subtitles | Offline (Ingest) |
-| 2 | **Smart OCR** | Tesseract + PyMuPDF | Offline (Ingest) |
+| 1 | **Universal Parser** | **IBM Docling** for flawless PDFs/Tables, plus DOCX, XLSX, images | Offline (Ingest) |
+| 2 | **Smart OCR** | Tesseract + Docling Vision | Offline (Ingest) |
 | 3 | **Parent-Child Chunking** | 2400 chars parent, 600 chars child | Offline (Ingest) |
 | 4 | **Batch Embedding** | Rapid batch embedding and ingestion | Offline (Ingest) |
 | 5 | **RAPTOR** | UMAP + GMM clustering + LLM summarization, auto-triggered after ingestion | Offline (Ingest) |
@@ -151,7 +151,7 @@ All parsing is 100% offline. No cloud APIs.
 
 | Category | Formats | Extraction method |
 |----------|---------|------------------|
-| **Documents** | `pdf`, `docx`, `doc` | PyMuPDF + pdfplumber + python-docx |
+| **Documents** | `pdf`, `docx`, `doc` | **IBM Docling** |
 | **Spreadsheets** | `xlsx`, `xls`, `csv` | openpyxl + csv reader |
 | **Presentations** | `pptx`, `ppt` | python-pptx |
 | **Images** (OCR) | `png`, `jpg`, `jpeg`, `bmp`, `tiff`, `gif`, `webp` | Tesseract OCR + CLIP vision embedding |
@@ -163,7 +163,7 @@ All parsing is 100% offline. No cloud APIs.
 | **Web bookmarks** | `url`, `webloc` | URL content fetching |
 | **Archives** (auto-extract) | `zip`, `tar`, `gz`, `rar` | Recursive extraction + per-file ingestion |
 
-**Images, tables, and diagrams** embedded in documents (PDF/DOCX/PPTX) are extracted via PyMuPDF image extraction + Tesseract OCR, and separately indexed through the CLIP vision model for visual similarity search.
+**Images, tables, and diagrams** embedded in documents (PDF) are flawlessly extracted natively via **IBM Docling**, which processes highly-complex grids into perfectly formatted Markdown. Floating images are routed through Tesseract OCR and the CLIP vision model.
 
 ---
 

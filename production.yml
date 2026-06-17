@@ -1,16 +1,3 @@
-# ==============================================================================
-# Enterprise Level RAG — Production Docker Compose (v3.0)
-# ==============================================================================
-# Architecture:
-#   - rag_api:  FastAPI microservice (4 workers, GPU-accelerated)
-#   - postgres: pgvector 15 with HNSW indexes for vector search
-#   - redis:    Redis 7 with password auth for semantic cache + job queue
-#   - ollama:   Ollama LLM server with GPU passthrough
-#   - neo4j:    Neo4j 5 knowledge graph for entity relationships
-#   - models:   One-shot model pre-loader / puller
-#   - backup:   Scheduled pg_dump + neo4j dump to S3-compatible storage
-# ==============================================================================
-
 volumes:
   prod_postgres_data:
     driver: local
@@ -26,18 +13,13 @@ volumes:
     driver: local
   prod_backup_data:
     driver: local
-
 networks:
   rag_network:
     driver: bridge
     ipam:
       config:
         - subnet: 172.28.0.0/16
-
 services:
-  # ============================================================================
-  # RAG API — FastAPI Microservice
-  # ============================================================================
   rag_api:
     build:
       context: .
@@ -57,8 +39,6 @@ services:
         condition: service_healthy
       neo4j:
         condition: service_healthy
-      vllm:
-        condition: service_healthy
       models:
         condition: service_completed_successfully
     volumes:
@@ -75,7 +55,6 @@ services:
       - RAG_USE_HALFVEC=true
       - RAG_EMBEDDING_QUANTIZE=true
       - NUMBA_CACHE_DIR=/tmp
-      - RAG_MODEL_DEVICE=cpu
     env_file:
       - ./.envs/.production/.rag
       - ./.envs/.production/.postgres
@@ -107,10 +86,6 @@ services:
       options:
         max-size: "100m"
         max-file: "7"
-
-  # ============================================================================
-  # PostgreSQL 15 Database (Relational Metadata fallback)
-  # ============================================================================
   postgres:
     image: postgres:15-alpine
     container_name: postgres_rag_prod
@@ -139,10 +114,6 @@ services:
         limits:
           cpus: "2"
           memory: 4G
-
-  # ============================================================================
-  # Qdrant Vector Database
-  # ============================================================================
   qdrant:
     image: qdrant/qdrant:latest
     container_name: qdrant_rag_prod
@@ -173,10 +144,6 @@ services:
       options:
         max-size: "100m"
         max-file: "3"
-
-  # ============================================================================
-  # Redis 7 — Semantic Cache + Job Queue
-  # ============================================================================
   redis:
     image: redis:7-alpine
     container_name: redis_rag_prod
@@ -217,10 +184,6 @@ services:
       options:
         max-size: "100m"
         max-file: "3"
-
-  # ============================================================================
-  # Ollama — Local LLM Server (GPU-Accelerated)
-  # ============================================================================
   ollama:
     image: ollama/ollama:0.3.14
     container_name: ollama_rag_prod
@@ -253,49 +216,6 @@ services:
       options:
         max-size: "100m"
         max-file: "3"
-
-  # ============================================================================
-  # vLLM — Vision LLM Server (GPU-Accelerated)
-  # ============================================================================
-  vllm:
-    image: vllm/vllm-openai:latest
-    container_name: vllm_rag_prod
-    restart: unless-stopped
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
-    command: >
-      --model Qwen/Qwen2-VL-2B-Instruct-AWQ
-      --quantization awq
-      --max-model-len 4096
-      --enforce-eager
-      --gpu-memory-utilization 0.35
-      --port 8000
-    volumes:
-      - prod_ollama_data:/root/.cache/huggingface
-    ports:
-      - "8000:8000"
-    networks:
-      rag_network:
-        ipv4_address: 172.28.0.45
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/models"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
-    deploy:
-      resources:
-        limits:
-          memory: 12G
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "3"
-
-  # ============================================================================
-  # Model Pre-Loader (runs once, exits)
-  # ============================================================================
   models:
     build:
       context: .
@@ -334,10 +254,6 @@ services:
     networks:
       rag_network:
         ipv4_address: 172.28.0.50
-
-  # ============================================================================
-  # Neo4j — Knowledge Graph (Entity Relationships)
-  # ============================================================================
   neo4j:
     image: neo4j:5.17.0
     container_name: neo4j_rag_prod
@@ -374,54 +290,3 @@ services:
       options:
         max-size: "100m"
         max-file: "3"
-
-  # ============================================================================
-  # Automated Backup Service
-  # ============================================================================
-  backup:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: itips_rag_prod:latest
-    pull_policy: if_not_present
-    container_name: itips_rag_prod_backup
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      neo4j:
-        condition: service_healthy
-    volumes:
-      - prod_backup_data:/backup
-      - type: bind
-        source: ./scripts/backup
-        target: /scripts/backup
-        read_only: true
-    environment:
-      - PGHOST=postgres
-      - PGUSER=${POSTGRES_USER:-rag_user}
-      - PGPASSWORD=${POSTGRES_PASSWORD:-rag_password}
-      - PGDATABASE=${POSTGRES_DB:-rag_db}
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USER=${NEO4J_USER:-neo4j}
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-rag_password}
-      - BACKUP_DIR=/backup
-      - RETENTION_DAYS=30
-    entrypoint: ["/bin/sh"]
-    command:
-      - "-c"
-      - |
-        echo "Backup service started. Running daily at 02:00."
-        while true; do
-          current_hour=$$(date +%H)
-          current_min=$$(date +%M)
-          if [ "$$current_hour" = "02" ] && [ "$$current_min" = "00" ]; then
-            /scripts/backup/run.sh >> /var/log/rag/backup.log 2>&1
-            sleep 60
-          fi
-          sleep 30
-        done
-    networks:
-      rag_network: {}
