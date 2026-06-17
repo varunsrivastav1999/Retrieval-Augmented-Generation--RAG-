@@ -57,6 +57,8 @@ services:
         condition: service_healthy
       neo4j:
         condition: service_healthy
+      vllm:
+        condition: service_healthy
       models:
         condition: service_completed_successfully
     volumes:
@@ -264,7 +266,7 @@ services:
       --model Qwen/Qwen2-VL-7B-Instruct-AWQ
       --quantization awq
       --max-model-len 8192
-      --gpu-memory-utilization 0.70
+      --gpu-memory-utilization 0.40
       --port 8000
     volumes:
       - prod_ollama_data:/root/.cache/huggingface
