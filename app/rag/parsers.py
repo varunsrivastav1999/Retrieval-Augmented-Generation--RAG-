@@ -515,7 +515,7 @@ def _extract_tables_vllm(image_base64: str) -> Optional[str]:
     url = os.getenv("VLLM_API_URL", "http://vllm_rag_prod:8000/v1/chat/completions")
     try:
         payload = {
-            "model": "Qwen/Qwen2-VL-7B-Instruct-AWQ",
+            "model": "Qwen/Qwen2-VL-2B-Instruct-AWQ",
             "messages": [
                 {
                     "role": "user",

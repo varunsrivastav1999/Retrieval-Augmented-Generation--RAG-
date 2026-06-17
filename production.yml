@@ -264,11 +264,11 @@ services:
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
     command: >
-      --model Qwen/Qwen2-VL-7B-Instruct-AWQ
+      --model Qwen/Qwen2-VL-2B-Instruct-AWQ
       --quantization awq
       --max-model-len 4096
       --enforce-eager
-      --gpu-memory-utilization 0.49
+      --gpu-memory-utilization 0.35
       --port 8000
     volumes:
       - prod_ollama_data:/root/.cache/huggingface
