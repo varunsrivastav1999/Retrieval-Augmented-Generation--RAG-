@@ -239,7 +239,6 @@ _SUPERSCRIPT_MAP = str.maketrans({
     '½': '1/2', '¼': '1/4', '¾': '3/4',
     '⅛': '1/8', '⅜': '3/8', '⅝': '5/8', '⅞': '7/8',
     '⅓': '1/3', '⅔': '2/3',
-    '¹⁄': '1/', '³⁄': '3/', '⁵⁄': '5/', '⁷⁄': '7/',
     '®': '(R)', '™': '(TM)', '©': '(C)',
     '①': '(1)', '②': '(2)', '③': '(3)', '④': '(4)', '⑤': '(5)',
     '⑥': '(6)', '⑦': '(7)', '⑧': '(8)', '⑨': '(9)', '⑩': '(10)',
@@ -251,6 +250,8 @@ def _normalize_superscripts(text: str) -> str:
     to plain ASCII equivalents for accurate keyword matching."""
     if not text:
         return text
+    # Handle multi-character replacements first
+    text = text.replace('¹⁄', '1/').replace('³⁄', '3/').replace('⁵⁄', '5/').replace('⁷⁄', '7/')
     return text.translate(_SUPERSCRIPT_MAP)
 
 
