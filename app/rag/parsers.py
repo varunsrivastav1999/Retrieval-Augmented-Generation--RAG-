@@ -977,10 +977,22 @@ def _parse_csv(file_path: str) -> ParseResult:
         with open(file_path, "r", encoding=encoding, errors="replace") as f:
             reader = csv.reader(f)
             rows = []
+            previous_row = None
+            
             for row in reader:
-                cells = [str(cell).strip() for cell in row]
-                if any(cells):
-                    rows.append(" | ".join(cells))
+                # Clean and normalize superscripts
+                cleaned_row = [_normalize_superscripts(str(cell).strip()) if cell else "" for cell in row]
+                
+                # Conservative empty cell inheritance for CSVs
+                if previous_row and len(cleaned_row) == len(previous_row):
+                    if any(cleaned_row):
+                        for i in range(len(cleaned_row)):
+                            if not cleaned_row[i] and previous_row[i]:
+                                cleaned_row[i] = previous_row[i]
+                
+                if any(cleaned_row):
+                    rows.append(" | ".join(cleaned_row))
+                    previous_row = cleaned_row
 
         if not rows:
             return ParseResult(
