@@ -6,7 +6,7 @@
 # ==============================================================================
 
 # ---- Stage 1: Builder --------------------------------------------------------
-FROM python:3.11-slim AS builder
+FROM python:3.10-slim AS builder
 
 # Labels
 LABEL maintainer="Varun Srivastava <varunsrivastav1999>"
@@ -50,7 +50,7 @@ RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncod
 RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
 
 # ---- Stage 2: Runtime --------------------------------------------------------
-FROM python:3.11-slim AS runtime
+FROM python:3.10-slim AS runtime
 
 # Runtime system dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -68,7 +68,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean
 
 # Copy Python packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy model cache from builder
