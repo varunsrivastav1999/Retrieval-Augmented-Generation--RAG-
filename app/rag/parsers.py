@@ -525,10 +525,10 @@ def _extract_tables_vllm(image_base64: str) -> Optional[str]:
                     ]
                 }
             ],
-            "max_tokens": 2000,
+            "max_tokens": 8000,
             "temperature": 0.0
         }
-        response = requests.post(url, json=payload, timeout=60)
+        response = requests.post(url, json=payload, timeout=300)
         if response.status_code == 200:
             return response.json()["choices"][0]["message"]["content"].strip()
         else:

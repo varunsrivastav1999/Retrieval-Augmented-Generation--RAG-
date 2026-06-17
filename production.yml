@@ -263,8 +263,8 @@ services:
     command: >
       --model Qwen/Qwen2-VL-7B-Instruct-AWQ
       --quantization awq
-      --max-model-len 4096
-      --gpu-memory-utilization 0.35
+      --max-model-len 8192
+      --gpu-memory-utilization 0.70
       --port 8000
     volumes:
       - prod_ollama_data:/root/.cache/huggingface
