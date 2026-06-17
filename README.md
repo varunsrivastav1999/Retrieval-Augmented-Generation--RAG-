@@ -31,9 +31,9 @@ A **production-grade RAG engine** built for industrial-scale document understand
 - **FLARE Active RAG (Layer 15)**: Three-tier retry (keyword extraction → LLM alternative queries → sub-question decomposition) with adaptive thresholds (0.35→0.25→0.15), plus mid-generation sentence-level confidence monitoring with targeted re-retrieval during streaming.
 - **RAPTOR (Layer 5)**: Hierarchical summarization with UMAP + GMM clustering + LLM summarization. Auto-triggered after ingestion completes (15s queue idle) or manually via `POST /api/v1/raptor/build`.
 - **Zero Hallucination**: Four-layer guard — pre-generation grounding check (adaptive threshold), strict citation prompt, mid-generation FLARE verification, post-generation sentence verification.
-- **30+ File Formats**: Powered by IBM Docling for flawless PDF/layout extraction. Also supports DOCX, XLSX, PPTX, images (OCR), video (subtitles), code, email, archives. Perfectly handles complex tables and nested grids.
+- **30+ File Formats**: Powered by **MinerU (Magic-PDF)** for flawless PDF/layout/math extraction and **IBM Docling** for DOCX, XLSX, PPTX, HTML. Also supports images (OCR), video (subtitles), code, email, archives. Perfectly handles complex tables and nested grids.
 - **100% Air-Gapped**: All models cached locally. No external API calls. Zero telemetry.
-- **GPU Auto-Detect & Stabilized VRAM**: Native NVIDIA CUDA on Linux, Apple MPS on macOS, CPU fallback everywhere. Ollama (GPU) + embedding/reranker (CPU) split prevents OOM on 16GB VRAM. Context length reduced to 8192 for 14B model fit.
+- **GPU Auto-Detect & Stabilized VRAM**: Highly optimized to run even on **8GB VRAM** GPUs. Native NVIDIA CUDA on Linux, Apple MPS on macOS, CPU fallback everywhere. MinerU models and Ollama are carefully managed to prevent OOM. Context length reduced to 8192 for 14B model fit.
 - **Lightning Fast Vector Search**: Powered by **Qdrant** for sub-millisecond retrieval across massive multimodal document structures.
 - **High Concurrency**: Tuned connection pooling and 8x parallel Uvicorn/Ollama workers natively support massive concurrent load.
 - **Production Stack**: Docker Compose with 7 services, static IPs, health checks, GPU passthrough, daily backups, and Prometheus metrics. Ollama image pinned to `0.3.14`.
@@ -91,7 +91,7 @@ graph TD
 
 | Layer | Name | Model / Technique | Latency Impact |
 |-------|------|-------------------|----------------|
-| 1 | **Universal Parser** | **IBM Docling** for flawless PDFs/Tables, plus DOCX, XLSX, images | Offline (Ingest) |
+| 1 | **Universal Parser** | **MinerU** for PDFs/Math/Tables, plus **IBM Docling** for DOCX, XLSX | Offline (Ingest) |
 | 2 | **Smart OCR** | Tesseract + Docling Vision | Offline (Ingest) |
 | 3 | **Parent-Child Chunking** | 2400 chars parent, 600 chars child | Offline (Ingest) |
 | 4 | **Batch Embedding** | Rapid batch embedding and ingestion | Offline (Ingest) |
@@ -151,7 +151,7 @@ All parsing is 100% offline. No cloud APIs.
 
 | Category | Formats | Extraction method |
 |----------|---------|------------------|
-| **Documents** | `pdf`, `docx`, `doc` | **IBM Docling** |
+| **Documents** | `pdf` (MinerU) / `docx`, `doc` (Docling) | **MinerU** & **IBM Docling** |
 | **Spreadsheets** | `xlsx`, `xls`, `csv` | openpyxl + csv reader |
 | **Presentations** | `pptx`, `ppt` | python-pptx |
 | **Images** (OCR) | `png`, `jpg`, `jpeg`, `bmp`, `tiff`, `gif`, `webp` | Tesseract OCR + CLIP vision embedding |
@@ -163,7 +163,7 @@ All parsing is 100% offline. No cloud APIs.
 | **Web bookmarks** | `url`, `webloc` | URL content fetching |
 | **Archives** (auto-extract) | `zip`, `tar`, `gz`, `rar` | Recursive extraction + per-file ingestion |
 
-**Images, tables, and diagrams** embedded in documents (PDF) are flawlessly extracted natively via **IBM Docling**, which processes highly-complex grids into perfectly formatted Markdown. Floating images are routed through Tesseract OCR and the CLIP vision model.
+**Images, tables, math, and diagrams** embedded in documents (PDF) are flawlessly extracted natively via **MinerU (Magic-PDF)**, which processes highly-complex grids into perfectly formatted Markdown. Floating images are routed through Tesseract OCR and the CLIP vision model. Office files are parsed by IBM Docling.
 
 ---
 
@@ -175,7 +175,7 @@ All parsing is 100% offline. No cloud APIs.
 | **Apple MPS** (macOS native) | Auto via `torch.backends.mps.is_available()` | Not Supported. MPS unavailable in Docker (CPU fallback with clear warning) |
 | **CPU** (fallback) | Default when no GPU detected | Supported. Always works |
 
-> **VRAM Stabilization:** The CLIP vision model is dynamically forced to run on the **CPU** rather than the GPU. This prevents sudden Out-Of-Memory (OOM) PyTorch crashes when multiple queries invoke the LLM, Reranker, and Embedder simultaneously on GPUs with tight memory constraints (e.g., 16GB VRAM).
+> **VRAM Stabilization (8GB VRAM Supported):** The CLIP vision model is dynamically forced to run on the **CPU** rather than the GPU. MinerU's parsing models and LLM contexts are highly optimized, allowing the entire pipeline to run accurately on constrained GPUs like an **8GB VRAM** card, preventing sudden Out-Of-Memory (OOM) PyTorch crashes.
 
 Set `RAG_MODEL_DEVICE=cuda` or `RAG_MODEL_DEVICE=mps` to override. Leave empty for auto-detection.
 

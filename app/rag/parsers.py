@@ -30,6 +30,12 @@ try:
 except ImportError:
     DOCLING_AVAILABLE = False
 
+try:
+    from magic_pdf.pipe.UNIPipe import UNIPipe
+    MINERU_AVAILABLE = True
+except ImportError:
+    MINERU_AVAILABLE = False
+
 
 
 try:
@@ -270,7 +276,74 @@ def _is_heading(text: str, font: str, size: float) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# PDF Parser — Full fidelity: text, tables, images, metadata, links, fonts
+# PDF Parser (MinerU) — Academic PDF Extraction
+# ---------------------------------------------------------------------------
+def _parse_mineru(file_path: str) -> ParseResult:
+    """Extract content from PDF using MinerU (magic-pdf)."""
+    if not MINERU_AVAILABLE:
+        return ParseResult(success=False, error="magic-pdf not installed")
+
+    import tempfile
+    import json
+    try:
+        from magic_pdf.pipe.UNIPipe import UNIPipe
+        from magic_pdf.rw.DiskReaderWriter import DiskReaderWriter
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_writer = DiskReaderWriter(temp_dir)
+            image_dir = str(os.path.basename(temp_dir))
+            
+            with open(file_path, "rb") as f:
+                pdf_bytes = f.read()
+                
+            jso_useful_key = {"_pdf_type": "", "model_list": []}
+            pipe = UNIPipe(pdf_bytes, jso_useful_key, image_writer)
+            pipe.pipe_classify()
+            pipe.pipe_parse()
+            
+            md_content = pipe.pipe_mk_markdown(image_dir, drop_mode="none")
+            
+            # Ensure md_content is a string
+            if isinstance(md_content, list):
+                md_text = "\n".join([str(item.get('text', '')) for item in md_content if isinstance(item, dict)])
+            else:
+                md_text = str(md_content)
+                
+            # EXTRACT IMAGES FOR FULL CAPACITY VISION PIPELINE
+            # MinerU dumps extracted layout images, tables, and math formulas into the temp directory
+            image_bytes_list = []
+            for root, _, files in os.walk(temp_dir):
+                for file in files:
+                    if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        img_path = os.path.join(root, file)
+                        try:
+                            with open(img_path, "rb") as img_f:
+                                image_bytes_list.append(img_f.read())
+                        except Exception as img_err:
+                            print(f"[MinerU] Warning: Failed to read extracted image {file}: {img_err}")
+                            
+            pages = [PageContent(
+                page_num=1, 
+                text=f"[MINERU PDF EXTRACT]\n{md_text}",
+                image_bytes=image_bytes_list
+            )]
+            
+            return ParseResult(
+                pages=pages,
+                metadata={
+                    "format": "pdf", 
+                    "page_count": 1, 
+                    "source": file_path, 
+                    "parser": "mineru",
+                    "extracted_images_count": len(image_bytes_list)
+                }
+            )
+            
+    except Exception as e:
+        return ParseResult(success=False, error=f"MinerU PDF parse error: {e}")
+
+# ---------------------------------------------------------------------------
+# Office/HTML Parser (Docling)
 # ---------------------------------------------------------------------------
 def _parse_docling(file_path: str) -> ParseResult:
     """Extract all content from PDF using IBM Docling.
@@ -282,7 +355,7 @@ def _parse_docling(file_path: str) -> ParseResult:
 
     try:
         from docling.document_converter import DocumentConverter, PdfFormatOption
-        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.datamodel.pipeline_options import PdfPipelineOptions, TableStructureOptions, OcrOptions
         from docling.datamodel.base_models import InputFormat
         from docling.datamodel.accelerator_options import AcceleratorOptions, AcceleratorDevice
         from app.rag.model_loader import get_optimal_device
@@ -302,6 +375,18 @@ def _parse_docling(file_path: str) -> ParseResult:
             device=accel_device
         )
         
+        # --- MOST POWERFUL VERSION CONFIGURATION ---
+        # 1. Enable deep learning OCR (High fidelity)
+        pipeline_options.do_ocr = True
+        
+        # 2. Enable Picture and Page image extraction for vision-language capabilities
+        pipeline_options.generate_page_images = True
+        pipeline_options.generate_picture_images = True
+        
+        # 3. Supercharged Table Extraction (Accurate mode vs Fast mode)
+        pipeline_options.do_table_structure = True
+        pipeline_options.table_structure_options = TableStructureOptions(mode="accurate")
+
         converter = DocumentConverter(
             format_options={
                 InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
@@ -335,6 +420,16 @@ def _parse_docling(file_path: str) -> ParseResult:
                 if hasattr(item, "caption") and item.caption:
                     caption_text = _normalize_superscripts(item.caption.text)
                     page_content.image_texts.append(f"[IMAGE CAPTION - Page {page_no}]\n{caption_text}")
+                
+                # Extract the actual high-res image bytes
+                try:
+                    img = item.get_image(doc)
+                    if img:
+                        img_byte_arr = io.BytesIO()
+                        img.save(img_byte_arr, format='PNG')
+                        page_content.image_bytes.append(img_byte_arr.getvalue())
+                except Exception as img_err:
+                    print(f"[Docling] Failed to extract image on page {page_no}: {img_err}")
             
             elif item_type in ["TextItem", "SectionHeaderItem"]:
                 clean_text = _enrich_mcq_text(item.text)
@@ -913,7 +1008,7 @@ def _parse_archive(file_path: str) -> ParseResult:
 # Main Entry Point — Universal Parser
 # ---------------------------------------------------------------------------
 PARSER_REGISTRY = {
-    ".pdf": _parse_docling,
+    ".pdf": _parse_mineru,
     ".docx": _parse_docling,
     ".doc": _parse_docling,
     ".xlsx": _parse_docling,
