@@ -53,8 +53,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2"
-          memory: 4G
+          memory: 8G
   postgres:
     image: postgres:15-alpine
     container_name: postgres_rag_local
@@ -115,8 +114,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "4"
-          memory: 8G
+          memory: 14G
   neo4j:
     image: neo4j:5.17.0
     container_name: neo4j_rag_local
