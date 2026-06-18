@@ -37,4 +37,4 @@ openpyxl==3.1.0
 python-pptx==1.0.2
 --trusted-host wheels.myhloli.com
 --extra-index-url https://wheels.myhloli.com
-magic-pdf[full]==0.9.3
+magic-pdf==0.9.3
