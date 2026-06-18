@@ -336,44 +336,46 @@ def _parse_docling(file_path: str) -> ParseResult:
         return ParseResult(success=False, error="docling not installed")
 
     try:
-        from docling.document_converter import DocumentConverter, PdfFormatOption
-        from docling.datamodel.pipeline_options import PdfPipelineOptions, TableStructureOptions, OcrOptions
-        from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.accelerator_options import AcceleratorOptions, AcceleratorDevice
+        from docling.document_converter import DocumentConverter
         from app.rag.model_loader import get_optimal_device
 
-        # Enforce GPU acceleration if available
-        optimal = get_optimal_device()
-        device_mapping = {
-            "cuda": AcceleratorDevice.CUDA,
-            "mps": AcceleratorDevice.MPS,
-            "cpu": AcceleratorDevice.CPU
-        }
-        accel_device = device_mapping.get(optimal, AcceleratorDevice.AUTO)
+        # Build converter with optimal options (v1 API) or without (v2 auto-detect)
+        try:
+            from docling.document_converter import PdfFormatOption
+            from docling.datamodel.pipeline_options import PdfPipelineOptions, TableStructureOptions, OcrOptions
+            from docling.datamodel.base_models import InputFormat
+            from docling.datamodel.accelerator_options import AcceleratorOptions, AcceleratorDevice
 
-        pipeline_options = PdfPipelineOptions()
-        pipeline_options.accelerator_options = AcceleratorOptions(
-            num_threads=8,
-            device=accel_device
-        )
-        
-        # --- MOST POWERFUL VERSION CONFIGURATION ---
-        # 1. Enable deep learning OCR (High fidelity)
-        pipeline_options.do_ocr = True
-        
-        # 2. Enable Picture and Page image extraction for vision-language capabilities
-        pipeline_options.generate_page_images = True
-        pipeline_options.generate_picture_images = True
-        
-        # 3. Supercharged Table Extraction (Accurate mode vs Fast mode)
-        pipeline_options.do_table_structure = True
-        pipeline_options.table_structure_options = TableStructureOptions(mode="accurate")
-
-        converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            optimal = get_optimal_device()
+            device_mapping = {
+                "cuda": AcceleratorDevice.CUDA,
+                "mps": AcceleratorDevice.MPS,
+                "cpu": AcceleratorDevice.CPU
             }
-        )
+            accel_device = device_mapping.get(optimal, AcceleratorDevice.AUTO)
+
+            pipeline_options = PdfPipelineOptions()
+            pipeline_options.accelerator_options = AcceleratorOptions(
+                num_threads=8,
+                device=accel_device
+            )
+            
+            # --- MOST POWERFUL VERSION CONFIGURATION ---
+            pipeline_options.do_ocr = True
+            pipeline_options.generate_page_images = True
+            pipeline_options.generate_picture_images = True
+            pipeline_options.do_table_structure = True
+            pipeline_options.table_structure_options = TableStructureOptions(mode="accurate")
+
+            converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                }
+            )
+        except (ImportError, AttributeError):
+            # Docling v2+ API — auto-detect format, no explicit options needed
+            converter = DocumentConverter()
+
         result = converter.convert(file_path)
         doc = result.document
 

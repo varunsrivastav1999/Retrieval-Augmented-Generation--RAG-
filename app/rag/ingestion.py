@@ -509,6 +509,7 @@ def ingest_file(
                         if len(pending_vision_chunks) >= BATCH_SIZE:
                             from app.rag.qdrant_client import insert_qdrant_points
                             from qdrant_client.http import models
+                            db.flush()  # Assign DB ids before building PointStruct
                             points = []
                             for ic, vec, d_meta, ocr_text in pending_vision_chunks:
                                 payload = {
@@ -526,7 +527,6 @@ def ingest_file(
                                 ))
                             try:
                                 insert_qdrant_points("image_chunks", points)
-                                db.flush()
                                 db.commit()
                                 chunks_inserted += len(pending_vision_chunks)
                             except Exception as e:
@@ -540,6 +540,7 @@ def ingest_file(
         if pending_vision_chunks:
             from app.rag.qdrant_client import insert_qdrant_points
             from qdrant_client.http import models
+            db.flush()  # Assign DB ids before building PointStruct
             points = []
             for img_chunk, vector, doc_metadata, ocr_text in pending_vision_chunks:
                 payload = {
@@ -557,7 +558,6 @@ def ingest_file(
                 ))
             try:
                 insert_qdrant_points("image_chunks", points)
-                db.flush()
                 db.commit()
                 chunks_inserted += len(pending_vision_chunks)
             except Exception as e:
