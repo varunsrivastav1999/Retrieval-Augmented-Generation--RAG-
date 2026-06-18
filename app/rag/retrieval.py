@@ -1,5 +1,6 @@
 import requests
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from qdrant_client.http import models
 
 from app.database import DocumentChunk
@@ -16,6 +17,7 @@ from app.rag.model_loader import (
 RRF_K = 60
 DENSE_WEIGHT = 0.5
 HYDE_WEIGHT = 0.3
+BM25_WEIGHT = 0.4
 
 def _candidate_from_payload(point_id: str, payload: dict, distance: float) -> dict:
     metadata = payload.get("metadata", {})
@@ -61,6 +63,48 @@ def _generate_hyde(query: str) -> str:
         print(f"[HyDE] Failed to generate: {e}")
     return ""
 
+def _perform_postgres_bm25(db: Session, query: str, tenant_id: str, limit: int) -> list:
+    """Uses PostgreSQL's native Full-Text Search (tsvector) for sparse keyword match."""
+    sql = text("""
+        SELECT id, doc_id, text_content, section, file_type, doc_metadata,
+               ts_rank(to_tsvector('english', text_content), plainto_tsquery('english', :query)) as rank_score
+        FROM document_chunks
+        WHERE tenant_id = :tenant_id
+          AND text_content IS NOT NULL
+          AND plainto_tsquery('english', :query) @@ to_tsvector('english', text_content)
+        ORDER BY rank_score DESC
+        LIMIT :limit
+    """)
+    candidates = []
+    try:
+        results = db.execute(sql, {"query": query, "tenant_id": tenant_id, "limit": limit}).fetchall()
+        for row in results:
+            doc_metadata = row.doc_metadata or {}
+            candidates.append({
+                "id": str(row.id),
+                "text": row.text_content,
+                "score": 0.0,
+                "hybrid_score": 0.0,
+                "dense_score": 0.0,
+                "sparse_score": row.rank_score,
+                "file_type": row.file_type or "unknown",
+                "table_group": doc_metadata.get("table_group"),
+                "metadata": {
+                    "tenant_id": tenant_id,
+                    "source": row.doc_id,
+                    "section": row.section,
+                    "type": doc_metadata.get("type", "text"),
+                    "page_num": doc_metadata.get("page_num"),
+                    "embedding_model": "bm25_postgres",
+                    "file_type": row.file_type or "unknown",
+                    "entities": doc_metadata.get("entities", []),
+                    "table_group": doc_metadata.get("table_group"),
+                }
+            })
+    except Exception as e:
+        print(f"[Retrieval] PostgreSQL BM25 failed: {e}")
+    return candidates
+
 def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 20, metadata_filters: dict = None, fast_path: bool = False) -> list:
     print(f"[Retrieval] Executing {'fast ' if fast_path else ''}hybrid search for tenant={tenant_id!r}, query={query!r}, filters={metadata_filters}")
     
@@ -70,22 +114,25 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
     hyde_vector = None
     vision_vector = None
     query_entities = []
+    bm25_results = []
     
     if fast_path:
         query_vector = encode_text(query)
     else:
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             fut_dense = executor.submit(encode_text, query)
             fut_hyde = executor.submit(_generate_hyde, query)
             fut_vision = executor.submit(encode_image_text_query, query)
             fut_entities = executor.submit(extract_entities, query)
+            fut_bm25 = executor.submit(_perform_postgres_bm25, db, query, tenant_id, max(top_k * 4, 50))
             
             query_vector = fut_dense.result()
             hyde_text = fut_hyde.result()
             hyde_vector = encode_text(hyde_text) if hyde_text else None
             vision_vector = fut_vision.result()
             query_entities = fut_entities.result()
+            bm25_results = fut_bm25.result()
     
     
     candidate_limit = max(top_k * 8, 100)
@@ -166,6 +213,17 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
                 candidate["metadata"]["vision_rank"] = rank
         except Exception as e:
             print(f"[Retrieval] Vision search failed: {e}")
+
+    # BM25 Sparse Search (Postgres)
+    if not fast_path and bm25_results:
+        for rank, bm25_candidate in enumerate(bm25_results, start=1):
+            point_id = bm25_candidate["id"]
+            if point_id not in candidates:
+                candidates[point_id] = bm25_candidate
+            else:
+                candidates[point_id]["sparse_score"] = bm25_candidate["sparse_score"]
+            candidates[point_id]["hybrid_score"] += BM25_WEIGHT * _rrf_score(rank)
+            candidates[point_id]["metadata"]["bm25_rank"] = rank
 
     if not fast_path:
         for candidate in candidates.values():
