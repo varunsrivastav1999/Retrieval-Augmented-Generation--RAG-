@@ -1037,8 +1037,8 @@ PARSER_REGISTRY = {
     ".xls": _parse_office_with_fallback,
     ".pptx": _parse_office_with_fallback,
     ".ppt": _parse_office_with_fallback,
-    ".html": _parse_docling,
-    ".htm": _parse_docling,
+    ".html": _parse_html_with_fallback,
+    ".htm": _parse_html_with_fallback,
     ".csv": _parse_csv,
     ".txt": _parse_text,
     ".text": _parse_text,
@@ -1212,6 +1212,15 @@ def _parse_office_with_fallback(file_path: str) -> ParseResult:
         if fb.success:
             return fb
     return result
+
+
+def _parse_html_with_fallback(file_path: str) -> ParseResult:
+    """Parse HTML: Docling first, fall back to BeautifulSoup."""
+    result = _parse_docling(file_path)
+    if result.success:
+        return result
+    print(f"[Parser] Docling failed for HTML, falling back to BeautifulSoup: {result.error}")
+    return _fallback_parse_html(file_path)
 
 
 def parse_file(file_path: str) -> ParseResult:
