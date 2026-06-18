@@ -455,8 +455,13 @@ Example: ["query one", "query two"]
             response = requests.post(get_ollama_generate_url(), json=payload, timeout=10)
             if response.status_code == 200:
                 text = response.json().get("response", "").strip()
-                if text.startswith("```json"): text = text[7:-3].strip()
-                elif text.startswith("```"): text = text[3:-3].strip()
+                if text.startswith("```json"):
+                    text = text[7:]
+                elif text.startswith("```"):
+                    text = text[3:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
                 queries = json.loads(text)
                 if isinstance(queries, list) and len(queries) >= 1:
                     print(f"[FLARE] Retry 2: Generated alternative queries: {queries}")
@@ -486,8 +491,13 @@ Example: ["What is the part number for X?", "What is the torque specification?",
         response = requests.post(get_ollama_generate_url(), json=payload, timeout=15)
         if response.status_code == 200:
             text = response.json().get("response", "").strip()
-            if text.startswith("```json"): text = text[7:-3].strip()
-            elif text.startswith("```"): text = text[3:-3].strip()
+            if text.startswith("```json"):
+                text = text[7:]
+            elif text.startswith("```"):
+                text = text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
             queries = json.loads(text)
             if isinstance(queries, list) and len(queries) >= 1:
                 print(f"[FLARE] Retry 3: Decomposed into sub-queries: {queries}")
@@ -560,4 +570,3 @@ def flare_mid_generation_retrieval(
                 return flare_query
 
     return None
-

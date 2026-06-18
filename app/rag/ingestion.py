@@ -38,8 +38,8 @@ import io
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-BATCH_SIZE = 32
-MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB per image for CLIP vision pipeline  # Chunks per embedding batch (up from 16)
+BATCH_SIZE = 16  # Chunks per embedding batch. Reduced to strictly protect VRAM limits
+MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB per image for CLIP vision pipeline
 PARENT_CHUNK_SIZE = 2400  # Parent chunks for broad retrieval
 CHILD_CHUNK_SIZE = 600   # Child chunks for precise retrieval
 CHUNK_OVERLAP = 150       # Overlap between chunks
@@ -53,7 +53,7 @@ def hash_chunk(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Layer 3: Semantic Chunking (Layout-Aware)
 # ---------------------------------------------------------------------------
-def semantic_chunking(text: str, max_chunk_size: int = 2000) -> List[Dict]:
+def semantic_chunking(text: str, max_chunk_size: int = PARENT_CHUNK_SIZE, child_chunk_size: int = CHILD_CHUNK_SIZE) -> List[Dict]:
     """
     Semantic chunking strategy that respects document layout boundaries.
     Since Docling extracts text into semantic blocks (paragraphs/sections)
@@ -70,6 +70,34 @@ def semantic_chunking(text: str, max_chunk_size: int = 2000) -> List[Dict]:
     blocks = [b.strip() for b in text.split('\n\n') if len(b.strip()) > 10]
     
     result = []
+    parent_idx = 0
+    child_idx = 0
+
+    def _append_parent_and_children(parent_text: str):
+        nonlocal parent_idx, child_idx
+        if not parent_text:
+            return
+        result.append({
+            "text": parent_text,
+            "is_parent": True,
+            "parent_idx": parent_idx,
+            "child_idx": None,
+        })
+        start = 0
+        while start < len(parent_text):
+            end = min(start + child_chunk_size, len(parent_text))
+            child_text = parent_text[start:end].strip()
+            if child_text:
+                result.append({
+                    "text": child_text,
+                    "is_parent": False,
+                    "parent_idx": parent_idx,
+                    "child_idx": child_idx,
+                })
+                child_idx += 1
+            start = end - CHUNK_OVERLAP if end < len(parent_text) else end
+        parent_idx += 1
+
     for block in blocks:
         # Only split a semantic block if it severely exceeds the embedding token limit
         if len(block) > max_chunk_size:
@@ -77,36 +105,14 @@ def semantic_chunking(text: str, max_chunk_size: int = 2000) -> List[Dict]:
             current_chunk = ""
             for sentence in sentences:
                 if len(current_chunk) + len(sentence) > max_chunk_size and current_chunk:
-                    result.append({
-                        "text": current_chunk.strip(),
-                        "is_parent": True,
-                        "parent_idx": None,
-                        "child_idx": None,
-                    })
+                    _append_parent_and_children(current_chunk.strip())
                     current_chunk = sentence
                 else:
                     current_chunk += " " + sentence if current_chunk else sentence
             if current_chunk:
-                result.append({
-                    "text": current_chunk.strip(),
-                    "is_parent": True,
-                    "parent_idx": None,
-                    "child_idx": None,
-                })
+                _append_parent_and_children(current_chunk.strip())
         else:
-            result.append({
-                "text": block,
-                "is_parent": True,
-                "parent_idx": None,
-                "child_idx": None,
-            })
-            
-    return result
-                    "text": child_text,
-                    "is_parent": False,
-                    "parent_idx": parent_idx,
-                    "child_idx": child_idx,
-                })
+            _append_parent_and_children(block)
 
     return result
 
@@ -396,6 +402,7 @@ def ingest_file(
                     "file_type": file_type,
                     "is_parent": chunk_info.get("is_parent", False),
                     "parent_idx": chunk_info.get("parent_idx"),
+                    "child_idx": chunk_info.get("child_idx"),
                     "entities": extract_entities(chunk_text),
                     "table_group": chunk_info.get("table_group"),
                     "global_context": doc_context_summary,
@@ -577,6 +584,8 @@ def _process_chunk_batch(
             "source": doc_id,
             "file_type": file_type,
             "is_parent": c.get("is_parent", False),
+            "parent_idx": c.get("parent_idx"),
+            "child_idx": c.get("child_idx"),
             "entities": c.get("entities", []),
             "table_group": c.get("table_group"),
         }

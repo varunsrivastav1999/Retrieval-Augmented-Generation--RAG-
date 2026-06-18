@@ -274,7 +274,7 @@ def build_strict_grounding_prompt(
         "   that identifier. NOTE: Table cells often contain trailing superscripts, footnote markers,\n"
         "   or asterisks (e.g., EQL40200D3, EQL8100D*). Treat these as matching the base model number.\n"
         "   Then read the value from the requested column by matching the column headers.\n"
-        "8. If no information in the provided records can answer the question, state: "
+        "7. If no information in the provided records can answer the question, state: "
         "'This information is not available in the uploaded documents.' Do NOT make up an answer.\n"
         f"{topic_line}\n"
         "-----------------------------------------------------------\n"

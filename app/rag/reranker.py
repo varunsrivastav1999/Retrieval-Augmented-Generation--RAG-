@@ -79,7 +79,8 @@ def rerank_results(query: str, retrieved_chunks: list, top_n: int = 5) -> list:
     else:
         try:
             pairs = [[query, doc] for doc in raw_docs]
-            scores = model.predict(pairs, batch_size=4)
+            # Predict with limited batch size to avoid PyTorch OOM spikes
+            scores = model.predict(pairs, batch_size=16)
         except Exception as e:
             print(f"[Reranker] Predict failed: {e}, falling back to original order")
             for chunk in retrieved_chunks[:top_n]:

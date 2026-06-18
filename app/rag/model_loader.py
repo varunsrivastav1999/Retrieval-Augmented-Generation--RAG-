@@ -364,6 +364,14 @@ def _as_vector(value: Any) -> List[float]:
 
 def encode_text(text: str, quantize: bool = False) -> List[float]:
     vec = _as_vector(get_embedding_model().encode(text))
+    
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+        
     if quantize and RAG_EMBEDDING_QUANTIZE == "int8":
         from app.rag.quantization import quantize_embedding, dequantize_embedding
         q_bytes, scale, zp = quantize_embedding(vec)
@@ -376,7 +384,16 @@ def encode_texts(texts: Iterable[str], quantize: bool = False) -> List[List[floa
     if not text_list:
         return []
 
-    encoded = get_embedding_model().encode(text_list)
+    # Hard limit the attention batch matrices to protect VRAM constraints
+    encoded = get_embedding_model().encode(text_list, batch_size=16)
+    
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+        
     if hasattr(encoded, "tolist"):
         encoded = encoded.tolist()
     vecs = [_as_vector(vector) for vector in encoded]

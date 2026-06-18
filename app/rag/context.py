@@ -56,7 +56,7 @@ def compress_context(chunk: dict) -> dict:
     IMPORTANT: Table chunks are NEVER truncated — every column and row matters
     for lookup queries (e.g., "SNC2448L1125 door kit number").
     """
-    max_chars = 1500
+    max_chars = 2500  # Increased to safely preserve the 2400-char PARENT_CHUNK_SIZE
     text = chunk.get("text", "")
     
     if "[TABLE" in text or "| " in text:
@@ -87,6 +87,8 @@ def assemble_context(query: str, reranked_chunks: list, db=None, broad_query: bo
     # Fetch their immediate neighbors (+/- 5 for broad coverage)
     final_context = []
     expanded_ids = set()
+    total_chars = 0
+    MAX_CONTEXT_CHARS = 28000  # Hard ceiling to strictly protect llama3.1's 8192 token limit
     
     for i, chunk in enumerate(mmr_filtered):
         # Only expand top 5 chunks and only if db is available
@@ -115,17 +117,24 @@ def assemble_context(query: str, reranked_chunks: list, db=None, broad_query: bo
                     for n in neighbors:
                         if n.id not in expanded_ids:
                             neighbor_chunk = _candidate_from_chunk(n)
-                            final_context.append(compress_context(neighbor_chunk))
-                            expanded_ids.add(n.id)
+                            compressed = compress_context(neighbor_chunk)
+                            text_len = len(compressed.get("text", ""))
+                            if total_chars + text_len <= MAX_CONTEXT_CHARS:
+                                final_context.append(compressed)
+                                expanded_ids.add(n.id)
+                                total_chars += text_len
                 except Exception as e:
                     print(f"[Context] Expansion failed: {e}")
 
         chunk_id = chunk.get("id")
         if chunk_id is None or chunk_id not in expanded_ids:
             compressed = compress_context(chunk)
-            final_context.append(compressed)
-            if chunk_id is not None:
-                expanded_ids.add(chunk_id)
+            text_len = len(compressed.get("text", ""))
+            if total_chars + text_len <= MAX_CONTEXT_CHARS:
+                final_context.append(compressed)
+                if chunk_id is not None:
+                    expanded_ids.add(chunk_id)
+                total_chars += text_len
 
     if broad_query and db is not None:
         _append_broad_document_context(final_context, expanded_ids, reranked_chunks, db)
