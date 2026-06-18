@@ -54,7 +54,7 @@ def _generate_hyde(query: str) -> str:
         "options": {"num_predict": 30, "temperature": 0.3}
     }
     try:
-        response = requests.post(get_ollama_generate_url(), json=payload, timeout=15.0)
+        response = requests.post(get_ollama_generate_url(), json=payload, timeout=45.0)
         if response.status_code == 200:
             return response.json().get("response", "").strip()
     except Exception as e:

@@ -189,7 +189,7 @@ def build_raptor_tree(db: Session, tenant_id: str, max_levels: int = 3, n_cluste
                 
                 new_chunk = DocumentChunk(
                     tenant_id=tenant_id,
-                    doc_id=f"raptor_summary_lvl_{level+1}",
+                    doc_id=f"raptor_summary_lvl_{level+1}_{cluster_id}",
                     chunk_hash=chunk_hash,
                     text_content=summary,
                     embedding_model=embedding_model_id,
@@ -205,7 +205,7 @@ def build_raptor_tree(db: Session, tenant_id: str, max_levels: int = 3, n_cluste
                         vector=vec,
                         payload={
                             "tenant_id": tenant_id,
-                            "doc_id": f"raptor_summary_lvl_{level+1}",
+                            "doc_id": f"raptor_summary_lvl_{level+1}_{cluster_id}",
                             "file_type": "raptor_summary",
                             "text_content": summary,
                             "section": 0,
@@ -213,7 +213,7 @@ def build_raptor_tree(db: Session, tenant_id: str, max_levels: int = 3, n_cluste
                                 "type": "raptor_summary",
                                 "level": level + 1,
                                 "tenant_id": tenant_id,
-                                "source": f"raptor_summary_lvl_{level+1}",
+                                "source": f"raptor_summary_lvl_{level+1}_{cluster_id}",
                                 "embedding_model": embedding_model_id,
                             }
                         }
