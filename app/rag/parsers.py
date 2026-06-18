@@ -1027,70 +1027,7 @@ def _parse_archive(file_path: str) -> ParseResult:
 
 
 # ---------------------------------------------------------------------------
-# Main Entry Point — Universal Parser
-# ---------------------------------------------------------------------------
-PARSER_REGISTRY = {
-    ".pdf": _parse_pdf_with_fallback,
-    ".docx": _parse_office_with_fallback,
-    ".doc": _parse_office_with_fallback,
-    ".xlsx": _parse_office_with_fallback,
-    ".xls": _parse_office_with_fallback,
-    ".pptx": _parse_office_with_fallback,
-    ".ppt": _parse_office_with_fallback,
-    ".html": _parse_html_with_fallback,
-    ".htm": _parse_html_with_fallback,
-    ".csv": _parse_csv,
-    ".txt": _parse_text,
-    ".text": _parse_text,
-    ".md": _parse_text,
-    ".log": _parse_text,
-    ".json": _parse_text,
-    ".xml": _parse_text,
-    # Images
-    ".png": _parse_image,
-    ".jpg": _parse_image,
-    ".jpeg": _parse_image,
-    ".bmp": _parse_image,
-    ".tiff": _parse_image,
-    ".tif": _parse_image,
-    ".gif": _parse_image,
-    ".webp": _parse_image,
-    # Video
-    ".mp4": _parse_video,
-    ".avi": _parse_video,
-    ".mkv": _parse_video,
-    ".mov": _parse_video,
-    ".wmv": _parse_video,
-    ".flv": _parse_video,
-    # Subtitle files
-    ".srt": _parse_subtitle_file,
-    ".ass": _parse_subtitle_file,
-    ".ssa": _parse_subtitle_file,
-    ".vtt": _parse_subtitle_file,
-}
-
-# Add code extensions dynamically
-for ext in CODE_EXTENSIONS:
-    PARSER_REGISTRY[ext] = _parse_code
-
-# Add email extensions dynamically
-for ext in EMAIL_EXTENSIONS:
-    PARSER_REGISTRY[ext] = _parse_email
-
-# Add URL extensions dynamically
-for ext in URL_EXTENSIONS:
-    PARSER_REGISTRY[ext] = _parse_url
-
-# Add archive extensions dynamically
-for ext in ARCHIVE_EXTENSIONS:
-    PARSER_REGISTRY[ext] = _parse_archive
-
-
-# ---------------------------------------------------------------------------
 # Fallback parser wrappers — try Docling/MinerU first, fall back to native
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Native fallback parsers for when Docling/MinerU fail
 # ---------------------------------------------------------------------------
 def _fallback_parse_pdf(file_path: str) -> ParseResult:
     """Fallback PDF parser using pdfplumber."""
@@ -1186,7 +1123,6 @@ def _fallback_parse_html(file_path: str) -> ParseResult:
     except Exception as e:
         return ParseResult(success=False, error=f"HTML fallback failed: {e}")
 
-
 def _parse_pdf_with_fallback(file_path: str) -> ParseResult:
     """Parse PDF: MinerU first, fall back to pdfplumber."""
     result = _parse_mineru(file_path)
@@ -1213,7 +1149,6 @@ def _parse_office_with_fallback(file_path: str) -> ParseResult:
             return fb
     return result
 
-
 def _parse_html_with_fallback(file_path: str) -> ParseResult:
     """Parse HTML: Docling first, fall back to BeautifulSoup."""
     result = _parse_docling(file_path)
@@ -1222,6 +1157,69 @@ def _parse_html_with_fallback(file_path: str) -> ParseResult:
     print(f"[Parser] Docling failed for HTML, falling back to BeautifulSoup: {result.error}")
     return _fallback_parse_html(file_path)
 
+
+# ---------------------------------------------------------------------------
+# Main Entry Point — Universal Parser
+# ---------------------------------------------------------------------------
+PARSER_REGISTRY = {
+    ".pdf": _parse_pdf_with_fallback,
+    ".docx": _parse_office_with_fallback,
+    ".doc": _parse_office_with_fallback,
+    ".xlsx": _parse_office_with_fallback,
+    ".xls": _parse_office_with_fallback,
+    ".pptx": _parse_office_with_fallback,
+    ".ppt": _parse_office_with_fallback,
+    ".html": _parse_html_with_fallback,
+    ".htm": _parse_html_with_fallback,
+    ".csv": _parse_csv,
+    ".txt": _parse_text,
+    ".text": _parse_text,
+    ".md": _parse_text,
+    ".log": _parse_text,
+    ".json": _parse_text,
+    ".xml": _parse_text,
+    # Images
+    ".png": _parse_image,
+    ".jpg": _parse_image,
+    ".jpeg": _parse_image,
+    ".bmp": _parse_image,
+    ".tiff": _parse_image,
+    ".tif": _parse_image,
+    ".gif": _parse_image,
+    ".webp": _parse_image,
+    # Video
+    ".mp4": _parse_video,
+    ".avi": _parse_video,
+    ".mkv": _parse_video,
+    ".mov": _parse_video,
+    ".wmv": _parse_video,
+    ".flv": _parse_video,
+    # Subtitle files
+    ".srt": _parse_subtitle_file,
+    ".ass": _parse_subtitle_file,
+    ".ssa": _parse_subtitle_file,
+    ".vtt": _parse_subtitle_file,
+}
+
+# Add code extensions dynamically
+for ext in CODE_EXTENSIONS:
+    PARSER_REGISTRY[ext] = _parse_code
+
+# Add email extensions dynamically
+for ext in EMAIL_EXTENSIONS:
+    PARSER_REGISTRY[ext] = _parse_email
+
+# Add URL extensions dynamically
+for ext in URL_EXTENSIONS:
+    PARSER_REGISTRY[ext] = _parse_url
+
+# Add archive extensions dynamically
+for ext in ARCHIVE_EXTENSIONS:
+    PARSER_REGISTRY[ext] = _parse_archive
+
+
+# ---------------------------------------------------------------------------
+# Fallback parser wrappers — try Docling/MinerU first, fall back to native
 
 def parse_file(file_path: str) -> ParseResult:
     """
