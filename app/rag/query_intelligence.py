@@ -16,7 +16,7 @@
 
 import re
 import json
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 import requests
 from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
 
@@ -234,9 +234,9 @@ def chain_related_chunks(
     # Extract key entities from primary chunks
     primary_entities = set()
     for chunk in primary_chunks:
-        text = chunk.get("text", "").lower()
+        chunk_text = chunk.get("text", "")
         # Extract potential entity references (capitalized words, model numbers, codes)
-        words = re.findall(r'\b[A-Z][A-Za-z0-9_-]{2,}\b', chunk.get("text", ""))
+        words = re.findall(r'\b[A-Z][A-Za-z0-9_-]{2,}\b', chunk_text)
         primary_entities.update(w.lower() for w in words)
 
     if not primary_entities:
@@ -400,8 +400,16 @@ def text_to_sql_filters(query: str) -> dict:
         response = requests.post(get_ollama_generate_url(), json=payload, timeout=5)
         if response.status_code == 200:
             text = response.json().get("response", "").strip()
-            if text.startswith("```json"): text = text[7:-3].strip()
-            elif text.startswith("```"): text = text[3:-3].strip()
+            if text.startswith("```json"):
+                text = text[7:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+            elif text.startswith("```"):
+                text = text[3:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
             filters = json.loads(text)
             return {k: v for k, v in filters.items() if v is not None}
     except Exception as e:

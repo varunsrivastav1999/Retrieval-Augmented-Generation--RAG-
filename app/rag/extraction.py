@@ -282,7 +282,7 @@ def format_structured_data_for_embedding(root_obj: Dict[str, Any]) -> List[str]:
             
         core_attrs = item.get("Core_Attributes", {})
         if isinstance(core_attrs, dict):
-            sub_items = [f"{k.replace('_', ' ')}: {v}" for k, v in core_attrs.items() if v and str(v).lower() != "null"]
+            sub_items = [f"{k.replace('_', ' ')}: {v}" for k, v in core_attrs.items() if v is not None and str(v).lower() != "null"]
             if sub_items:
                 lines.append(f"Attributes: " + ", ".join(sub_items))
                 

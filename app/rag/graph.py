@@ -97,7 +97,7 @@ class GraphDB:
                 elif cypher.startswith("```"):
                     cypher = cypher[3:-3].strip()
                 # Ensure LIMIT clause exists (safety: prevent full graph dump)
-                if "limit" not in cypher.lower():
+                if not re.search(r'\bLIMIT\b', cypher, re.IGNORECASE):
                     cypher = cypher.rstrip().rstrip(";") + " LIMIT 50"
                 return cypher
         except Exception as e:
@@ -117,8 +117,8 @@ class GraphDB:
         try:
             with self.driver.session() as session:
                 # Enforce tenant isolation: inject tenant_id filter into generated Cypher
-                if "WHERE" in cypher.upper():
-                    isolated = cypher.replace("WHERE", f"WHERE n.tenant_id = '{tenant_id}' AND")
+                if re.search(r'\bWHERE\b', cypher, re.IGNORECASE):
+                    isolated = re.sub(r'\bWHERE\b', f"WHERE n.tenant_id = '{tenant_id}' AND", cypher, count=1, flags=re.IGNORECASE)
                 else:
                     isolated = cypher.rstrip().rstrip(";") + f" WHERE n.tenant_id = '{tenant_id}'"
                 result = session.run(isolated)

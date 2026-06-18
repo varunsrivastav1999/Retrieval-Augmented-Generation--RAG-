@@ -137,7 +137,7 @@ def get_optimal_device() -> str:
                 print("[RAG Hardware] nvidia-smi works inside container, but PyTorch cannot use it. (Likely an NVIDIA Driver version mismatch or missing CUDA libs).")
             except Exception as e:
                 print(f"[RAG Hardware] nvidia-smi missing inside container. The GPU is NOT passed through to Docker! Ensure you run start.sh and not docker compose directly.")
-    except (ImportError, Exception) as e:
+    except Exception as e:
         print(f"[RAG Hardware] Torch check failed: {e}. Defaulting to CPU.")
 
     return "cpu"
@@ -411,7 +411,12 @@ if __name__ == "__main__":
     os.environ["TRANSFORMERS_OFFLINE"] = "0"
     
     # We import inside main to avoid circular dependency issues if any
-    from app.rag.model_loader import get_embedding_model, get_reranker_model, HashingEmbedder, LexicalReranker
+    import sys
+    _mod = sys.modules.get("app.rag.model_loader") or sys.modules.get(__name__) or __import__(__name__)
+    get_embedding_model = _mod.get_embedding_model
+    get_reranker_model = _mod.get_reranker_model
+    HashingEmbedder = _mod.HashingEmbedder
+    LexicalReranker = _mod.LexicalReranker
     
     print("\n1. Downloading Embedding Model...")
     try:

@@ -16,8 +16,6 @@ import subprocess
 import email
 from email import policy
 import urllib.request
-import requests
-import base64
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -65,6 +63,30 @@ try:
     BS4_AVAILABLE = True
 except ImportError:
     BS4_AVAILABLE = False
+
+try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    PDFPLUMBER_AVAILABLE = False
+
+try:
+    from docx import Document
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
+try:
+    import openpyxl
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+
+try:
+    from pptx import Presentation
+    PPTX_AVAILABLE = True
+except ImportError:
+    PPTX_AVAILABLE = False
 
 
 # ---------------------------------------------------------------------------
@@ -185,33 +207,7 @@ def _enrich_mcq_text(text: str) -> str:
     return "\n".join(enriched_lines)
 
 
-def _clean_ocr_text(text: str) -> str:
-    """Remove highly noisy or garbage lines from OCR output (e.g. random UI screenshot symbols)."""
-    if not text:
-        return text
-        
-    clean_lines = []
-    for line in text.split('\n'):
-        line_clean = line.strip()
-        if not line_clean:
-            continue
-            
-        # Drop extremely short lines with barely any letters
-        if len(line_clean) < 4 and sum(c.isalpha() for c in line_clean) < 2:
-            continue
-            
-        # Drop lines that are mostly symbols/noise (e.g., "ae atl] _—T-~")
-        alphanum = sum(c.isalnum() for c in line_clean)
-        if alphanum / len(line_clean) < 0.5:
-            continue
-            
-        # Drop lines with too many repetitive weird characters
-        if re.search(r'([^\w\s])\1{3,}', line_clean):
-            continue
-            
-        clean_lines.append(line)
-        
-    return '\n'.join(clean_lines)
+
 
 
 # ---------------------------------------------------------------------------
@@ -258,24 +254,7 @@ def _normalize_superscripts(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Topic/Heading Tracker Heuristics
 # ---------------------------------------------------------------------------
-def _is_heading(text: str, font: str, size: float) -> bool:
-    """Heuristic to determine if a text span is a section heading."""
-    text_clean = text.strip()
-    if not text_clean or len(text_clean) > 120 or len(text_clean) < 3:
-        return False
-    
-    # Headings rarely end in standard sentence-ending punctuation
-    if text_clean.endswith('.') or text_clean.endswith('?'):
-        return False
-        
-    font_lower = font.lower()
-    is_bold = 'bold' in font_lower or 'black' in font_lower or 'heavy' in font_lower
-    
-    # A heading is either bold, or noticeably larger than base text (~9-10pt is standard)
-    if is_bold or size > 11.5:
-        return True
-        
-    return False
+
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +486,12 @@ def _parse_csv(file_path: str) -> ParseResult:
         chunk_size = 100
         pages = []
         data_rows = rows[1:]
-        for i in range(0, max(len(data_rows), 1), chunk_size):
+        if not data_rows:
+            pages.append(PageContent(
+                page_num=1,
+                text=f"[CSV DATA]\n{header}\n{separator}\n(No data rows)",
+            ))
+        for i in range(0, len(data_rows), chunk_size):
             chunk = data_rows[i:i + chunk_size]
             chunk_table = f"[CSV DATA - Rows {i + 1} to {i + len(chunk)}]\n{header}\n{separator}\n" + "\n".join(chunk)
             pages.append(PageContent(
@@ -597,12 +581,16 @@ def _parse_text(file_path: str) -> ParseResult:
 # Image Parser (OCR)
 # ---------------------------------------------------------------------------
 def _parse_image(file_path: str) -> ParseResult:
-    """Extract text from images using OCR."""
+    """Extract text from images using OCR. Also passes raw bytes for CLIP vision."""
     if not OCR_AVAILABLE:
         return ParseResult(success=False, error="pytesseract/Pillow not installed for image OCR")
 
     try:
-        img = Image.open(file_path)
+        # Always read raw bytes first for CLIP vision pipeline
+        with open(file_path, "rb") as fh:
+            raw_bytes = fh.read()
+
+        img = Image.open(io.BytesIO(raw_bytes))
 
         # Apply EXIF orientation before processing
         try:
@@ -627,23 +615,24 @@ def _parse_image(file_path: str) -> ParseResult:
         ocr_text = _enrich_mcq_text(ocr_text)
         filename = os.path.basename(file_path)
 
+        base = PageContent(
+            page_num=1,
+            image_texts=[ocr_text] if ocr_text else [],
+            content_type="image_ocr",
+        )
+
         if not ocr_text:
+            base.text = f"[IMAGE: {filename}]\n(No text detected in image)"
+            base.image_bytes = [raw_bytes]
             return ParseResult(
-                pages=[PageContent(
-                    page_num=1,
-                    text=f"[IMAGE: {filename}]\n(No text detected in image)",
-                    content_type="image_ocr",
-                )],
+                pages=[base],
                 metadata={"format": "image", "page_count": 1, "source": file_path},
             )
 
+        base.text = f"[IMAGE OCR: {filename}]\n{ocr_text}"
+        base.image_bytes = [raw_bytes]
         return ParseResult(
-            pages=[PageContent(
-                page_num=1,
-                text=f"[IMAGE OCR: {filename}]\n{ocr_text}",
-                image_texts=[ocr_text],
-                content_type="image_ocr",
-            )],
+            pages=[base],
             metadata={
                 "format": "image",
                 "page_count": 1,
@@ -838,20 +827,25 @@ def _parse_email(file_path: str) -> ParseResult:
         if msg.is_multipart():
             for part in msg.walk():
                 if part.get_content_type() == "text/plain":
-                    body += part.get_content() + "\n"
+                    content = part.get_content()
+                    if content:
+                        body += content + "\n"
         else:
-            body = msg.get_content()
+            content = msg.get_content()
+            if content:
+                body = content
 
         if not body.strip() and msg.is_multipart():
             # Fallback to html if no plain text
             for part in msg.walk():
                 if part.get_content_type() == "text/html":
                     html = part.get_content()
-                    if BS4_AVAILABLE:
-                        soup = BeautifulSoup(html, "html.parser")
-                        body += soup.get_text() + "\n"
-                    else:
-                        body += re.sub(r'<[^>]+>', '', html) + "\n"
+                    if html:
+                        if BS4_AVAILABLE:
+                            soup = BeautifulSoup(html, "html.parser")
+                            body += soup.get_text() + "\n"
+                        else:
+                            body += re.sub(r'<[^>]+>', '', html) + "\n"
 
         email_text = (
             f"[EMAIL MESSAGE]\n"
@@ -886,8 +880,8 @@ def _parse_url(file_path: str) -> ParseResult:
             match = re.search(r'(https?://[^\s]+)', content)
             if match:
                 url = match.group(1)
-                # Cleanup common trailing characters
-                url = url.rstrip('"]').rstrip('</string>')
+                # Cleanup common trailing characters from markdown/XML context
+                url = re.sub(r'["\]<].*$', '', url)
 
         if not url:
             return ParseResult(success=False, error="No valid URL found in file")
@@ -908,7 +902,7 @@ def _parse_url(file_path: str) -> ParseResult:
         if BS4_AVAILABLE:
             soup = BeautifulSoup(html, "html.parser")
             if soup.title:
-                title = soup.title.string
+                title = soup.title.get_text(strip=True) or "Web Page"
             # Remove scripts and styles
             for script in soup(["script", "style", "nav", "footer", "header"]):
                 script.decompose()
@@ -947,6 +941,26 @@ def _parse_archive(file_path: str) -> ParseResult:
     try:
         extract_dir = file_path + "_extracted"
         os.makedirs(extract_dir, exist_ok=True)
+        extract_dir = os.path.realpath(extract_dir)
+
+        def _safe_extract_zip(member_name: str) -> bool:
+            """Extract a ZIP member safely; returns True if extracted, False if skipped."""
+            dest = os.path.realpath(os.path.join(extract_dir, member_name))
+            if not dest.startswith(extract_dir + os.sep):
+                print(f"[Parser] Skipping ZIP member with path traversal: {member_name}")
+                return False
+            return True
+
+        def _safe_extract_tar(member) -> bool:
+            """Extract a TAR member safely; returns True if extracted, False if skipped."""
+            if member.name.startswith(os.sep):
+                print(f"[Parser] Skipping TAR member with absolute path: {member.name}")
+                return False
+            dest = os.path.realpath(os.path.join(extract_dir, member.name))
+            if not dest.startswith(extract_dir + os.sep):
+                print(f"[Parser] Skipping TAR member with path traversal: {member.name}")
+                return False
+            return True
 
         if file_path.endswith('.zip'):
             with zipfile.ZipFile(file_path, 'r') as zf:
@@ -959,6 +973,8 @@ def _parse_archive(file_path: str) -> ParseResult:
                     if total_extracted > MAX_ARCHIVE_EXTRACT_SIZE:
                         print(f"[Parser] Archive extract aborted: exceeded {MAX_ARCHIVE_EXTRACT_SIZE} bytes")
                         break
+                    if not _safe_extract_zip(member):
+                        continue
                     zf.extract(member, extract_dir)
         elif file_path.endswith(('.tar', '.tar.gz', '.tgz')):
             with tarfile.open(file_path, 'r:*') as tf:
@@ -971,6 +987,9 @@ def _parse_archive(file_path: str) -> ParseResult:
                     if total_extracted > MAX_ARCHIVE_EXTRACT_SIZE:
                         print(f"[Parser] Archive extract aborted: exceeded {MAX_ARCHIVE_EXTRACT_SIZE} bytes")
                         break
+                    if not _safe_extract_tar(member):
+                        total_extracted -= member.size
+                        continue
                     tf.extract(member, extract_dir)
 
         for root, dirs, files in os.walk(extract_dir):
@@ -1011,13 +1030,13 @@ def _parse_archive(file_path: str) -> ParseResult:
 # Main Entry Point — Universal Parser
 # ---------------------------------------------------------------------------
 PARSER_REGISTRY = {
-    ".pdf": _parse_mineru,
-    ".docx": _parse_docling,
-    ".doc": _parse_docling,
-    ".xlsx": _parse_docling,
-    ".xls": _parse_docling,
-    ".pptx": _parse_docling,
-    ".ppt": _parse_docling,
+    ".pdf": _parse_pdf_with_fallback,
+    ".docx": _parse_office_with_fallback,
+    ".doc": _parse_office_with_fallback,
+    ".xlsx": _parse_office_with_fallback,
+    ".xls": _parse_office_with_fallback,
+    ".pptx": _parse_office_with_fallback,
+    ".ppt": _parse_office_with_fallback,
     ".html": _parse_docling,
     ".htm": _parse_docling,
     ".csv": _parse_csv,
@@ -1067,16 +1086,138 @@ for ext in ARCHIVE_EXTENSIONS:
     PARSER_REGISTRY[ext] = _parse_archive
 
 
+# ---------------------------------------------------------------------------
+# Fallback parser wrappers — try Docling/MinerU first, fall back to native
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Native fallback parsers for when Docling/MinerU fail
+# ---------------------------------------------------------------------------
+def _fallback_parse_pdf(file_path: str) -> ParseResult:
+    """Fallback PDF parser using pdfplumber."""
+    if not PDFPLUMBER_AVAILABLE:
+        return ParseResult(success=False, error="pdfplumber not installed for PDF fallback")
+    try:
+        pages = []
+        with pdfplumber.open(file_path) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                tables = [str(t.rows) for t in page.extract_tables()] if page.extract_tables() else []
+                pages.append(PageContent(page_num=i + 1, text=text, tables=tables))
+        return ParseResult(
+            pages=pages,
+            metadata={"format": "pdf", "page_count": len(pages), "source": file_path, "parser": "fallback_pdfplumber"},
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"PDF fallback failed: {e}")
+
+def _fallback_parse_docx(file_path: str) -> ParseResult:
+    """Fallback DOCX parser using python-docx."""
+    if not DOCX_AVAILABLE:
+        return ParseResult(success=False, error="python-docx not installed for DOCX fallback")
+    try:
+        doc = Document(file_path)
+        text = "\n".join(p.text for p in doc.paragraphs)
+        pages = [PageContent(page_num=1, text=text)]
+        return ParseResult(
+            pages=pages,
+            metadata={"format": "docx", "page_count": 1, "source": file_path, "parser": "fallback_docx"},
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"DOCX fallback failed: {e}")
+
+def _fallback_parse_xlsx(file_path: str) -> ParseResult:
+    """Fallback XLSX parser using openpyxl."""
+    if not OPENPYXL_AVAILABLE:
+        return ParseResult(success=False, error="openpyxl not installed for XLSX fallback")
+    try:
+        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        try:
+            pages = []
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                rows = []
+                for row in ws.iter_rows(values_only=True):
+                    row_text = "\t".join(str(c) if c is not None else "" for c in row)
+                    rows.append(row_text)
+                text = f"[Sheet: {sheet_name}]\n" + "\n".join(rows)
+                pages.append(PageContent(page_num=len(pages) + 1, text=text))
+        finally:
+            wb.close()
+        return ParseResult(
+            pages=pages,
+            metadata={"format": "xlsx", "page_count": len(pages), "source": file_path, "parser": "fallback_openpyxl"},
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"XLSX fallback failed: {e}")
+
+def _fallback_parse_pptx(file_path: str) -> ParseResult:
+    """Fallback PPTX parser using python-pptx."""
+    if not PPTX_AVAILABLE:
+        return ParseResult(success=False, error="python-pptx not installed for PPTX fallback")
+    try:
+        prs = Presentation(file_path)
+        pages = []
+        for i, slide in enumerate(prs.slides):
+            texts = []
+            for shape in slide.shapes:
+                if hasattr(shape, "text"):
+                    texts.append(shape.text)
+            pages.append(PageContent(page_num=i + 1, text="\n".join(texts)))
+        return ParseResult(
+            pages=pages,
+            metadata={"format": "pptx", "page_count": len(pages), "source": file_path, "parser": "fallback_pptx"},
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"PPTX fallback failed: {e}")
+
+def _fallback_parse_html(file_path: str) -> ParseResult:
+    """Fallback HTML parser using BeautifulSoup."""
+    if not BS4_AVAILABLE:
+        return ParseResult(success=False, error="BeautifulSoup not installed for HTML fallback")
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            soup = BeautifulSoup(f.read(), "html.parser")
+        text = soup.get_text(separator="\n", strip=True)
+        pages = [PageContent(page_num=1, text=text)]
+        return ParseResult(
+            pages=pages,
+            metadata={"format": "html", "page_count": 1, "source": file_path, "parser": "fallback_bs4"},
+        )
+    except Exception as e:
+        return ParseResult(success=False, error=f"HTML fallback failed: {e}")
+
+
+def _parse_pdf_with_fallback(file_path: str) -> ParseResult:
+    """Parse PDF: MinerU first, fall back to pdfplumber."""
+    result = _parse_mineru(file_path)
+    if result.success:
+        return result
+    print(f"[Parser] MinerU failed, falling back to pdfplumber: {result.error}")
+    return _fallback_parse_pdf(file_path)
+
+def _parse_office_with_fallback(file_path: str) -> ParseResult:
+    """Parse Office: Docling first, fall back to format-specific native parser."""
+    result = _parse_docling(file_path)
+    if result.success:
+        return result
+    print(f"[Parser] Docling failed, falling back to native parser: {result.error}")
+    ext = os.path.splitext(file_path)[1].lower()
+    native = {
+        ".docx": _fallback_parse_docx, ".doc": _fallback_parse_docx,
+        ".xlsx": _fallback_parse_xlsx, ".xls": _fallback_parse_xlsx,
+        ".pptx": _fallback_parse_pptx, ".ppt": _fallback_parse_pptx,
+    }.get(ext)
+    if native:
+        fb = native(file_path)
+        if fb.success:
+            return fb
+    return result
+
+
 def parse_file(file_path: str) -> ParseResult:
     """
     Universal file parser — auto-detects format and extracts all content.
-    
-    Supports: PDF, DOCX, XLSX, PPTX, CSV, TXT, MD, LOG, JSON, XML,
-              PNG, JPG, BMP, TIFF, GIF, WEBP, MP4, AVI, MKV, MOV,
-              SRT, ASS, SSA, VTT
-    
-    Returns ParseResult with pages, metadata, and error info.
-    All processing is 100% offline.
+    Uses fallback chains: Docling/MinerU → native format-specific parsers.
     """
     if not os.path.exists(file_path):
         return ParseResult(success=False, error=f"File not found: {file_path}")

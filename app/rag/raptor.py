@@ -1,5 +1,4 @@
 import hashlib
-import json
 import os
 import requests
 import numpy as np
@@ -122,6 +121,7 @@ def build_raptor_tree(db: Session, tenant_id: str, max_levels: int = 3, n_cluste
     print(f"[RAPTOR] Starting tree generation for tenant {tenant_id}")
     _delete_previous_tree(db, tenant_id)
     try:
+        old_numba_cache = os.environ.get("NUMBA_DISABLE_CACHE")
         os.environ["NUMBA_DISABLE_CACHE"] = "1"
         import umap
         from sklearn.mixture import GaussianMixture
@@ -183,6 +183,9 @@ def build_raptor_tree(db: Session, tenant_id: str, max_levels: int = 3, n_cluste
             if summary:
                 chunk_hash = hashlib.sha256(summary.encode("utf-8")).hexdigest()
                 vec = encode_text(summary)
+                if not vec:
+                    print(f"[RAPTOR] Skipping cluster {cluster_id}: encode_text returned None")
+                    continue
                 
                 new_chunk = DocumentChunk(
                     tenant_id=tenant_id,
@@ -224,8 +227,6 @@ def build_raptor_tree(db: Session, tenant_id: str, max_levels: int = 3, n_cluste
             except Exception as e:
                 print(f"[RAPTOR] Qdrant insert failed: {e}")
                 db.rollback()
-                for c in new_level_chunks:
-                    db.delete(c)
                 break
         
         db.commit()

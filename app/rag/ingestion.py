@@ -20,7 +20,6 @@
 import hashlib
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 from sqlalchemy import func, cast, String
@@ -28,9 +27,9 @@ from sqlalchemy.exc import IntegrityError
 
 from app.database import DocumentChunk, SessionLocal
 from app.rag.jobs import complete_ingestion_job, fail_ingestion_job, update_ingestion_job
-from app.rag.model_loader import encode_text, encode_texts, get_embedding_model_id, extract_entities, encode_image, get_ollama_generate_url, OLLAMA_MODEL, RAG_EMBEDDING_QUANTIZE
+from app.rag.model_loader import encode_texts, get_embedding_model_id, extract_entities, encode_image, get_ollama_generate_url, OLLAMA_MODEL, RAG_EMBEDDING_QUANTIZE
 from app.rag.graph import graph_db
-from app.rag.parsers import ParseResult, get_file_type, is_supported_file, parse_file
+from app.rag.parsers import ParseResult, get_file_type, parse_file
 from app.rag.extraction import looks_like_extractable_page, extract_structured_data_from_page, format_structured_data_for_embedding
 from PIL import Image
 import io
@@ -39,7 +38,8 @@ import io
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-BATCH_SIZE = 32  # Chunks per embedding batch (up from 16)
+BATCH_SIZE = 32
+MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB per image for CLIP vision pipeline  # Chunks per embedding batch (up from 16)
 PARENT_CHUNK_SIZE = 2400  # Parent chunks for broad retrieval
 CHILD_CHUNK_SIZE = 600   # Child chunks for precise retrieval
 CHUNK_OVERLAP = 150       # Overlap between chunks
@@ -470,80 +470,95 @@ def ingest_file(
                         )
 
             # Process any raw image bytes for Vision embeddings (batched)
-            if hasattr(page, "image_bytes") and page.image_bytes:
-                for img_bytes in page.image_bytes:
+            # NOTE: images are NEVER sent to the LLM — they go through CLIP to Qdrant image_chunks.
+            # The text_content field carries OCR text so the LLM sees what was in the image.
+            if getattr(page, "image_bytes", None):
+                for idx, img_bytes in enumerate(page.image_bytes):
+                    if len(img_bytes) > MAX_IMAGE_BYTES:
+                        print(f"[Ingest] Skipping oversized image {idx} on page {page.page_num} ({len(img_bytes)} bytes)")
+                        continue
                     try:
                         img = Image.open(io.BytesIO(img_bytes))
+                        img.verify()  # Catch truncation/corruption early
+                        img = Image.open(io.BytesIO(img_bytes))  # Re-open after verify
                         vector = encode_image(img)
-                        if vector:
-                            img_hash = hash_chunk(str(img_bytes))
-                            
-                            doc_metadata = {
-                                "page_num": page.page_num, 
-                                "type": "image",
-                                "source": file_path,
-                                "embedding_model": embedding_model,
-                            }
-                            
-                            img_chunk = DocumentChunk(
-                                tenant_id=tenant_id,
-                                doc_id=file_path,
-                                chunk_hash=img_hash,
-                                file_type=file_type,
-                                embedding_model=embedding_model,
-                                doc_metadata=doc_metadata
-                            )
-                            db.add(img_chunk)
-                            pending_vision_chunks.append((img_chunk, vector, doc_metadata))
-                            chunks_total += 1
+                        if not vector:
+                            continue
+                        img_hash = hash_chunk(str(img_bytes))
+                        # Collect all OCR texts from this page as context for LLM
+                        img_ocr_text = " ".join(getattr(page, "image_texts", []) or [])
+                        doc_metadata = {
+                            "page_num": page.page_num,
+                            "type": "image",
+                            "source": file_path,
+                            "embedding_model": embedding_model,
+                        }
+                        img_chunk = DocumentChunk(
+                            tenant_id=tenant_id,
+                            doc_id=file_path,
+                            chunk_hash=img_hash,
+                            text_content=img_ocr_text,
+                            file_type=file_type,
+                            embedding_model=embedding_model,
+                            doc_metadata=doc_metadata,
+                        )
+                        db.add(img_chunk)
+                        pending_vision_chunks.append((img_chunk, vector, doc_metadata, img_ocr_text))
+                        chunks_total += 1
 
-                            if len(pending_vision_chunks) >= BATCH_SIZE:
-                                from app.rag.qdrant_client import insert_qdrant_points
-                                from qdrant_client.http import models
-                                try:
-                                    db.flush()
-                                    db.commit()
-                                    points = []
-                                    for ic, vec, d_meta in pending_vision_chunks:
-                                        points.append(models.PointStruct(
-                                            id=ic.id,
-                                            vector=vec,
-                                            payload={
-                                                "tenant_id": tenant_id,
-                                                "doc_id": file_path,
-                                                "file_type": file_type,
-                                                "metadata": d_meta
-                                            }
-                                        ))
-                                    insert_qdrant_points("image_chunks", points)
-                                    chunks_inserted += len(pending_vision_chunks)
-                                except Exception as e:
-                                    db.rollback()
-                                    print(f"[Ingest] Failed to insert vision chunks: {e}")
-                                finally:
-                                    pending_vision_chunks = []
+                        if len(pending_vision_chunks) >= BATCH_SIZE:
+                            from app.rag.qdrant_client import insert_qdrant_points
+                            from qdrant_client.http import models
+                            points = []
+                            for ic, vec, d_meta, ocr_text in pending_vision_chunks:
+                                payload = {
+                                    "tenant_id": tenant_id,
+                                    "doc_id": file_path,
+                                    "file_type": file_type,
+                                    "metadata": d_meta,
+                                }
+                                if ocr_text:
+                                    payload["text_content"] = ocr_text
+                                points.append(models.PointStruct(
+                                    id=ic.id,
+                                    vector=vec,
+                                    payload=payload,
+                                ))
+                            try:
+                                insert_qdrant_points("image_chunks", points)
+                                db.flush()
+                                db.commit()
+                                chunks_inserted += len(pending_vision_chunks)
+                            except Exception as e:
+                                db.rollback()
+                                print(f"[Ingest] Failed to insert {len(pending_vision_chunks)} vision chunks: {e}")
+                            finally:
+                                pending_vision_chunks = []
                     except Exception as e:
-                        print(f"[Ingest] Vision extract failed: {e}")
+                        print(f"[Ingest] Vision extract failed (page {page.page_num}, image {idx}): {e}")
         # Flush pending vision batches
         if pending_vision_chunks:
             from app.rag.qdrant_client import insert_qdrant_points
             from qdrant_client.http import models
+            points = []
+            for img_chunk, vector, doc_metadata, ocr_text in pending_vision_chunks:
+                payload = {
+                    "tenant_id": tenant_id,
+                    "doc_id": file_path,
+                    "file_type": file_type,
+                    "metadata": doc_metadata,
+                }
+                if ocr_text:
+                    payload["text_content"] = ocr_text
+                points.append(models.PointStruct(
+                    id=img_chunk.id,
+                    vector=vector,
+                    payload=payload,
+                ))
             try:
+                insert_qdrant_points("image_chunks", points)
                 db.flush()
                 db.commit()
-                points = []
-                for img_chunk, vector, doc_metadata in pending_vision_chunks:
-                    points.append(models.PointStruct(
-                        id=img_chunk.id,
-                        vector=vector,
-                        payload={
-                            "tenant_id": tenant_id,
-                            "doc_id": file_path,
-                            "file_type": file_type,
-                            "metadata": doc_metadata
-                        }
-                    ))
-                insert_qdrant_points("image_chunks", points)
                 chunks_inserted += len(pending_vision_chunks)
             except Exception as e:
                 db.rollback()
@@ -648,6 +663,15 @@ def _process_chunk_batch(
             db.commit()
             inserted += 1
         except IntegrityError:
+            qdrant_point_id = str(chunk_obj.id)
+            try:
+                from app.rag.qdrant_client import get_qdrant_client
+                get_qdrant_client().delete(
+                    collection_name="document_chunks",
+                    points_selector=models.PointIdsList(points=[qdrant_point_id]),
+                )
+            except Exception:
+                pass
             db.rollback()
             print(f"[Ingest] Duplicate chunk skipped (hash exists)")
         except Exception as e:

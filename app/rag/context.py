@@ -120,10 +120,12 @@ def assemble_context(query: str, reranked_chunks: list, db=None, broad_query: bo
                 except Exception as e:
                     print(f"[Context] Expansion failed: {e}")
 
-        if chunk.get("id") not in expanded_ids:
+        chunk_id = chunk.get("id")
+        if chunk_id is None or chunk_id not in expanded_ids:
             compressed = compress_context(chunk)
             final_context.append(compressed)
-            expanded_ids.add(chunk.get("id"))
+            if chunk_id is not None:
+                expanded_ids.add(chunk_id)
 
     if broad_query and db is not None:
         _append_broad_document_context(final_context, expanded_ids, reranked_chunks, db)

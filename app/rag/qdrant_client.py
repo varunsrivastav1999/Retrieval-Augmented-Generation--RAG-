@@ -1,6 +1,5 @@
 import os
-import uuid
-from typing import Iterable
+from typing import Iterable, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
@@ -10,7 +9,7 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 def get_qdrant_client():
     return QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
-def init_qdrant_collections(dim: int = None):
+def init_qdrant_collections(dim: Optional[int] = None):
     if dim is None:
         dim = int(os.getenv("RAG_EMBEDDING_DIM", "1024"))
     client = get_qdrant_client()

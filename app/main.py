@@ -29,15 +29,13 @@
 """
 
 import os
-import glob
 import requests
-import shutil
 import re
 import threading
 import time
 from fastapi import Body, HTTPException, Depends, File, Query, UploadFile
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -96,7 +94,7 @@ _static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
-TENANT_PATTERN = r"^[a-zA-Z0-9_.:-]{1,80}$"
+TENANT_PATTERN = r"^[a-zA-Z0-9_-]{1,80}$"
 TENANT_RE = re.compile(TENANT_PATTERN)
 
 
@@ -390,6 +388,11 @@ def on_shutdown():
     ingestion_worker_stop.set()
     if ingestion_worker_thread:
         ingestion_worker_thread.join(timeout=5)
+    try:
+        from app.rag.graph import graph_db
+        graph_db.close()
+    except Exception:
+        pass
 
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4000)
@@ -482,9 +485,7 @@ def _queue_file_ingestion(
         db.commit()
         if redis_client:
             try:
-                keys_to_delete = redis_client.keys(f"semantic_index:{tenant_id}:*")
-                for k in keys_to_delete:
-                    # also delete the individual cached query keys if needed, but deleting the index forces a miss anyway
+                for k in redis_client.scan_iter(match=f"semantic_index:{tenant_id}:*", count=100):
                     redis_client.delete(k)
                 print(f"[Cache] Cleared semantic cache indices for tenant {tenant_id}")
             except Exception as e:
@@ -685,7 +686,7 @@ async def upload_file(
     except Exception as e:
         if os.path.exists(file_path):
             os.remove(file_path)
-        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Upload failed. Check server logs.")
 
     file_size_mb = round(total_bytes / (1024 * 1024), 2)
     from app.rag.parsers import get_file_type
@@ -773,7 +774,7 @@ def build_raptor_index(request: RaptorBuildRequest, db: Session = Depends(get_db
             "message": "RAPTOR tree built successfully. Summaries stored in vector DB.",
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"RAPTOR build failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="RAPTOR build failed. Check server logs.")
 
 
 @app.get("/health/live")
@@ -1058,7 +1059,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                     agent.graph_context = graph_db.query_graph(search_query, tenant_id)
                     if agent.graph_context:
                         agent.final_context = [{"text": agent.graph_context, "metadata": {"type": "graph", "source": "Neo4j"}}]
-                        agent.grounding_result = {"is_grounded": True, "score": 1.0, "detail": "Answered via Graph"}
+                        agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
                         agent.sources = ["Neo4j Knowledge Graph"]
                         agent.current_state = "generate"
                         continue
@@ -1074,7 +1075,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                     if highest_level_summaries:
                         raptor_context = "\n\n".join([c.text_content for c in highest_level_summaries])
                         agent.final_context = [{"text": raptor_context, "metadata": {"type": "raptor", "source": "RAPTOR Global Index"}}]
-                        agent.grounding_result = {"is_grounded": True, "score": 1.0, "detail": "Answered via RAPTOR Global Summary"}
+                        agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
                         agent.sources = ["RAPTOR Global Index"]
                         agent.current_state = "generate"
                         continue
@@ -1134,7 +1135,6 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         print(f"[API: Warning] Grounding failed or no context. Falling back to general knowledge.")
         RAG_QUERY_TOTAL.labels(status="general_fallback").inc()
         RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency / 1000.0)
-        RAG_GROUNDING_BLOCKED.inc()
         
         # We will use the LLM to generate a general answer
         if not grounding_result:
@@ -1244,7 +1244,10 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                     token_buffer = ""
                     for line in response.iter_lines():
                         if line:
-                            data = json.loads(line.decode("utf-8"))
+                            try:
+                                data = json.loads(line.decode("utf-8"))
+                            except json.JSONDecodeError:
+                                continue
                             
                             if "error" in data:
                                 err_msg = f"\n\n**Ollama Error:** {data['error']}"
@@ -1284,8 +1287,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             except requests.exceptions.Timeout:
                 err = "Ollama Timeout. The model took too long to respond."
                 yield f"data: {json.dumps({'token': err})}\n\n"
-            except requests.exceptions.RequestException as e:
-                err = f"Ollama Connection Error: {str(e)}"
+            except requests.exceptions.RequestException:
+                err = "Ollama Connection Error. The model service is unavailable."
                 yield f"data: {json.dumps({'token': err})}\n\n"
                 
             # Final safety check
@@ -1311,9 +1314,6 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                         corrected_answer = final_resp.json().get("response", "").strip()
                         if corrected_answer:
                             answer_acc = corrected_answer
-                            # Stream the corrected answer cleanly without [FLARE corrected] prefix
-                            nl = '\n\n---\n\n'
-                            yield f"data: {json.dumps({'token': nl + corrected_answer})}\n\n"
                 except Exception as flare_err:
                     print(f"[FLARE] Final pass failed: {flare_err}")
                 final_context = enriched_context
@@ -1401,9 +1401,9 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             # Do NOT strip answer prefixes — they indicate uncertainty
             # and removing them hides the model's hedging from the user.
         else:
-            answer = f"Ollama Error: {response.text}"
-    except Exception as e:
-        answer = f"Ollama Error: {str(e)}"
+            answer = "Ollama Error: The model service returned an error."
+    except Exception:
+        answer = "Ollama Error: An unexpected error occurred."
         
     verification = verify_answer_grounding(answer, final_context)
     latency = int((time.time() - start_time) * 1000)
@@ -1419,15 +1419,16 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         "verification": verification,
     }
     
-    # Layer 11: Save to Cache
-    set_cached_response(
-        request.query,
-        tenant_id,
-        effective_top_k,
-        embedding_model,
-        corpus_version,
-        {key: value for key, value in response_data.items() if key != "ingest"},
-        scope=cache_scope,
+    # Layer 11: Save to Cache (skip caching errors)
+    if not answer.startswith("Ollama Error:"):
+        set_cached_response(
+            request.query,
+            tenant_id,
+            effective_top_k,
+            embedding_model,
+            corpus_version,
+            {key: value for key, value in response_data.items() if key != "ingest"},
+            scope=cache_scope,
     )
 
     # Record Prometheus metrics

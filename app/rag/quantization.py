@@ -1,5 +1,6 @@
 import math
 import os
+import threading
 from typing import List, Optional, Tuple
 
 RAG_EMBEDDING_QUANTIZE = os.getenv("RAG_EMBEDDING_QUANTIZE", "none").lower()
@@ -8,6 +9,7 @@ CALIBRATION_SAMPLE_RATIO = 0.01
 _SCALE: Optional[float] = None
 _ZERO_POINT: Optional[float] = None
 _CALIBRATED = False
+_QUANT_LOCK = threading.Lock()
 
 
 def calibrate_quantization(vectors: List[List[float]]):
@@ -23,22 +25,25 @@ def calibrate_quantization(vectors: List[List[float]]):
     rg = mx - mn
     if rg < 1e-8:
         rg = 1.0
-    _SCALE = rg / 254.0
-    _ZERO_POINT = -mn / _SCALE
-    _CALIBRATED = True
+    with _QUANT_LOCK:
+        _SCALE = rg / 254.0
+        _ZERO_POINT = -mn / _SCALE
+        _CALIBRATED = True
 
 
 def reset_calibration():
     global _SCALE, _ZERO_POINT, _CALIBRATED
-    _SCALE = _ZERO_POINT = None
-    _CALIBRATED = False
+    with _QUANT_LOCK:
+        _SCALE = _ZERO_POINT = None
+        _CALIBRATED = False
 
 
 def quantize_embedding(vector: List[float]) -> Tuple[bytes, float, float]:
     if not _CALIBRATED:
         calibrate_quantization([vector])
-    s = _SCALE or 1.0
-    zp = _ZERO_POINT or 0.0
+    with _QUANT_LOCK:
+        s = _SCALE or 1.0
+        zp = _ZERO_POINT or 0.0
     q = bytearray(len(vector))
     for i, v in enumerate(vector):
         clipped = max(0, min(255, round(v / s + zp)))
@@ -59,8 +64,9 @@ def quantize_vector_batch(vectors: List[List[float]]) -> Tuple[List[bytes], floa
         return [], 1.0, 0.0
     if not _CALIBRATED:
         calibrate_quantization(vectors)
-    s = _SCALE or 1.0
-    zp = _ZERO_POINT or 0.0
+    with _QUANT_LOCK:
+        s = _SCALE or 1.0
+        zp = _ZERO_POINT or 0.0
     quantized = []
     dim = len(vectors[0])
     for vec in vectors:

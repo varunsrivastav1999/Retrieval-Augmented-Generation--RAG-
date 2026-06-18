@@ -1,4 +1,3 @@
-import json
 import re
 import requests
 from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL

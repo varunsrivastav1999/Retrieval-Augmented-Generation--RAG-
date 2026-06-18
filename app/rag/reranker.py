@@ -87,7 +87,10 @@ def rerank_results(query: str, retrieved_chunks: list, top_n: int = 5) -> list:
             return retrieved_chunks[:top_n]
         
         for i, chunk in enumerate(retrieved_chunks):
-            chunk["rerank_score"] = float(scores[i])
+            if i < len(scores):
+                chunk["rerank_score"] = float(scores[i])
+            else:
+                chunk["rerank_score"] = chunk.get("hybrid_score", chunk.get("score", 0.0))
             
         sorted_chunks = sorted(retrieved_chunks, key=lambda x: x["rerank_score"], reverse=True)
         return sorted_chunks[:top_n]

@@ -108,7 +108,12 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
         if "file_type" in metadata_filters and metadata_filters["file_type"]:
             must_conditions.append(models.FieldCondition(key="file_type", match=models.MatchValue(value=metadata_filters["file_type"])))
         if "page" in metadata_filters and metadata_filters["page"]:
-            must_conditions.append(models.FieldCondition(key="metadata.page_num", match=models.MatchValue(value=int(metadata_filters["page"]))))
+            try:
+                page_val = int(metadata_filters["page"])
+            except (ValueError, TypeError):
+                page_val = None
+            if page_val is not None:
+                must_conditions.append(models.FieldCondition(key="metadata.page_num", match=models.MatchValue(value=page_val)))
 
     qdrant_filter = models.Filter(must=must_conditions)
 
@@ -143,7 +148,7 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
                 candidate["hybrid_score"] += HYDE_WEIGHT * _rrf_score(rank)
                 candidate["metadata"]["hyde_rank"] = rank
         except Exception as e:
-            pass
+            print(f"[Retrieval] HyDE search failed: {e}")
 
     # Vision search
     if not fast_path and vision_vector:
@@ -160,7 +165,7 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
                 candidate["hybrid_score"] += DENSE_WEIGHT * _rrf_score(rank)
                 candidate["metadata"]["vision_rank"] = rank
         except Exception as e:
-            pass
+            print(f"[Retrieval] Vision search failed: {e}")
 
     if not fast_path:
         for candidate in candidates.values():
@@ -191,12 +196,17 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
 
     if table_groups:
         seen_ids = {item["id"] for item in top_results}
+        # Table sibling expansion uses only tenant+model filters (not user's page/file_type filter)
+        base_conditions = [
+            models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id)),
+            models.FieldCondition(key="metadata.embedding_model", match=models.MatchValue(value=get_embedding_model_id())),
+        ]
         for tg in table_groups:
             try:
                 sibling_results = qdrant.scroll(
                     collection_name="document_chunks",
                     scroll_filter=models.Filter(
-                        must=must_conditions + [
+                        must=base_conditions + [
                             models.FieldCondition(
                                 key="table_group",
                                 match=models.MatchValue(value=tg),

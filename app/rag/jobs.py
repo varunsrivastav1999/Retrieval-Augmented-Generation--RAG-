@@ -237,12 +237,29 @@ def ingestion_worker_loop(stop_event: threading.Event, poll_seconds: float = 5.0
                 tenant_id = job["tenant_id"]
                 job_id = job["id"]
                 
-                extract_dir = os.path.join(os.path.dirname(source_path), f"extracted_{job_id}")
+                extract_dir = os.path.realpath(os.path.join(os.path.dirname(source_path), f"extracted_{job_id}"))
                 os.makedirs(extract_dir, exist_ok=True)
-                
+
+                def _safe_extract_zip(member_name: str) -> bool:
+                    dest = os.path.realpath(os.path.join(extract_dir, member_name))
+                    if not dest.startswith(extract_dir + os.sep):
+                        print(f"[Jobs] Skipping ZIP member with path traversal: {member_name}")
+                        return False
+                    return True
+
+                def _safe_extract_tar(member) -> bool:
+                    if member.name.startswith(os.sep):
+                        print(f"[Jobs] Skipping TAR member with absolute path: {member.name}")
+                        return False
+                    dest = os.path.realpath(os.path.join(extract_dir, member.name))
+                    if not dest.startswith(extract_dir + os.sep):
+                        print(f"[Jobs] Skipping TAR member with path traversal: {member.name}")
+                        return False
+                    return True
+
                 total_extracted = 0
                 MAX_ARCHIVE_SIZE = 1024 * 1024 * 1024  # 1GB limit for zip bomb protection
-                
+
                 # Unpack archive with size limit
                 if source_path.endswith(".zip"):
                     with zipfile.ZipFile(source_path, 'r') as zip_ref:
@@ -255,6 +272,9 @@ def ingestion_worker_loop(stop_event: threading.Event, poll_seconds: float = 5.0
                             if total_extracted > MAX_ARCHIVE_SIZE:
                                 print(f"[Jobs] Archive extract aborted: exceeded {MAX_ARCHIVE_SIZE} bytes")
                                 break
+                            if not _safe_extract_zip(member):
+                                total_extracted -= info.file_size
+                                continue
                             zip_ref.extract(member, extract_dir)
                 elif source_path.endswith((".tar", ".tar.gz", ".tgz")):
                     with tarfile.open(source_path, 'r:*') as tar_ref:
@@ -267,6 +287,9 @@ def ingestion_worker_loop(stop_event: threading.Event, poll_seconds: float = 5.0
                             if total_extracted > MAX_ARCHIVE_SIZE:
                                 print(f"[Jobs] Archive extract aborted: exceeded {MAX_ARCHIVE_SIZE} bytes")
                                 break
+                            if not _safe_extract_tar(member):
+                                total_extracted -= member.size
+                                continue
                             tar_ref.extract(member, extract_dir)
                 
                 # Find all supported files inside

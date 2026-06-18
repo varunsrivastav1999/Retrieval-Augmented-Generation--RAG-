@@ -15,7 +15,7 @@
 """
 
 import re
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional
 
 from app.rag.model_loader import cosine_similarity, encode_text, encode_texts
 
@@ -25,9 +25,6 @@ from app.rag.model_loader import cosine_similarity, encode_text, encode_texts
 # ---------------------------------------------------------------------------
 # Minimum grounding score to proceed with strict LLM generation (lowered to be more aggressive)
 GROUNDING_THRESHOLD = 0.15
-
-# Minimum confidence to return an answer
-CONFIDENCE_THRESHOLD = 0.05
 
 # Keywords that lower the threshold (very short/vague queries)
 VAGUE_QUERY_WORDS = {"what", "how", "why", "when", "where", "which", "who", "tell", "explain", "describe", "show"}
