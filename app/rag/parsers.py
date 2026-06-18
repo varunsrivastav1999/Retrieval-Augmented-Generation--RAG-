@@ -1124,11 +1124,15 @@ def _fallback_parse_html(file_path: str) -> ParseResult:
         return ParseResult(success=False, error=f"HTML fallback failed: {e}")
 
 def _parse_pdf_with_fallback(file_path: str) -> ParseResult:
-    """Parse PDF: MinerU first, fall back to pdfplumber."""
+    """Parse PDF: MinerU → Docling → pdfplumber."""
     result = _parse_mineru(file_path)
     if result.success:
         return result
-    print(f"[Parser] MinerU failed, falling back to pdfplumber: {result.error}")
+    print(f"[Parser] MinerU failed, trying Docling as PDF fallback: {result.error}")
+    result = _parse_docling(file_path)
+    if result.success:
+        return result
+    print(f"[Parser] Docling also failed, falling back to pdfplumber: {result.error}")
     return _fallback_parse_pdf(file_path)
 
 def _parse_office_with_fallback(file_path: str) -> ParseResult:
