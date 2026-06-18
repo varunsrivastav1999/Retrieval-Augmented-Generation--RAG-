@@ -1,24 +1,24 @@
-fastapi>=0.104.1
-uvicorn>=0.23.2
-sentence-transformers>=2.7.0
-transformers>=4.38.0
-torch>=2.2.0
-rank_bm25>=0.2.2
-redis>=5.0.1
-pydantic>=2.4.2
-python-multipart>=0.0.6
-scikit-learn>=1.3.2
-SQLAlchemy>=2.0.23
-psycopg2-binary>=2.9.9
-qdrant-client>=1.7.3
-requests>=2.31.0
-httpx>=0.25.1
-Pillow>=10.2.0
-pytesseract>=0.3.10
-python-dotenv>=1.0.0
-pysubs2>=1.7.2
-chardet>=5.2.0
-spacy>=3.7.4
+fastapi==0.104.1
+uvicorn==0.23.2
+sentence-transformers==2.7.0
+transformers==4.38.0
+torch==2.2.0
+rank_bm25==0.2.2
+redis==5.0.1
+pydantic==2.4.2
+python-multipart==0.0.6
+scikit-learn==1.3.2
+SQLAlchemy==2.0.23
+psycopg2-binary==2.9.9
+qdrant-client==1.7.3
+requests==2.31.0
+httpx==0.25.1
+Pillow==10.2.0
+pytesseract==0.3.10
+python-dotenv==1.0.0
+pysubs2==1.7.2
+chardet==5.2.0
+spacy==3.7.4
 # --- AI/ML Models Used ---
 # 1. Text Embedding: sentence-transformers/all-MiniLM-L6-v2 (Auto-downloaded by sentence-transformers)
 # 2. Vision/Image Embedding: sentence-transformers/clip-ViT-B-32 (Auto-downloaded by sentence-transformers)
@@ -26,14 +26,14 @@ spacy>=3.7.4
 # 4. LLM Synthesis: llama3 (Pulled via Ollama external service)
 # 5. NLP Entity Extraction: spacy en_core_web_sm (Downloaded via direct link below)
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
-neo4j>=5.17.0
-prometheus-client>=0.20.0
-ragatouille>=0.0.8
-umap-learn>=0.5.5
-docling
-pdfplumber>=0.10.0
-python-docx>=1.1.0
-openpyxl>=3.1.0
-python-pptx>=0.6.23
+neo4j==5.17.0
+prometheus-client==0.20.0
+ragatouille==0.0.8
+umap-learn==0.5.5
+docling==2.5.2
+pdfplumber==0.10.0
+python-docx==1.1.0
+openpyxl==3.1.0
+python-pptx==0.6.23
 --extra-index-url https://wheels.myhloli.com
 magic-pdf[full]==0.9.3
