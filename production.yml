@@ -55,6 +55,7 @@ services:
       - RAG_USE_HALFVEC=true
       - RAG_EMBEDDING_QUANTIZE=true
       - NUMBA_CACHE_DIR=/tmp
+      - EASYOCR_MODULE_PATH=/tmp/.EasyOCR
     env_file:
       - ./.envs/.production/.rag
       - ./.envs/.production/.postgres

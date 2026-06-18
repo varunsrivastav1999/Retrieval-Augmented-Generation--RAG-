@@ -966,7 +966,7 @@ def _fallback_parse_pdf(file_path: str) -> ParseResult:
         with pdfplumber.open(file_path) as pdf:
             for i, page in enumerate(pdf.pages):
                 text = page.extract_text() or ""
-                tables = [str(t.rows) for t in page.extract_tables()] if page.extract_tables() else []
+                tables = [str(t) for t in page.extract_tables()] if page.extract_tables() else []
                 pages.append(PageContent(page_num=i + 1, text=text, tables=tables))
         return ParseResult(
             pages=pages,
