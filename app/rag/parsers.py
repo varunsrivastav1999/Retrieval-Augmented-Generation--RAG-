@@ -28,15 +28,6 @@ try:
 except ImportError:
     DOCLING_AVAILABLE = False
 
-try:
-    from magic_pdf.pipe.UNIPipe import UNIPipe
-    MINERU_AVAILABLE = True
-    MINERU_IMPORT_ERROR = None
-except ImportError as e:
-    MINERU_AVAILABLE = False
-    MINERU_IMPORT_ERROR = str(e)
-
-
 
 
 try:
@@ -257,72 +248,7 @@ def _normalize_superscripts(text: str) -> str:
 
 
 
-# ---------------------------------------------------------------------------
-# PDF Parser (MinerU) — Academic PDF Extraction
-# ---------------------------------------------------------------------------
-def _parse_mineru(file_path: str) -> ParseResult:
-    """Extract content from PDF using MinerU (magic-pdf)."""
-    if not MINERU_AVAILABLE:
-        return ParseResult(success=False, error=f"magic-pdf not installed. Import error: {MINERU_IMPORT_ERROR}")
 
-    import tempfile
-    import json
-    try:
-        from magic_pdf.pipe.UNIPipe import UNIPipe
-        from magic_pdf.rw.DiskReaderWriter import DiskReaderWriter
-        
-        with tempfile.TemporaryDirectory() as temp_dir:
-            image_writer = DiskReaderWriter(temp_dir)
-            image_dir = str(os.path.basename(temp_dir))
-            
-            with open(file_path, "rb") as f:
-                pdf_bytes = f.read()
-                
-            jso_useful_key = {"_pdf_type": "", "model_list": []}
-            pipe = UNIPipe(pdf_bytes, jso_useful_key, image_writer)
-            pipe.pipe_classify()
-            pipe.pipe_parse()
-            
-            md_content = pipe.pipe_mk_markdown(image_dir, drop_mode="none")
-            
-            # Ensure md_content is a string
-            if isinstance(md_content, list):
-                md_text = "\n".join([str(item.get('text', '')) for item in md_content if isinstance(item, dict)])
-            else:
-                md_text = str(md_content)
-                
-            # EXTRACT IMAGES FOR FULL CAPACITY VISION PIPELINE
-            # MinerU dumps extracted layout images, tables, and math formulas into the temp directory
-            image_bytes_list = []
-            for root, _, files in os.walk(temp_dir):
-                for file in files:
-                    if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                        img_path = os.path.join(root, file)
-                        try:
-                            with open(img_path, "rb") as img_f:
-                                image_bytes_list.append(img_f.read())
-                        except Exception as img_err:
-                            print(f"[MinerU] Warning: Failed to read extracted image {file}: {img_err}")
-                            
-            pages = [PageContent(
-                page_num=1, 
-                text=f"[MINERU PDF EXTRACT]\n{md_text}",
-                image_bytes=image_bytes_list
-            )]
-            
-            return ParseResult(
-                pages=pages,
-                metadata={
-                    "format": "pdf", 
-                    "page_count": 1, 
-                    "source": file_path, 
-                    "parser": "mineru",
-                    "extracted_images_count": len(image_bytes_list)
-                }
-            )
-            
-    except Exception as e:
-        return ParseResult(success=False, error=f"MinerU PDF parse error: {e}")
 
 # ---------------------------------------------------------------------------
 # Office/HTML Parser (Docling)
@@ -1126,15 +1052,11 @@ def _fallback_parse_html(file_path: str) -> ParseResult:
         return ParseResult(success=False, error=f"HTML fallback failed: {e}")
 
 def _parse_pdf_with_fallback(file_path: str) -> ParseResult:
-    """Parse PDF: MinerU → Docling → pdfplumber."""
-    result = _parse_mineru(file_path)
-    if result.success:
-        return result
-    print(f"[Parser] MinerU failed, trying Docling as PDF fallback: {result.error}")
+    """Parse PDF: Docling → pdfplumber."""
     result = _parse_docling(file_path)
     if result.success:
         return result
-    print(f"[Parser] Docling also failed, falling back to pdfplumber: {result.error}")
+    print(f"[Parser] Docling failed, falling back to pdfplumber: {result.error}")
     return _fallback_parse_pdf(file_path)
 
 def _parse_office_with_fallback(file_path: str) -> ParseResult:
