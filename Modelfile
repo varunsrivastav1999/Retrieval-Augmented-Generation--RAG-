@@ -1,4 +1,4 @@
-FROM qwen2.5:7b
+FROM llama3.1:8b
 
 # ==========================================
 # Production RAG Brain — Zero Hallucination

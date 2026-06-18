@@ -20,9 +20,9 @@ CLIP_MODEL = os.getenv(
 )
 RERANKER_MODEL = os.getenv(
     "RAG_RERANKER_MODEL",
-    "BAAI/bge-reranker-v2-m3",
+    "BAAI/bge-reranker-large",
 )
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 MODEL_CACHE_DIR = os.getenv("HF_HOME")
 ST_CACHE_DIR = os.getenv("SENTENCE_TRANSFORMERS_HOME")
 HF_OFFLINE = os.getenv("RAG_HF_OFFLINE", "false").lower() in {"1", "true", "yes", "on"}

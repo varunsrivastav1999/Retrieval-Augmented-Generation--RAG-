@@ -6,8 +6,8 @@
   <p>
     <img src="https://img.shields.io/badge/Architecture-17--Layer_RAG-blue" alt="17-Layer RAG" />
     <img src="https://img.shields.io/badge/Embedding-BAAI/bge--large--en--v1.5-8A2BE2" alt="bge-large" />
-    <img src="https://img.shields.io/badge/Reranker-bge--reranker--v2--m3-8A2BE2" alt="bge-reranker" />
-    <img src="https://img.shields.io/badge/LLM-Qwen2.5:14B-FF6B35" alt="Qwen2.5" />
+    <img src="https://img.shields.io/badge/Reranker-bge--reranker--large-8A2BE2" alt="bge-reranker" />
+    <img src="https://img.shields.io/badge/LLM-llama3.1:8b-FF6B35" alt="llama3.1:8b" />
     <img src="https://img.shields.io/badge/VectorDB-Qdrant-FE4155?logo=qdrant" alt="Qdrant" />
     <img src="https://img.shields.io/badge/MetaDB-PostgreSQL-336791?logo=postgresql" alt="PostgreSQL" />
     <img src="https://img.shields.io/badge/GraphDB-Neo4j-008CC1?logo=neo4j" alt="Neo4j" />
@@ -342,9 +342,9 @@ Key environment variables (full reference in `.env.example`):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RAG_EMBEDDING_MODEL` | `BAAI/bge-large-en-v1.5` | Embedding model (1024d) |
-| `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranker |
+| `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-large` | Cross-encoder reranker |
 | `RAG_CLIP_MODEL` | `sentence-transformers/clip-ViT-L-14` | Vision model |
-| `OLLAMA_MODEL` | `qwen2.5:14b` | LLM for synthesis + routing (was 7b) |
+| `OLLAMA_MODEL` | `llama3.1:8b` | LLM for synthesis + routing (was 7b) |
 | `OLLAMA_IMAGE` | `ollama/ollama:0.3.14` | Pinned image (was `:latest`) |
 | `GROUNDING_THRESHOLD` | `0.35` | Pre-generation guard (was 0.10) |
 | `RAG_MODEL_DEVICE` | `cpu` | Production: reranker/embedding on CPU, Ollama on GPU |

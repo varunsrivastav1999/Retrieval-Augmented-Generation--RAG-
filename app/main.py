@@ -117,7 +117,7 @@ MEDIA_PATH = os.getenv("MEDIA_PATH", "/media")
 
 # Connecting directly to the independent Ollama container inside this repository
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b") # Best for RAG — world-class reasoning, 128K context
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b") # Best for RAG — world-class reasoning, 128K context
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "1024"))
 OLLAMA_CONTEXT_LENGTH = int(os.getenv("OLLAMA_CONTEXT_LENGTH", "8192"))
@@ -407,6 +407,7 @@ class QueryRequest(BaseModel):
     fast_path: bool = Field(False, description="Sub-5ms fast path: skip HyDE, BM25, Vision, Cross-encoder reranker")
     extractive: bool = Field(False, description="Exact mode: skip LLM, return verbatim text from top chunk instead of generated answer")
     auto: bool = Field(True, description="Auto-mode: simple facts get 10ms extractive, complex analysis gets full LLM pipeline")
+    evaluate: bool = Field(False, description="Run RAGAS evaluation on the final answer and context")
 
 
 class IngestRequest(BaseModel):
@@ -442,6 +443,7 @@ class QueryResponse(BaseModel):
     ingest: Optional[Dict[str, Any]] = None
     grounding: Optional[Dict[str, Any]] = None
     verification: Optional[Dict[str, Any]] = None
+    evaluation: Optional[Dict[str, Any]] = None
 
 
 def _job_response(job: IngestionJob) -> IngestionJobResponse:
@@ -1406,6 +1408,16 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         answer = "Ollama Error: An unexpected error occurred."
         
     verification = verify_answer_grounding(answer, final_context)
+    
+    # Layer 14: Optional RAGAS Evaluation
+    evaluation = None
+    if request.evaluate and final_context and not answer.startswith("Ollama Error"):
+        from app.rag.evaluation import evaluate_rag_response
+        contexts_str = [c.get("text", "") for c in final_context]
+        print(f"[RAGAS] Running evaluation...")
+        evaluation = evaluate_rag_response(search_query, answer, contexts_str)
+        print(f"[RAGAS] Evaluation result: {evaluation}")
+        
     latency = int((time.time() - start_time) * 1000)
     print(f"[API: OUT] Response: {answer}")
     
@@ -1417,6 +1429,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         "ingest": ingest_summary,
         "grounding": grounding_result,
         "verification": verification,
+        "evaluation": evaluation,
     }
     
     # Layer 11: Save to Cache (skip caching errors)

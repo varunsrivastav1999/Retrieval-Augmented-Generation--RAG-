@@ -51,103 +51,57 @@ def hash_chunk(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Layer 3: Semantic Parent-Child Chunking
+# Layer 3: Semantic Chunking (Layout-Aware)
 # ---------------------------------------------------------------------------
-def recursive_character_chunking(
-    text: str,
-    chunk_size: int = CHILD_CHUNK_SIZE,
-    chunk_overlap: int = CHUNK_OVERLAP,
-) -> List[str]:
+def semantic_chunking(text: str, max_chunk_size: int = 2000) -> List[Dict]:
     """
-    Advanced recursive splitting strategy.
-    Tries to split on paragraphs → sentences → words to keep chunks meaningful.
-    Sentence-boundary aware — never breaks mid-sentence.
+    Semantic chunking strategy that respects document layout boundaries.
+    Since Docling extracts text into semantic blocks (paragraphs/sections)
+    separated by double newlines (\n\n), we split strictly on these natural
+    boundaries instead of breaking context with arbitrary character counts.
     """
     if not text or not text.strip():
         return []
 
-    # Normalize whitespace
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'\r\n?', '\n', text)
-
-    separators = ["\n\n", "\n", ". ", "! ", "? ", "; ", ", ", " ", ""]
-
-    def split_text(text, separators):
-        final_chunks = []
-        separator = separators[0]
-        new_separators = separators[1:]
-
-        if separator:
-            splits = text.split(separator)
-        else:
-            splits = list(text)
-
-        current_chunk = ""
-
-        for s in splits:
-            if len(s) > chunk_size:
-                if current_chunk:
-                    final_chunks.append(current_chunk.strip())
-                    current_chunk = ""
-                if new_separators:
-                    final_chunks.extend(split_text(s, new_separators))
-                else:
-                    # Force cut — last resort
-                    for i in range(0, len(s), chunk_size):
-                        final_chunks.append(s[i:i + chunk_size])
-            else:
-                potential = f"{current_chunk}{separator if current_chunk else ''}{s}"
-                if len(potential) <= chunk_size:
-                    current_chunk = potential
-                else:
-                    if current_chunk:
-                        final_chunks.append(current_chunk.strip())
-                    # Overlap: keep tail of previous chunk
-                    if chunk_overlap > 0 and current_chunk:
-                        overlap_text = current_chunk[-chunk_overlap:]
-                        current_chunk = overlap_text + separator + s
-                    else:
-                        current_chunk = s
-
-        if current_chunk:
-            final_chunks.append(current_chunk.strip())
-
-        return final_chunks
-
-    chunks = split_text(text, separators)
-    return [c for c in chunks if c and len(c.strip()) > 10]
-
-
-def create_parent_child_chunks(text: str) -> List[Dict]:
-    """
-    Create parent-child chunk hierarchy:
-    - Parent chunks: 2400 chars (for broad context retrieval)
-    - Child chunks: 600 chars (for precise answer extraction)
+    # Normalize carriage returns but preserve semantic double newlines
+    text = text.replace('\r\n', '\n')
     
-    Each child references its parent, enabling contextual window expansion.
-    """
-    if not text or not text.strip():
-        return []
-
-    # Create parent chunks
-    parent_chunks = recursive_character_chunking(text, chunk_size=PARENT_CHUNK_SIZE, chunk_overlap=200)
-
+    # Split natively by semantic layout blocks (paragraphs, sections)
+    blocks = [b.strip() for b in text.split('\n\n') if len(b.strip()) > 10]
+    
     result = []
-    for parent_idx, parent_text in enumerate(parent_chunks):
-        # Create child chunks from parent
-        child_chunks = recursive_character_chunking(parent_text, chunk_size=CHILD_CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
-
-        if not child_chunks:
-            # Parent is small enough to be a single chunk
+    for block in blocks:
+        # Only split a semantic block if it severely exceeds the embedding token limit
+        if len(block) > max_chunk_size:
+            sentences = [s.strip() + "." for s in block.split('. ') if s.strip()]
+            current_chunk = ""
+            for sentence in sentences:
+                if len(current_chunk) + len(sentence) > max_chunk_size and current_chunk:
+                    result.append({
+                        "text": current_chunk.strip(),
+                        "is_parent": True,
+                        "parent_idx": None,
+                        "child_idx": None,
+                    })
+                    current_chunk = sentence
+                else:
+                    current_chunk += " " + sentence if current_chunk else sentence
+            if current_chunk:
+                result.append({
+                    "text": current_chunk.strip(),
+                    "is_parent": True,
+                    "parent_idx": None,
+                    "child_idx": None,
+                })
+        else:
             result.append({
-                "text": parent_text,
+                "text": block,
                 "is_parent": True,
-                "parent_idx": parent_idx,
+                "parent_idx": None,
                 "child_idx": None,
             })
-        else:
-            for child_idx, child_text in enumerate(child_chunks):
-                result.append({
+            
+    return result
                     "text": child_text,
                     "is_parent": False,
                     "parent_idx": parent_idx,
@@ -364,7 +318,7 @@ def ingest_file(
             if page.tables:
                 cleaned_text = _strip_table_text_from_raw(page.text, page.tables)
             if cleaned_text and cleaned_text.strip():
-                page_chunks.extend(create_parent_child_chunks(cleaned_text))
+                page_chunks.extend(semantic_chunking(cleaned_text))
                 
             # 2. Chunk tables into PER-ROW entries (each row gets column headers!)
             #    This is the KEY fix for lookup queries like "SNC2448L1125c door kit"
