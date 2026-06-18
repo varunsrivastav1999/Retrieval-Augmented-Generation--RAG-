@@ -22,8 +22,8 @@ spacy==3.8.2
 # --- AI/ML Models Used ---
 # 1. Text Embedding: sentence-transformers/all-MiniLM-L6-v2 (Auto-downloaded by sentence-transformers)
 # 2. Vision/Image Embedding: sentence-transformers/clip-ViT-B-32 (Auto-downloaded by sentence-transformers)
-# 3. Reranker: cross-encoder/ms-marco-MiniLM-L-6-v2 (Auto-downloaded by sentence-transformers)
-# 4. LLM Synthesis: llama3 (Pulled via Ollama external service)
+# 3. Reranker: cross-encoder/BAAI/bge-reranker-large
+# 4. LLM Synthesis: llama3.1:8b (Pulled via Ollama external service)
 # 5. NLP Entity Extraction: spacy en_core_web_sm (Downloaded via direct link below)
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz
 neo4j==5.17.0
@@ -38,3 +38,8 @@ python-pptx==1.0.2
 --trusted-host wheels.myhloli.com
 --extra-index-url https://wheels.myhloli.com
 
+# --- Evaluation Framework ---
+ragas==0.1.7
+datasets==2.19.0
+langchain-community==0.0.38
+langchain-core==0.1.52

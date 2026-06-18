@@ -43,8 +43,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
     pip install -r requirements.txt
 
-# Pre-download models (baked into image layer — NOT a cache mount)
-RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-large-en-v1.5'); SentenceTransformer('sentence-transformers/clip-ViT-L-14'); CrossEncoder('BAAI/bge-reranker-v2-m3')"
+# Pre-download models# Use a lightweight python script to pre-download the model into the image
+RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-large-en-v1.5'); SentenceTransformer('sentence-transformers/clip-ViT-L-14'); CrossEncoder('BAAI/bge-reranker-large')"
 
 # Download spaCy model (direct pip install — spacy download generates broken URLs)
 RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
@@ -80,7 +80,7 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 # Pre-download Ollama LLM model (baked into image — zero runtime/download at startup)
 RUN ollama serve &>/tmp/ollama-srv.log & \
     for i in $(seq 1 30); do ollama list 2>/dev/null && break; sleep 1; done && \
-    ollama pull qwen2.5:7b && \
+    ollama pull llama3.1:8b && \
     pkill ollama 2>/dev/null; true && \
     mkdir -p /models/ollama/blobs /models/ollama/manifests && \
     cp -r /root/.ollama/models/blobs/* /models/ollama/blobs/ && \

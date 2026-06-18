@@ -93,4 +93,13 @@ def rerank_results(query: str, retrieved_chunks: list, top_n: int = 5) -> list:
                 chunk["rerank_score"] = chunk.get("hybrid_score", chunk.get("score", 0.0))
             
         sorted_chunks = sorted(retrieved_chunks, key=lambda x: x["rerank_score"], reverse=True)
+        
+        # Free VRAM immediately after prediction
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+            
         return sorted_chunks[:top_n]
