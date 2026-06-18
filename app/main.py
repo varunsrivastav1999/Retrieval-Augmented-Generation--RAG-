@@ -120,7 +120,7 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b") # Best for RAG — world-class reasoning, 128K context
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "1024"))
-OLLAMA_CONTEXT_LENGTH = int(os.getenv("OLLAMA_CONTEXT_LENGTH", "8192"))
+OLLAMA_CONTEXT_LENGTH = int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
 RAG_ENV = os.getenv("RAG_ENV", "local").lower()
 PRELOAD_MODELS_ON_STARTUP = os.getenv(
     "RAG_PRELOAD_MODELS_ON_STARTUP",
@@ -1232,7 +1232,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 "stream": True,
                 "options": {
                     "num_predict": OLLAMA_NUM_PREDICT,
-                    "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "8192")),
+                    "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
                     "temperature": 0.0,
                     "num_gpu": 99,
                 }
@@ -1354,7 +1354,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 "num_predict": OLLAMA_NUM_PREDICT,
                 "temperature": 0.0,
                 "num_gpu": 99,
-                "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "8192")),
+                "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
             }
         }
         response = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT_SECONDS)

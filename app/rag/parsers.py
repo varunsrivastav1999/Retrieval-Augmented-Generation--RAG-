@@ -344,7 +344,7 @@ def _parse_docling(file_path: str) -> ParseResult:
             elif item_type in ["TextItem", "SectionHeaderItem"]:
                 clean_text = _enrich_mcq_text(item.text)
                 clean_text = _normalize_superscripts(clean_text)
-                page_content.text += clean_text + "\n"
+                page_content.text += clean_text + "\n\n"
 
         pages = [pages_dict[k] for k in sorted(pages_dict.keys())]
 

@@ -23,6 +23,7 @@ MEDIA_PATH=/media
 OLLAMA_URL=http://ollama:11434/api/generate
 OLLAMA_MODEL=llama3.1:8b
 OLLAMA_TIMEOUT_SECONDS=300
+OLLAMA_CONTEXT_LENGTH=32768
 OLLAMA_NUM_PREDICT=1024
 
 # GPU — set to cpu to offload embedding/reranker to CPU, leave GPU for Ollama

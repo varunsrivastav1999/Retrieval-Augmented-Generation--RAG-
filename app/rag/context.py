@@ -88,7 +88,7 @@ def assemble_context(query: str, reranked_chunks: list, db=None, broad_query: bo
     final_context = []
     expanded_ids = set()
     total_chars = 0
-    MAX_CONTEXT_CHARS = 28000  # Hard ceiling to strictly protect llama3.1's 8192 token limit
+    MAX_CONTEXT_CHARS = 100000  # Hard ceiling to strictly protect llama3.1's 32768 token limit
     
     for i, chunk in enumerate(mmr_filtered):
         # Only expand top 5 chunks and only if db is available

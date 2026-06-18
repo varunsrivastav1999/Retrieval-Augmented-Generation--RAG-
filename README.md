@@ -33,7 +33,7 @@ A **production-grade RAG engine** built for industrial-scale document understand
 - **Zero Hallucination**: Four-layer guard — pre-generation grounding check (adaptive threshold), strict citation prompt, mid-generation FLARE verification, post-generation sentence verification.
 - **30+ File Formats**: Powered by **MinerU (Magic-PDF)** for flawless PDF/layout/math extraction and **IBM Docling** for DOCX, XLSX, PPTX, HTML. Also supports images (OCR), video (subtitles), code, email, archives. Perfectly handles complex tables and nested grids.
 - **100% Air-Gapped**: All models cached locally. No external API calls. Zero telemetry.
-- **GPU Auto-Detect & Stabilized VRAM**: Highly optimized to run even on **8GB VRAM** GPUs. Native NVIDIA CUDA on Linux, Apple MPS on macOS, CPU fallback everywhere. MinerU models and Ollama are carefully managed to prevent OOM. Context length reduced to 8192 for 14B model fit.
+- **GPU Auto-Detect & Stabilized VRAM**: Highly optimized to run even on **8GB VRAM** GPUs. Native NVIDIA CUDA on Linux, Apple MPS on macOS, CPU fallback everywhere. MinerU models and Ollama are carefully managed to prevent OOM. Context length expanded to 32768 to fully utilize Llama 3.1 8B.
 - **Lightning Fast Vector Search**: Powered by **Qdrant** for sub-millisecond retrieval across massive multimodal document structures.
 - **High Concurrency**: Tuned connection pooling and 8x parallel Uvicorn/Ollama workers natively support massive concurrent load.
 - **Production Stack**: Docker Compose with 7 services, static IPs, health checks, GPU passthrough, daily backups, and Prometheus metrics. Ollama image pinned to `0.3.14`.
@@ -348,7 +348,7 @@ Key environment variables (full reference in `.env.example`):
 | `OLLAMA_IMAGE` | `ollama/ollama:0.3.14` | Pinned image (was `:latest`) |
 | `GROUNDING_THRESHOLD` | `0.35` | Pre-generation guard (was 0.10) |
 | `RAG_MODEL_DEVICE` | `cpu` | Production: reranker/embedding on CPU, Ollama on GPU |
-| `OLLAMA_CONTEXT_LENGTH` | `8192` | Reduced from 32768 to fit 14B + 8K in 16GB VRAM |
+| `OLLAMA_CONTEXT_LENGTH` | `32768` | Expanded to fully utilize 32K context for Llama3.1 8B in 16GB VRAM |
 | `RAG_CACHE_SEMANTIC_THRESHOLD` | `0.95` | Semantic cache cosine threshold |
 | `RAG_DEFAULT_TOP_K` | `12` | Number of chunks to retrieve |
 | `RAG_EMBEDDING_QUANTIZE` | `int8` | INT8 quantization for 8x storage compression |
