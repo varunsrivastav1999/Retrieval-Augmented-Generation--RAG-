@@ -2,7 +2,6 @@ volumes:
   local_postgres_data: {}
   local_qdrant_data: {}
   local_redis_data: {}
-  local_ollama_data: {}
   local_neo4j_data: {}
   local_media: {}
 services:
@@ -20,12 +19,8 @@ services:
         condition: service_started
       redis:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
       neo4j:
         condition: service_healthy
-      pull-models:
-        condition: service_completed_successfully
     volumes:
       - .:/app:z
       - local_media:/media
@@ -95,26 +90,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
-  ollama:
-    image: ollama/ollama:0.3.14
-    container_name: ollama_rag_local
-    restart: unless-stopped
-    environment:
-      - OLLAMA_CONTEXT_LENGTH=32768
-    volumes:
-      - local_ollama_data:/root/.ollama
-    expose:
-      - "11434"
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 14G
   neo4j:
     image: neo4j:5.17.0
     container_name: neo4j_rag_local
@@ -132,22 +107,3 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
-  pull-models:
-    image: ollama/ollama:0.3.14
-    container_name: ollama_rag_local_pull
-    depends_on:
-      ollama:
-        condition: service_healthy
-    volumes:
-      - local_ollama_data:/root/.ollama
-      - .:/app:ro
-    environment:
-      - OLLAMA_HOST=http://ollama:11434
-    entrypoint: /bin/sh
-    command:
-      - "-c"
-      - |
-        echo "=== Pulling Ollama model: ${OLLAMA_MODEL:-llama3.1:8b} ==="
-        ollama pull ${OLLAMA_MODEL:-llama3.1:8b} || echo "Pull skipped (already exists)"
-        echo "=== Skipping Modelfile (using pulled model: ${OLLAMA_MODEL:-llama3.1:8b}) ==="
-        echo "=== Models ready ==="
