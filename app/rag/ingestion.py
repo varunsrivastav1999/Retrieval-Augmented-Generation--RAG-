@@ -122,6 +122,9 @@ def chunk_table_per_row(table_md: str, table_group_id: str = "") -> List[Dict]:
     Chunk a markdown table into INDIVIDUAL ROW chunks.
     Each chunk contains: [Table Title] + [Column Headers] + [Separator] + [Data Rows]
     
+    Includes bi-directional empty cell inheritance to reconstruct spanning/merged cells
+    that were lost during Docling's markdown export.
+    
     Returns list of dicts with "text" and "table_group" keys for cross-chunk linking.
     """
     import re
@@ -141,10 +144,54 @@ def chunk_table_per_row(table_md: str, table_group_id: str = "") -> List[Dict]:
         return [{"text": table_md, "table_group": table_group_id}]
 
     header_block = "\n".join(lines[:separator_idx + 1])
-    data_rows = lines[separator_idx + 1:]
+    raw_data_rows = lines[separator_idx + 1:]
 
-    if not data_rows:
+    if not raw_data_rows:
         return [{"text": table_md, "table_group": table_group_id}]
+
+    # --- BI-DIRECTIONAL CELL INHERITANCE FOR MERGED CELLS ---
+    # Parse rows into cells
+    table_grid = []
+    for row in raw_data_rows:
+        if not row.strip() or '|' not in row:
+            table_grid.append({"is_data": False, "raw": row})
+            continue
+            
+        row_content = row.strip()
+        if row_content.startswith('|'): row_content = row_content[1:]
+        if row_content.endswith('|'): row_content = row_content[:-1]
+        
+        cells = [c.strip() for c in row_content.split('|')]
+        table_grid.append({"is_data": True, "cells": cells})
+        
+    # Forward Fill (Top to Bottom)
+    for i in range(1, len(table_grid)):
+        if not table_grid[i]["is_data"] or not table_grid[i-1]["is_data"]:
+            continue
+        prev_cells = table_grid[i-1]["cells"]
+        curr_cells = table_grid[i]["cells"]
+        for c_idx in range(len(curr_cells)):
+            if not curr_cells[c_idx] and c_idx < len(prev_cells) and prev_cells[c_idx]:
+                curr_cells[c_idx] = prev_cells[c_idx]
+                
+    # Backward Fill (Bottom to Top)
+    for i in range(len(table_grid) - 2, -1, -1):
+        if not table_grid[i]["is_data"] or not table_grid[i+1]["is_data"]:
+            continue
+        next_cells = table_grid[i+1]["cells"]
+        curr_cells = table_grid[i]["cells"]
+        for c_idx in range(len(curr_cells)):
+            if not curr_cells[c_idx] and c_idx < len(next_cells) and next_cells[c_idx]:
+                curr_cells[c_idx] = next_cells[c_idx]
+                
+    # Reconstruct data rows
+    data_rows = []
+    for row_obj in table_grid:
+        if not row_obj["is_data"]:
+            data_rows.append(row_obj["raw"])
+        else:
+            data_rows.append("| " + " | ".join(row_obj["cells"]) + " |")
+    # --------------------------------------------------------
 
     row_chunks = []
     chunk_size = 5
