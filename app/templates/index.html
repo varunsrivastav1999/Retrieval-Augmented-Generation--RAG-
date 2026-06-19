@@ -591,7 +591,26 @@
     <div class="main-container">
 
         <div class="hero" id="heroArea">
-            <h1>Ready when you are</h1>
+            <h1 id="greetingTitle" style="transition: opacity 0.5s;">Ready when you are</h1>
+            <script>
+                function updateGreeting() {
+                    const title = document.getElementById('greetingTitle');
+                    if (!title) return;
+                    const now = new Date();
+                    const hour = now.getHours();
+                    let greeting = "Good evening";
+                    if (hour >= 5 && hour < 12) {
+                        greeting = "Good morning";
+                    } else if (hour >= 12 && hour < 18) {
+                        greeting = "Good afternoon";
+                    }
+                    
+                    const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    title.innerText = `${greeting}, ready when you are! (${timeString})`;
+                }
+                setInterval(updateGreeting, 1000);
+                updateGreeting();
+            </script>
         </div>
 
         <div class="chat-area" id="chatArea">
