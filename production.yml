@@ -82,6 +82,10 @@ services:
         reservations:
           cpus: "2"
           memory: 4G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     logging:
       driver: "json-file"
       options:
@@ -212,6 +216,11 @@ services:
         limits:
           cpus: "4"
           memory: 14G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     logging:
       driver: "json-file"
       options:
