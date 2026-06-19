@@ -875,7 +875,7 @@
                     }
                     
                     // Success!
-                    plusBtn.innerHTML = '<span style="color:#10b981; font-size:1.2rem; animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);">✔️</span>';
+                    plusBtn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);"><polyline points="20 6 9 17 4 12"></polyline></svg>';
                     queryInput.placeholder = "Ready to Ask!";
                     queryInput.style.border = "1px solid #10b981";
                     queryInput.style.boxShadow = "0 0 10px rgba(16, 185, 129, 0.2)";
@@ -887,12 +887,12 @@
                     }, 4000);
                 } else {
                     // No new jobs (maybe duplicates skipped)
-                    plusBtn.innerHTML = '✅';
+                    plusBtn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);"><polyline points="20 6 9 17 4 12"></polyline></svg>';
                     queryInput.placeholder = "Indexed & Ready!";
                     setTimeout(() => queryInput.placeholder = originalPlaceholder, 3000);
                 }
             } catch (e) {
-                plusBtn.innerHTML = '❌';
+                plusBtn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
                 queryInput.placeholder = "Upload Failed.";
                 setTimeout(() => queryInput.placeholder = originalPlaceholder, 3000);
             } finally {
