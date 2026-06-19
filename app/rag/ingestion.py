@@ -117,7 +117,7 @@ def semantic_chunking(text: str, max_chunk_size: int = PARENT_CHUNK_SIZE, child_
     return result
 
 
-def chunk_table_per_row(table_md: str, table_index: int = 0) -> List[Dict]:
+def chunk_table_per_row(table_md: str, table_group_id: str = "") -> List[Dict]:
     """
     Chunk a markdown table into INDIVIDUAL ROW chunks.
     Each chunk contains: [Table Title] + [Column Headers] + [Separator] + [Data Rows]
@@ -150,7 +150,7 @@ def chunk_table_per_row(table_md: str, table_index: int = 0) -> List[Dict]:
     for i in range(0, len(data_rows), chunk_size):
         block = "\n".join(data_rows[i:i+chunk_size])
         row_chunk = f"{header_block}\n{sub_header}{block}"
-        row_chunks.append({"text": row_chunk.strip(), "table_group": table_index})
+        row_chunks.append({"text": row_chunk.strip(), "table_group": table_group_id})
 
     return row_chunks
 
@@ -327,7 +327,8 @@ def ingest_file(
             #    This is the KEY fix for lookup queries like "SNC2448L1125c door kit"
             for table_idx, table_md in enumerate(page.tables):
                 if table_md and table_md.strip():
-                    table_parts = chunk_table_per_row(table_md, table_idx)
+                    unique_table_group = f"{os.path.basename(file_path)}_p{page.page_num}_t{table_idx}"
+                    table_parts = chunk_table_per_row(table_md, unique_table_group)
                     for t_part in table_parts:
                         page_chunks.append({
                             "text": t_part["text"],

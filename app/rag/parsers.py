@@ -320,7 +320,7 @@ def _parse_docling(file_path: str) -> ParseResult:
             item_type = type(item).__name__
 
             if item_type == "TableItem":
-                table_md = item.export_to_markdown()
+                table_md = item.export_to_markdown(doc)
                 # Apply same superscripts / merged cell text normalizations
                 table_md = _normalize_superscripts(table_md)
                 table_text = f"[TABLE - Page {page_no}]\n{table_md}"
