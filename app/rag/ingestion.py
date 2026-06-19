@@ -149,10 +149,31 @@ def chunk_table_per_row(table_md: str, table_group_id: str = "") -> List[Dict]:
     if not raw_data_rows:
         return [{"text": table_md, "table_group": table_group_id}]
 
+    # --- FIX BROKEN MARKDOWN ROWS (Newlines inside cells) ---
+    fixed_data_rows = []
+    buffer = ""
+    for row in raw_data_rows:
+        stripped_row = row.strip()
+        if not stripped_row:
+            continue
+        if buffer:
+            buffer += " " + stripped_row
+        else:
+            buffer = stripped_row
+            
+        # A valid complete markdown row usually ends with '|'
+        # If it doesn't, Docling probably leaked a newline into a cell.
+        if buffer.endswith('|'):
+            fixed_data_rows.append(buffer)
+            buffer = ""
+            
+    if buffer:
+        fixed_data_rows.append(buffer)
+        
     # --- BI-DIRECTIONAL CELL INHERITANCE FOR MERGED CELLS ---
     # Parse rows into cells
     table_grid = []
-    for row in raw_data_rows:
+    for row in fixed_data_rows:
         if not row.strip() or '|' not in row:
             table_grid.append({"is_data": False, "raw": row})
             continue

@@ -273,6 +273,8 @@ def build_strict_grounding_prompt(
         "   or product code (e.g., EQL40200D), find the EXACT row in the table that contains\n"
         "   that identifier. NOTE: Table cells often contain trailing superscripts, footnote markers,\n"
         "   or asterisks (e.g., EQL40200D3, EQL8100D*). Treat these as matching the base model number.\n"
+        "   If a cell contains multiple model numbers grouped together (e.g. 'SEQ40150 SEQ40200'),\n"
+        "   treat the entire row's data as applying to ALL of the model numbers in that cell.\n"
         "   Then read the value from the requested column by matching the column headers.\n"
         "7. If no information in the provided records can answer the question, state: "
         "'This information is not available in the uploaded documents.' Do NOT make up an answer.\n"
