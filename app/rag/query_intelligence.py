@@ -397,7 +397,7 @@ def text_to_sql_filters(query: str) -> dict:
         "options": {"temperature": 0.0}
     }
     try:
-        response = requests.post(get_ollama_generate_url(), json=payload, timeout=5)
+        response = requests.post(get_ollama_generate_url(), json=payload, timeout=15)
         if response.status_code == 200:
             text = response.json().get("response", "").strip()
             if text.startswith("```json"):
