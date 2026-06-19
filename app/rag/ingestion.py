@@ -345,8 +345,11 @@ def ingest_file(
                     "model": OLLAMA_MODEL,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {"temperature": 0.0}
-                }, timeout=15)
+                    "options": {
+                        "temperature": 0.0,
+                        "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
+                    }
+                }, timeout=30)
                 if res.status_code == 200:
                     doc_context_summary = res.json().get("response", "").strip()
                     print(f"[Contextual Retrieval] Generated Context: {doc_context_summary}")

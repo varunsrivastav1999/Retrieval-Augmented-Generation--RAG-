@@ -1,4 +1,5 @@
 import requests
+import os
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from qdrant_client.http import models
@@ -53,7 +54,11 @@ def _generate_hyde(query: str) -> str:
         "prompt": prompt,
         "stream": False,
         "keep_alive": "30m",
-        "options": {"num_predict": 30, "temperature": 0.3}
+        "options": {
+            "num_predict": 30, 
+            "temperature": 0.3,
+            "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
+        }
     }
     try:
         response = requests.post(get_ollama_generate_url(), json=payload, timeout=45.0)

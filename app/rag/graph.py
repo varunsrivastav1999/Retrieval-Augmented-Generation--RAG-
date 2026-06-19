@@ -86,10 +86,12 @@ class GraphDB:
             "model": OLLAMA_MODEL,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": 0.0}
+            "options": {
+            "temperature": 0.0,
+            "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
         }
         try:
-            response = requests.post(get_ollama_generate_url(), json=payload, timeout=10)
+            response = requests.post(get_ollama_generate_url(), json=payload, timeout=30)
             if response.status_code == 200:
                 cypher = response.json().get("response", "").strip()
                 if cypher.startswith("```cypher"):

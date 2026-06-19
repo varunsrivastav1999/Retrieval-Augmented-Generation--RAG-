@@ -1,5 +1,6 @@
 import json
 import re
+import os
 import requests
 from typing import List, Dict, Any
 
@@ -188,6 +189,7 @@ def extract_structured_data_from_page(page_text: str) -> Dict[str, Any]:
             "temperature": 0.0,
             "num_predict": -1,  # -1 = unlimited (let context window decide)
             "num_gpu": 99,
+            "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
         },
         "format": "json"  # Force JSON mode if supported by the model
     }
