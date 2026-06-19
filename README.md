@@ -87,27 +87,32 @@ graph TD
 
 ---
 
-## 🛡️ 17 Processing Layers
+## 🛡️ 17 Processing Layers Deep Dive
 
-| Layer | Name | Model / Technique | Latency Impact |
-|-------|------|-------------------|----------------|
-| 1 | **Universal Parser** | **MinerU** for PDFs/Math/Tables, plus **IBM Docling** for DOCX, XLSX | Offline (Ingest) |
-| 2 | **Smart OCR** | Tesseract + Docling Vision | Offline (Ingest) |
-| 3 | **Parent-Child Chunking** | 2400 chars parent, 600 chars child | Offline (Ingest) |
-| 4 | **Batch Embedding** | Rapid batch embedding and ingestion | Offline (Ingest) |
-| 5 | **RAPTOR** | UMAP + GMM clustering + LLM summarization, auto-triggered after ingestion | Offline (Ingest) |
-| 6 | **Hybrid Search** | Qdrant Dense + HyDE + Vision Vectors | ~5ms |
-| 7 | **Late-Interaction Reranking** | **ColBERTv2** via `ragatouille` | ~40ms |
-| 8 | **Max Marginal Relevance (MMR)** | Diversity optimization | ~2ms |
-| 9 | **Contextual Expansion** | Linking child chunk to parent chunk | ~1ms |
-| 10 | **Agentic Router** | Keyword + LLM multi-tool routing for Graph/RAPTOR/Vector/SQL | ~0-500ms |
-| 11 | **Query Intelligence** | Spelling correction, synonym expansion, query decomposition | ~10ms |
-| 12 | **Grounding Guard** | Pre-generation hallucination block (adaptive threshold 0.35→0.15) | ~5ms |
-| 13 | **Extractive Fast-Path** | 100% LLM bypass for factual answers | ~0ms |
-| 14 | **Semantic Query Cache** | Redis with cosine similarity matching (threshold 0.95) | ~1ms |
-| 15 | **Active RAG (FLARE)** | Multi-level retry (3 tiers) + mid-generation sentence confidence monitoring + targeted re-retrieval | Varies |
-| 16 | **GraphRAG** | Neo4j semantic triplet extraction via spaCy + NL-to-Cypher via Ollama | ~100ms |
-| 17 | **Real-Time Streaming** | Token-by-token SSE with mid-generation FLARE re-retrieval | <200ms first token |
+The pipeline is split into **Ingestion** (Layers 1-5), **Retrieval & Routing** (Layers 6-11), and **Generation & Verification** (Layers 12-17).
+
+### Phase 1: Universal Ingestion Engine
+1. **Layer 1: Universal Parser** (`app/rag/parsers.py`): Automatically detects file type from 30+ formats. Uses IBM Docling for perfect table structure and MinerU (Magic-PDF) for heavy PDFs. Gracefully falls back to native parsers (e.g., pdfplumber, openpyxl, python-pptx) if needed.
+2. **Layer 2: Smart OCR & Vision Extraction**: Tesseract OCR extracts text from floating images. High-res images are extracted as raw bytes, embedded natively via the CLIP vision model, and passed alongside their captions.
+3. **Layer 3: Semantic Parent-Child Chunking & Table Processing** (`app/rag/ingestion.py`): Instead of blindly slicing by character count, it chunks naturally by semantic boundaries (paragraphs). **Crucially**, massive tables are split precisely into 5-row blocks with column headers repeated and assigned globally unique `table_group` IDs to prevent LLM context-flooding during retrieval.
+4. **Layer 4: Batch Vector Embedding**: Encodes chunks in highly optimized parallel batches using `bge-large-en-v1.5`. Vectors are INT8 Quantized natively via TurboQuant (4x-8x size reduction) and stored in Qdrant.
+5. **Layer 5: RAPTOR Hierarchical Indexing**: Background workers continuously cluster vector embeddings via UMAP and Gaussian Mixture Models (GMM), summarizing them upward to provide answers for broad, document-spanning questions.
+
+### Phase 2: Retrieval & Intelligence
+6. **Layer 6: Hybrid Multi-Modal Search** (`app/rag/retrieval.py`): Concurrently runs Dense Vector Search (Qdrant), HyDE (Hypothetical Document Embeddings), CLIP Vision Search, and Sparse BM25 (PostgreSQL Full-Text).
+7. **Layer 7: Late-Interaction Reranking**: Re-scores the top hybrid search candidates using the cross-encoder `ColBERTv2` model to understand the deep semantic relationship between the query and each chunk.
+8. **Layer 8: Max Marginal Relevance (MMR) & Expansion**: Balances relevance with diversity (MMR). Also dynamically executes **Table Sibling Expansion**—fetching exactly the right remaining rows for a retrieved table using the unique `table_group` ID so the LLM gets the complete grid without noise.
+9. **Layer 9: Contextual Assembly & Compression** (`app/rag/context.py`): Compresses overflowing text chunks while absolutely preserving table structures. Formats strict source citations `[filename.pdf, Page X]`.
+10. **Layer 10: Agentic Router**: LLM analyzes the query intent to route to the correct sub-engine (Extractive Fast-Path, Vector DB, SQL Analytics, or Knowledge Graph).
+11. **Layer 11: Query Intelligence**: Expands the user's query into multiple sub-queries, auto-corrects spelling, and adds technical synonyms to vastly improve retrieval recall.
+
+### Phase 3: Generation & Anti-Hallucination
+12. **Layer 12: Grounding Guard**: The pre-generation hallucination block. Compares query keywords against retrieved context. If the overlap and similarity fall below a strict threshold (e.g., `0.35`), the LLM is blocked from answering and forced to return "Information Not Found."
+13. **Layer 13: Extractive Fast-Path**: If the router determines the question is a simple, unambiguous fact, the LLM generation is skipped entirely, delivering the exact verbatim sentence from the document in under 15ms.
+14. **Layer 14: Semantic Query Cache**: Extremely fast Redis cosine-similarity cache. If a query matches a previous query with >0.95 similarity, it instantly returns the cached answer.
+15. **Layer 15: FLARE Active RAG**: The heartbeat of the system. If the LLM isn't confident, it triggers up to 3 escalating retries (Keyword Extraction → LLM Alternative Queries → Sub-Question Decomposition) while dynamically lowering the grounding threshold slightly each time to dig deeper.
+16. **Layer 16: GraphRAG Execution**: For complex entity-relationship queries, the system uses spaCy to extract entities and neo4j/Cypher queries to walk the knowledge graph.
+17. **Layer 17: Real-Time Streaming & Mid-Gen Verification**: Streams the answer token-by-token (SSE) while simultaneously verifying sentence confidence in the background. If the LLM generates an ungrounded sentence mid-stream, it pauses, triggers a targeted re-retrieval, and corrects itself.
 
 ---
 
