@@ -1214,7 +1214,10 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         context_texts = []
         for chunk in final_context:
             text = chunk.get('text', '')
-            context_texts.append(text)
+            # Aggressively strip any [filename, Page X] or [TABLE - Page X] headers 
+            # so the LLM doesn't try to regurgitate them as inline citations.
+            text = re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', text)
+            context_texts.append(text.strip())
         context_text = "\n\n---\n\n".join(context_texts)
         
         prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
@@ -1299,7 +1302,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             # FLARE post-generation: if new chunks were retrieved, do a final regeneration pass
             if flare_retrieved_chunks:
                 enriched_context = final_context + flare_retrieved_chunks
-                enriched_texts = [c.get('text', '') for c in enriched_context]
+                enriched_texts = [re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', c.get('text', '')).strip() for c in enriched_context]
                 enriched_text = "\n\n---\n\n".join(enriched_texts)
                 flare_prompt = build_strict_grounding_prompt(search_query, enriched_text, broad_query)
                 print(f"[FLARE] Post-generation pass with {len(flare_retrieved_chunks)} new chunks.")
@@ -1383,7 +1386,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             
             if flare_retrieved_chunks:
                 enriched_context = final_context + flare_retrieved_chunks
-                enriched_texts = [c.get('text', '') for c in enriched_context]
+                enriched_texts = [re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', c.get('text', '')).strip() for c in enriched_context]
                 enriched_text = "\n\n---\n\n".join(enriched_texts)
                 flare_prompt = build_strict_grounding_prompt(search_query, enriched_text, broad_query)
                 print(f"[FLARE] Regenerating answer with {len(flare_retrieved_chunks)} new chunks.")
