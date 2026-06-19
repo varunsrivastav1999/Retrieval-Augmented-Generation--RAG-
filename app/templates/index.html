@@ -605,10 +605,8 @@
                         greeting = "Good afternoon";
                     }
                     
-                    const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                    title.innerText = `${greeting}, ready when you are! (${timeString})`;
+                    title.innerText = `${greeting}, what would you like to explore?`;
                 }
-                setInterval(updateGreeting, 1000);
                 updateGreeting();
             </script>
         </div>
