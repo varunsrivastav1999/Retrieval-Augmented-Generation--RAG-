@@ -21,6 +21,14 @@
         };
     </script>
     <style>
+        @font-face {
+            font-family: 'Outfit';
+            font-style: normal;
+            font-weight: 300 500;
+            src: url('/static/fonts/outfit-regular.woff2') format('woff2');
+            font-display: swap;
+        }
+
         :root {
             /* Dark Mode variables */
             --bg-color: #131314;
@@ -114,8 +122,9 @@
         }
 
         .hero h1 {
-            font-size: clamp(2rem, 5vw, 3rem);
-            font-weight: 400;
+            font-size: clamp(2rem, 5vw, 3.5rem);
+            font-weight: 300;
+            letter-spacing: -0.5px;
             margin-bottom: 30px;
             background: -webkit-linear-gradient(45deg, #a8c7fa, #d3e3fd);
             -webkit-background-clip: text;
