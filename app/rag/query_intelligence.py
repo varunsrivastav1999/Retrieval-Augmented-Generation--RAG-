@@ -394,10 +394,13 @@ def text_to_sql_filters(query: str) -> dict:
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": 0.0}
+        "options": {
+            "temperature": 0.0,
+            "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
+        }
     }
     try:
-        response = requests.post(get_ollama_generate_url(), json=payload, timeout=15)
+        response = requests.post(get_ollama_generate_url(), json=payload, timeout=30)
         if response.status_code == 200:
             text = response.json().get("response", "").strip()
             if text.startswith("```json"):
@@ -449,10 +452,14 @@ Example: ["query one", "query two"]
             "model": OLLAMA_MODEL,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": 0.7, "num_predict": 200}
+            "options": {
+                "temperature": 0.7, 
+                "num_predict": 200,
+                "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
+            }
         }
         try:
-            response = requests.post(get_ollama_generate_url(), json=payload, timeout=10)
+            response = requests.post(get_ollama_generate_url(), json=payload, timeout=30)
             if response.status_code == 200:
                 text = response.json().get("response", "").strip()
                 if text.startswith("```json"):
@@ -485,10 +492,14 @@ Example: ["What is the part number for X?", "What is the torque specification?",
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": 0.5, "num_predict": 300}
+        "options": {
+            "temperature": 0.5, 
+            "num_predict": 300,
+            "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
+        }
     }
     try:
-        response = requests.post(get_ollama_generate_url(), json=payload, timeout=15)
+        response = requests.post(get_ollama_generate_url(), json=payload, timeout=30)
         if response.status_code == 200:
             text = response.json().get("response", "").strip()
             if text.startswith("```json"):

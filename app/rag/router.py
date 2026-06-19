@@ -1,4 +1,5 @@
 import re
+import os
 import requests
 from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
 
@@ -55,10 +56,13 @@ class Router:
             "model": OLLAMA_MODEL,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": 0.0},
+            "options": {
+                "temperature": 0.0,
+                "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
+            },
         }
         try:
-            resp = requests.post(get_ollama_generate_url(), json=payload, timeout=5)
+            resp = requests.post(get_ollama_generate_url(), json=payload, timeout=15)
             if resp.status_code == 200:
                 text = resp.json().get("response", "").strip().lower()
                 for valid in self.TIERS:
