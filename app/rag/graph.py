@@ -87,8 +87,9 @@ class GraphDB:
             "prompt": prompt,
             "stream": False,
             "options": {
-            "temperature": 0.0,
-            "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
+                "temperature": 0.0,
+                "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
+            }
         }
         try:
             response = requests.post(get_ollama_generate_url(), json=payload, timeout=30)
