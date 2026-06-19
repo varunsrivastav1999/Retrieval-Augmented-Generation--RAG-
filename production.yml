@@ -53,7 +53,7 @@ services:
       - HF_HUB_CACHE=/models/huggingface/hub
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
       - RAG_USE_HALFVEC=true
-      - RAG_EMBEDDING_QUANTIZE=true
+      - RAG_EMBEDDING_QUANTIZE=int8
       - NUMBA_CACHE_DIR=/tmp
       - EASYOCR_MODULE_PATH=/tmp/.EasyOCR
     env_file:

@@ -134,13 +134,10 @@ def chunk_table_per_row(table_md: str, table_index: int = 0) -> List[Dict]:
     if not data_rows:
         return [{"text": table_md, "table_group": None}]
 
-    # Keep tables up to 100 rows as a single chunk for completeness
-    # Embedding model handles up to 512 tokens per chunk (~4000 chars)
-    if len(data_rows) <= 100:
-        return [{"text": table_md, "table_group": table_index}]
-
+    # We always chunk table rows because 100 rows easily exceeds the 512 token
+    # limit of the embedding models, leading to silent truncation and lost data.
     row_chunks = []
-    chunk_size = 25
+    chunk_size = 5
 
     sub_header = ""
     if data_rows and len(data_rows[0].strip()) > 0:
