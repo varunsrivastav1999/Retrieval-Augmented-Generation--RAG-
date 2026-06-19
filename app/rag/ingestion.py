@@ -124,32 +124,34 @@ def chunk_table_per_row(table_md: str, table_group_id: str = "") -> List[Dict]:
     
     Returns list of dicts with "text" and "table_group" keys for cross-chunk linking.
     """
+    import re
     lines = table_md.strip().split('\n')
-    if len(lines) < 4:
-        return [{"text": table_md, "table_group": None}]
+    if len(lines) < 3:
+        return [{"text": table_md, "table_group": table_group_id}]
 
-    header_block = "\n".join(lines[:3])
-    data_rows = lines[3:]
+    # Robustly find the markdown table separator line (e.g. |---|---|)
+    separator_idx = -1
+    for i, line in enumerate(lines):
+        if '|' in line and re.match(r'^[\s\|\-\:]+$', line):
+            separator_idx = i
+            break
+            
+    if separator_idx == -1:
+        # Fallback if it's not a standard markdown table
+        return [{"text": table_md, "table_group": table_group_id}]
+
+    header_block = "\n".join(lines[:separator_idx + 1])
+    data_rows = lines[separator_idx + 1:]
 
     if not data_rows:
-        return [{"text": table_md, "table_group": None}]
+        return [{"text": table_md, "table_group": table_group_id}]
 
-    # We always chunk table rows because 100 rows easily exceeds the 512 token
-    # limit of the embedding models, leading to silent truncation and lost data.
     row_chunks = []
     chunk_size = 5
 
-    sub_header = ""
-    if data_rows and len(data_rows[0].strip()) > 0:
-        first_row = data_rows[0]
-        alnum_count = sum(c.isalnum() for c in first_row)
-        if alnum_count < 20:
-            sub_header = first_row + "\n"
-            data_rows = data_rows[1:]
-
     for i in range(0, len(data_rows), chunk_size):
         block = "\n".join(data_rows[i:i+chunk_size])
-        row_chunk = f"{header_block}\n{sub_header}{block}"
+        row_chunk = f"{header_block}\n{block}"
         row_chunks.append({"text": row_chunk.strip(), "table_group": table_group_id})
 
     return row_chunks
