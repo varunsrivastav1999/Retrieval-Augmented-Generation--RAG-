@@ -25,7 +25,7 @@ A **production-grade RAG engine** built for industrial-scale document understand
 
 ## 🌟 Key Features
 
-- **World-Class Models**: `BAAI/bge-large-en-v1.5` (embedding, 1024d), `ColBERTv2` (late-interaction reranker via RAGatouille), `Qwen2.5:14B` (LLM — upgraded from 7B), `CLIP-ViT-L-14` (vision, 768d).
+- **World-Class Models**: `BAAI/bge-large-en-v1.5` (embedding, 1024d), `ColBERTv2` (late-interaction reranker via RAGatouille), `llama3.1:8b` (LLM), `CLIP-ViT-L-14` (vision, 768d).
 - **Auto Mode** (`auto: true`): Simple fact lookups return exact verbatim text in **6–15ms**; complex analysis questions route to the full LLM pipeline automatically.
 - **Extractive Mode**: Skips the LLM entirely — returns verbatim text from the top document chunk with source citation.
 - **FLARE Active RAG (Layer 15)**: Three-tier retry (keyword extraction → LLM alternative queries → sub-question decomposition) with adaptive thresholds (0.35→0.25→0.15), plus mid-generation sentence-level confidence monitoring with targeted re-retrieval during streaming.
@@ -75,7 +75,7 @@ graph TD
     Rewrite2 --> Hybrid
     Rewrite3 --> Hybrid
     
-    Grounding -- Pass --> LLM[LLM Synthesis Qwen2.5:14B]
+    Grounding -- Pass --> LLM[LLM Synthesis llama3.1:8b]
     Grounding -- Fail --> HALT[NOT_FOUND_RESPONSE]
     
     LLM --> FLARE_Mid{FLARE Mid-Gen Monitor}
@@ -132,7 +132,7 @@ The pipeline is split into **Ingestion** (Layers 1-5), **Retrieval & Routing** (
 |-----------|-------|---------------------|
 | **Embedding** | `BAAI/bge-large-en-v1.5` (1024d) | #1 on MTEB leaderboard, 3x richer than MiniLM |
 | **Reranker** | `ColBERTv2` (`colbert-ir/colbertv2.0`) | Late-interaction reranker, vast improvement over cross-encoders for technical docs |
-| **LLM** | `Qwen2.5:14B` (Q4_K_M) | 128K context, top instruction-following at 14B |
+| **LLM** | `llama3.1:8b` | 128K context, top instruction-following at 8B |
 | **Vision** | `CLIP-ViT-L-14` | 4x larger than ViT-B-32, far better image understanding |
 | **Vector DB**| `Qdrant` | Industry-leading vector retrieval speeds |
 | **Meta DB** | `SQLite` | Ultra-lightweight tracking without the overhead of heavy RDBMS |
@@ -195,7 +195,7 @@ All 7 services in `production.yml`:
 | **rag_api** | `itips_rag_prod` | 172.28.0.10 | 4 vCPU, 8GB RAM, 1 worker | FastAPI microservice |
 | **qdrant** | `qdrant/qdrant` | 172.28.0.20 | 4 vCPU, 4GB RAM | High-speed Vector Indexing |
 | **redis** | `redis:7-alpine` | 172.28.0.31 (was .30) | 1 vCPU, 2GB RAM | Semantic cache + job queue |
-| **ollama** | `ollama/ollama:0.3.14` (pinned, was `:latest`) | 172.28.0.40 | GPU passthrough, 8K context | Qwen2.5 14B (Q4_K_M) |
+| **ollama** | `ollama/ollama:0.3.14` (pinned, was `:latest`) | 172.28.0.40 | GPU passthrough, 8K context | llama3.1 8B |
 | **neo4j** | `neo4j:5.17.0` | 172.28.0.60 | 2 vCPU, 8GB RAM | Knowledge graph |
 | **models** | `itips_rag_prod` | 172.28.0.50 | One-shot | Model pre-loader |
 
