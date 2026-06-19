@@ -9,6 +9,19 @@
         href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="/static/js/marked.min.js"></script>
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']]
+            },
+            startup: {
+                typeset: false
+            }
+        };
+    </script>
     <style>
         :root {
             /* Dark Mode variables */
@@ -719,6 +732,9 @@
                         renderTimer = null;
                         if (fullAnswer) {
                             answerBox.innerHTML = marked.parse(fullAnswer);
+                            if (window.MathJax) {
+                                MathJax.typesetPromise([answerBox]).catch((err) => console.log('MathJax error:', err));
+                            }
                             chatArea.scrollTop = chatArea.scrollHeight;
                         }
                     }, 100);
@@ -745,6 +761,9 @@
                                     // Force final render
                                     if (fullAnswer) {
                                         answerBox.innerHTML = marked.parse(fullAnswer);
+                                        if (window.MathJax) {
+                                            MathJax.typesetPromise([answerBox]).catch((err) => console.log('MathJax error:', err));
+                                        }
                                     }
                                     chatArea.scrollTop = chatArea.scrollHeight;
 
