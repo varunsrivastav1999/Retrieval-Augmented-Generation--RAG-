@@ -28,6 +28,17 @@ try:
 except ImportError:
     DOCLING_AVAILABLE = False
 
+try:
+    from app.rag.table_engine import (
+        markdown_to_rich_table,
+        annotate_section_title,
+        extract_tables_pdfplumber,
+        stitch_continuation_tables,
+    )
+    TABLE_ENGINE_AVAILABLE = True
+except ImportError:
+    TABLE_ENGINE_AVAILABLE = False
+
 
 
 try:
@@ -89,9 +100,11 @@ class PageContent:
     page_num: int
     text: str = ""
     tables: List[str] = field(default_factory=list)
+    rich_tables: List[object] = field(default_factory=list)   # RichTable objects (table_engine)
     image_texts: List[str] = field(default_factory=list)
     image_bytes: List[bytes] = field(default_factory=list)
     content_type: str = "text"  # text, table, image_ocr, subtitle
+    section_title: str = ""    # Most recent heading above this content
 
 
 @dataclass
@@ -306,6 +319,11 @@ def _parse_docling(file_path: str) -> ParseResult:
         doc = result.document
 
         pages_dict = {}
+        # Track last seen section heading so each table gets its owning title
+        last_section_header: str = ""
+        # Accumulate tables per page for stitching
+        tables_by_page: dict = {}
+        table_counter = 0
 
         # Iterate through all layout items detected by Docling
         for item, level in doc.iterate_items():
@@ -314,24 +332,50 @@ def _parse_docling(file_path: str) -> ParseResult:
                 page_no = item.prov[0].page_no
 
             if page_no not in pages_dict:
-                pages_dict[page_no] = PageContent(page_num=page_no, text="", tables=[], image_texts=[], image_bytes=[])
+                pages_dict[page_no] = PageContent(
+                    page_num=page_no, text="", tables=[],
+                    rich_tables=[], image_texts=[], image_bytes=[]
+                )
 
             page_content = pages_dict[page_no]
             item_type = type(item).__name__
 
-            if item_type == "TableItem":
+            if item_type == "SectionHeaderItem":
+                # Update the running section header tracker
+                header_text = _normalize_superscripts(item.text)
+                last_section_header = header_text
+                page_content.text += f"\n## {header_text}\n\n"
+                page_content.section_title = header_text
+
+            elif item_type == "TableItem":
                 table_md = item.export_to_markdown(doc)
-                # Apply same superscripts / merged cell text normalizations
                 table_md = _normalize_superscripts(table_md)
-                table_text = f"[TABLE - Page {page_no}]\n{table_md}"
+                # Prepend the owning section title to the table label
+                section_label = f" (section: {last_section_header})" if last_section_header else ""
+                table_text = f"[TABLE - Page {page_no}{section_label}]\n{table_md}"
                 page_content.tables.append(table_text)
-            
+
+                # Build a RichTable from the Docling markdown
+                if TABLE_ENGINE_AVAILABLE:
+                    table_id = f"p{page_no}_t{table_counter}"
+                    rich = markdown_to_rich_table(
+                        table_md,
+                        table_id=table_id,
+                        section_title=last_section_header,
+                        page_no=page_no,
+                    )
+                    if rich:
+                        page_content.rich_tables.append(rich)
+                        if page_no not in tables_by_page:
+                            tables_by_page[page_no] = []
+                        tables_by_page[page_no].append(rich)
+                    table_counter += 1
+
             elif item_type == "PictureItem":
                 if hasattr(item, "caption") and item.caption:
                     caption_text = _normalize_superscripts(item.caption.text)
                     page_content.image_texts.append(f"[IMAGE CAPTION - Page {page_no}]\n{caption_text}")
-                
-                # Extract the actual high-res image bytes
+
                 try:
                     img = item.get_image(doc)
                     if img:
@@ -340,11 +384,22 @@ def _parse_docling(file_path: str) -> ParseResult:
                         page_content.image_bytes.append(img_byte_arr.getvalue())
                 except Exception as img_err:
                     print(f"[Docling] Failed to extract image on page {page_no}: {img_err}")
-            
-            elif item_type in ["TextItem", "SectionHeaderItem"]:
+
+            elif item_type == "TextItem":
                 clean_text = _enrich_mcq_text(item.text)
                 clean_text = _normalize_superscripts(clean_text)
                 page_content.text += clean_text + "\n\n"
+
+        # Multi-page table stitching
+        if TABLE_ENGINE_AVAILABLE and tables_by_page:
+            try:
+                stitched = stitch_continuation_tables(tables_by_page)
+                # Sync stitched rich_tables back into pages_dict
+                for pg, rich_list in stitched.items():
+                    if pg in pages_dict:
+                        pages_dict[pg].rich_tables = rich_list
+            except Exception as stitch_err:
+                print(f"[Docling] Table stitching failed: {stitch_err}")
 
         pages = [pages_dict[k] for k in sorted(pages_dict.keys())]
 

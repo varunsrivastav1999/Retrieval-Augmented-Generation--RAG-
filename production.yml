@@ -7,8 +7,7 @@ volumes:
     driver: local
   prod_ollama_data:
     driver: local
-  prod_neo4j_data:
-    driver: local
+
   prod_media:
     driver: local
   prod_backup_data:
@@ -37,8 +36,6 @@ services:
         condition: service_healthy
       ollama:
         condition: service_healthy
-      neo4j:
-        condition: service_healthy
       models:
         condition: service_completed_successfully
     volumes:
@@ -61,7 +58,6 @@ services:
       - ./.envs/.production/.postgres
       - ./.envs/.production/.qdrant
       - ./.envs/.production/.redis
-      - ./.envs/.production/.neo4j
     ports:
       - "1000:1000"
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "1000", "--workers", "1"]
@@ -255,39 +251,3 @@ services:
     networks:
       rag_network:
         ipv4_address: 172.28.0.50
-  neo4j:
-    image: neo4j:5.17.0
-    container_name: neo4j_rag_prod
-    restart: unless-stopped
-    volumes:
-      - prod_neo4j_data:/data
-    environment:
-      - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-rag_password}
-      - NEO4J_server_memory_pagecache_size=2G
-      - NEO4J_server_memory_heap_max__size=4G
-      - NEO4J_server_memory_heap_initial__size=1G
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-    networks:
-      rag_network:
-        ipv4_address: 172.28.0.60
-    healthcheck:
-      test: ["CMD", "cypher-shell", "-u", "${NEO4J_USER:-neo4j}", "-p", "${NEO4J_PASSWORD:-rag_password}", "RETURN 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          cpus: "2"
-          memory: 8G
-        reservations:
-          cpus: "1"
-          memory: 4G
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "3"

@@ -52,15 +52,20 @@ class DocumentChunk(Base):
     doc_metadata = Column(JSON)
     embedding_model = Column(String, default=LEGACY_EMBEDDING_MODEL, nullable=False, index=True)
     created_at = Column(DateTime, default=utcnow, nullable=False)
-    # --- NEW columns for 17-layer architecture ---
+    # --- columns for 17-layer architecture ---
     file_type = Column(String, default="pdf", nullable=True, index=True)
     parent_chunk_id = Column(Integer, nullable=True, index=True)
     confidence_score = Column(Float, nullable=True)
     # Note: Vectors are now stored in Qdrant. These columns only hold textual metadata.
-    # --- NEW columns for Multi-modal / Vision ---
+    # --- Multi-modal / Vision ---
     quantized_embedding = Column(Text, nullable=True)
-    # --- NEW columns for RAPTOR ---
+    # --- RAPTOR ---
     raptor_level = Column(Integer, default=0, nullable=False, index=True)
+    # --- Table-aware columns (v5.0) ---
+    table_id = Column(String, nullable=True, index=True)       # Stable table identifier
+    section_title = Column(String, nullable=True, index=True)  # Owning document section
+    nl_representation = Column(Text, nullable=True)            # NL sentence for the row
+    # cell_values and header_path stored inside doc_metadata JSON (no ALTER TABLE needed)
 
 
 class IngestionJob(Base):
@@ -109,9 +114,39 @@ def _execute_best_effort(conn, statement: str):
 
 
 def _run_schema_migrations():
-    # SQLite schema updates should be done via alembic or fresh db
-    # We rely on Base.metadata.create_all for initial setup
-    pass
+    """Safe, additive schema migrations via best-effort ALTER TABLE."""
+    with engine.connect() as conn:
+        # v5.0 — table-aware columns
+        _execute_best_effort(conn, "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS table_id VARCHAR")
+        _execute_best_effort(conn, "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS section_title VARCHAR")
+        _execute_best_effort(conn, "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS nl_representation TEXT")
+
+        # v5.1 — document format classifier columns
+        _execute_best_effort(conn, "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS content_format VARCHAR")
+        _execute_best_effort(conn, "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS structured_content JSONB")
+
+        # Indexes for table-aware retrieval
+        _execute_best_effort(conn,
+            "CREATE INDEX IF NOT EXISTS idx_chunks_table_id ON document_chunks(table_id)")
+        _execute_best_effort(conn,
+            "CREATE INDEX IF NOT EXISTS idx_chunks_section_title ON document_chunks(section_title)")
+        _execute_best_effort(conn,
+            "CREATE INDEX IF NOT EXISTS idx_chunks_content_format ON document_chunks(content_format)")
+        # GIN index on doc_metadata for cell_values JSON queries
+        _execute_best_effort(conn,
+            "CREATE INDEX IF NOT EXISTS idx_chunks_metadata_gin ON document_chunks USING gin(doc_metadata)")
+        _execute_best_effort(conn,
+            "CREATE INDEX IF NOT EXISTS idx_chunks_structured_gin ON document_chunks USING gin(structured_content)")
+
+    # v5.1 — canonical table store (separate table for 0-token SQL exact lookup)
+    try:
+        from app.rag.canonical_table_store import init_canonical_store
+        with SessionLocal() as session:
+            init_canonical_store(session)
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"[DB] Canonical store init failed: {e}")
 
 
 def get_db():

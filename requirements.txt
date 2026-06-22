@@ -1,45 +1,47 @@
+# --- CORE (Required) ---
 fastapi==0.104.1
 uvicorn==0.23.2
-sentence-transformers==2.7.0
-transformers==4.38.0
-torch==2.2.2
-rank_bm25==0.2.2
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+qdrant-client==1.7.3
 redis==5.0.1
 pydantic==2.7.4
 python-multipart==0.0.6
-scikit-learn==1.3.2
-SQLAlchemy==2.0.23
-psycopg2-binary==2.9.9
-qdrant-client==1.7.3
+python-dotenv==1.0.0
 requests==2.32.3
 httpx==0.25.1
-Pillow==10.2.0
-pytesseract==0.3.10
-python-dotenv==1.0.0
-pysubs2==1.7.2
-chardet==5.2.0
-spacy==3.8.2
-# --- AI/ML Models Used ---
-# 1. Text Embedding: sentence-transformers/all-MiniLM-L6-v2 (Auto-downloaded by sentence-transformers)
-# 2. Vision/Image Embedding: sentence-transformers/clip-ViT-B-32 (Auto-downloaded by sentence-transformers)
-# 3. Reranker: cross-encoder/BAAI/bge-reranker-large
-# 4. LLM Synthesis: llama3.1:8b (Pulled via Ollama external service)
-# 5. NLP Entity Extraction: spacy en_core_web_sm (Downloaded via direct link below)
-https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz
-neo4j==5.17.0
-prometheus-client==0.20.0
-ragatouille==0.0.8
-umap-learn==0.5.5
-docling==2.5.2
-pdfplumber==0.11.0
-python-docx==1.1.2
-openpyxl==3.1.0
-python-pptx==1.0.2
---trusted-host wheels.myhloli.com
---extra-index-url https://wheels.myhloli.com
 
-# --- Evaluation Framework ---
+# --- PARSING & TABLES (Required) ---
+docling>=2.5.2
+pdfplumber>=0.11.0
+openpyxl>=3.1.0
+python-docx==1.1.2
+python-pptx==1.0.2
+
+# --- EMBEDDING & RERANKING (Required) ---
+sentence-transformers==2.7.0
+torch==2.2.2
+transformers>=4.40.0
+rank_bm25==0.2.2
+spacy==3.8.2
+
+# --- ANALYTICS (Required) ---
+duckdb>=1.0.0
+pandas>=2.0.0
+
+# --- EVALUATION ---
+deepeval>=0.21.0
 ragas==0.1.7
 datasets==2.19.0
 langchain-community==0.0.38
 langchain-core==0.1.52
+
+# --- OPTIONAL / FALLBACKS ---
+pytesseract==0.3.10
+Pillow==10.2.0
+
+# Download spacy model
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz
+
+--trusted-host wheels.myhloli.com
+--extra-index-url https://wheels.myhloli.com

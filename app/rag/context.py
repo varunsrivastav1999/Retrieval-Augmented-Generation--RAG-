@@ -1,6 +1,12 @@
 import os
+from collections import defaultdict
 from app.database import DocumentChunk
 from app.rag.model_loader import cosine_similarity, encode_text, encode_texts, get_embedding_model_id
+try:
+    from app.rag.table_engine import assemble_html_table_from_chunks
+    TABLE_ENGINE_AVAILABLE = True
+except ImportError:
+    TABLE_ENGINE_AVAILABLE = False
 
 ENABLE_CONTEXT_EXPANSION = os.getenv("RAG_ENABLE_CONTEXT_EXPANSION", "true").lower() in {"1", "true", "yes", "on"}
 BROAD_CONTEXT_SOURCE_LIMIT = int(os.getenv("RAG_BROAD_CONTEXT_SOURCE_LIMIT", "1"))
@@ -147,6 +153,46 @@ def assemble_context(query: str, reranked_chunks: list, db=None, broad_query: bo
         chunk["citation"] = f"[{source}, Page {page}]"
         
     return final_context
+
+
+def build_table_html_context(chunks: list) -> str:
+    """
+    Given retrieved chunks, separate the table_row chunks, group them by
+    table_id, sort by row_index, and return a clean HTML table string
+    suitable for injection into the LLM prompt.
+
+    Non-table chunks are returned as markdown text in a separate string.
+    Returns (html_table_str, plain_text_str).
+    """
+    if not TABLE_ENGINE_AVAILABLE:
+        return "", ""
+
+    table_chunks = []
+    text_chunks = []
+
+    for chunk in chunks:
+        meta = chunk.get("metadata", {})
+        is_table = (
+            meta.get("table_id")
+            or meta.get("table_group")
+            or meta.get("type") == "table_row"
+            or "| " in chunk.get("text", "")[:100]
+        )
+        if is_table:
+            table_chunks.append(chunk)
+        else:
+            text_chunks.append(chunk)
+
+    html = ""
+    if table_chunks:
+        try:
+            html = assemble_html_table_from_chunks(table_chunks)
+        except Exception as e:
+            print(f"[Context] HTML table assembly failed: {e}")
+            html = ""
+
+    plain = "\n\n".join(c.get("text", "") for c in text_chunks)
+    return html, plain
 
 def _append_broad_document_context(final_context: list, expanded_ids: set, seed_chunks: list, db) -> None:
     """For setup/overview questions, include ordered coverage from the best source document."""

@@ -27,10 +27,33 @@ from sqlalchemy.exc import IntegrityError
 
 from app.database import DocumentChunk, SessionLocal
 from app.rag.jobs import complete_ingestion_job, fail_ingestion_job, update_ingestion_job
-from app.rag.model_loader import encode_texts, get_embedding_model_id, extract_entities, encode_image, get_ollama_generate_url, OLLAMA_MODEL, RAG_EMBEDDING_QUANTIZE
-from app.rag.graph import graph_db
+from app.rag.model_loader import encode_texts, get_embedding_model_id, get_ollama_generate_url, OLLAMA_MODEL, RAG_EMBEDDING_QUANTIZE
 from app.rag.parsers import ParseResult, get_file_type, parse_file
 from app.rag.extraction import looks_like_extractable_page, extract_structured_data_from_page, format_structured_data_for_embedding
+try:
+    from app.rag.table_engine import chunk_rich_table, classify_query, extract_catalogue_patterns
+    TABLE_ENGINE_AVAILABLE = True
+except ImportError:
+    TABLE_ENGINE_AVAILABLE = False
+try:
+    from app.rag.canonical_table_store import (
+        rich_table_to_canonical_rows,
+        upsert_canonical_rows,
+        delete_doc_rows,
+        init_canonical_store,
+    )
+    CANONICAL_STORE_AVAILABLE = True
+except ImportError:
+    CANONICAL_STORE_AVAILABLE = False
+try:
+    from app.rag.doc_classifier import (
+        classify_and_enrich_text_block,
+        detected_content_to_chunk,
+        ContentType,
+    )
+    DOC_CLASSIFIER_AVAILABLE = True
+except ImportError:
+    DOC_CLASSIFIER_AVAILABLE = False
 from PIL import Image
 import io
 
@@ -43,6 +66,7 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB per image for CLIP vision pipeline
 PARENT_CHUNK_SIZE = 2400  # Parent chunks for broad retrieval
 CHILD_CHUNK_SIZE = 600   # Child chunks for precise retrieval
 CHUNK_OVERLAP = 150       # Overlap between chunks
+TABLE_ROW_ADJACENT = 1   # ±N adjacent rows included in each table row chunk
 
 
 def hash_chunk(text: str) -> str:
@@ -396,21 +420,45 @@ def ingest_file(
             if cleaned_text and cleaned_text.strip():
                 page_chunks.extend(semantic_chunking(cleaned_text))
                 
-            # 2. Chunk tables into PER-ROW entries (each row gets column headers!)
-            #    This is the KEY fix for lookup queries like "SNC2448L1125c door kit"
-            for table_idx, table_md in enumerate(page.tables):
-                if table_md and table_md.strip():
-                    unique_table_group = f"{os.path.basename(file_path)}_p{page.page_num}_t{table_idx}"
-                    table_parts = chunk_table_per_row(table_md, unique_table_group)
-                    for t_part in table_parts:
-                        page_chunks.append({
-                            "text": t_part["text"],
-                            "is_parent": True,
-                            "parent_idx": None,
-                            "child_idx": None,
-                            "content_type": "table",
-                            "table_group": t_part.get("table_group"),
-                        })
+            # 2. Chunk tables — prefer RichTable objects (1 row per chunk with full context)
+            #    Also upsert into canonical_table_rows for 0-token SQL exact lookup
+            if TABLE_ENGINE_AVAILABLE and getattr(page, 'rich_tables', None):
+                for rich_table in page.rich_tables:
+                    rich_table.section_title = rich_table.section_title or getattr(page, 'section_title', '')
+
+                    # a) Canonical store (JSONB rows for exact SQL lookup)
+                    if CANONICAL_STORE_AVAILABLE:
+                        try:
+                            can_rows = rich_table_to_canonical_rows(
+                                rich_table, tenant_id, file_path, os.path.basename(file_path)
+                            )
+                            upsert_canonical_rows(db, can_rows)
+                        except Exception as e:
+                            print(f"[Ingestion] Canonical store upsert failed: {e}")
+
+                    # b) Vector chunks (1 row per chunk for embedding)
+                    row_chunks = chunk_rich_table(rich_table, doc_title, max_adjacent_rows=TABLE_ROW_ADJACENT)
+                    for rc in row_chunks:
+                        page_chunks.append(rc)
+            else:
+                # Legacy path: markdown-based 1-row chunking
+                for table_idx, table_md in enumerate(page.tables):
+                    if table_md and table_md.strip():
+                        unique_table_group = f"{os.path.basename(file_path)}_p{page.page_num}_t{table_idx}"
+                        section = getattr(page, 'section_title', '')
+                        table_parts = chunk_table_per_row(table_md, unique_table_group)
+                        for t_part in table_parts:
+                            pc = {
+                                "text": t_part["text"],
+                                "is_parent": True,
+                                "parent_idx": None,
+                                "child_idx": None,
+                                "content_type": "table",
+                                "table_group": t_part.get("table_group"),
+                                "section_title": section,
+                            }
+                            page_chunks.append(pc)
+
                         
             # 3. Add Image OCR text as standalone chunks
             for img_txt in page.image_texts:
@@ -450,8 +498,24 @@ def ingest_file(
                         section += 1
                         continue
 
-                # Detect content type
+                # Detect content type — use doc_classifier for rich format detection
                 content_type = chunk_info.get("content_type", "text")
+                detected_content = None
+                if content_type in ("text", "paragraph") and DOC_CLASSIFIER_AVAILABLE:
+                    try:
+                        detected_content = classify_and_enrich_text_block(
+                            raw_text,
+                            page_num=page.page_num,
+                            section_title=chunk_info.get("section_title", getattr(page, 'section_title', '')),
+                        )
+                        if detected_content.content_type != ContentType.PARAGRAPH:
+                            content_type = detected_content.content_type
+                            # Use the enriched chunk text (adds [MCQ], [FILL_BLANK], etc. tags)
+                            chunk_text = f"{header}\n{detected_content.chunk_text}"
+                    except Exception as e:
+                        print(f"[Ingestion] Doc classifier failed: {e}")
+
+                # Fallback legacy type detection
                 if content_type == "text":
                     if raw_text.startswith("[TABLE"):
                         content_type = "table"
@@ -466,6 +530,7 @@ def ingest_file(
 
                 pending_chunks.append({
                     "text": chunk_text,
+                    "nl_text": (detected_content.nl_sentence if detected_content else None) or chunk_info.get("nl_text", chunk_text),
                     "hash": chunk_hash,
                     "type": content_type,
                     "page_num": page.page_num,
@@ -474,15 +539,21 @@ def ingest_file(
                     "is_parent": chunk_info.get("is_parent", False),
                     "parent_idx": chunk_info.get("parent_idx"),
                     "child_idx": chunk_info.get("child_idx"),
-                    "entities": extract_entities(chunk_text),
-                    "table_group": chunk_info.get("table_group"),
+                    "entities": [], # GraphRAG extracted entities removed for VRAM
+                    "table_group": chunk_info.get("table_group") or chunk_info.get("table_id"),
+                    "table_id": chunk_info.get("table_id") or chunk_info.get("table_group"),
+                    "section_title": chunk_info.get("section_title", getattr(page, 'section_title', '')),
+                    "cell_values": chunk_info.get("json_cells"),
+                    "header_path": chunk_info.get("header_path", []),
+                    "row_index": chunk_info.get("row_index"),
                     "global_context": doc_context_summary,
+                    # --- Doc format classifier fields (v5.1) ---
+                    "structured_data": detected_content.structured_data if detected_content else chunk_info.get("structured_data"),
+                    "search_tags": detected_content.search_tags if detected_content else chunk_info.get("search_tags", []),
+                    "format_confidence": detected_content.confidence if detected_content else 1.0,
                 })
                 section += 1
                 
-                # Graph DB: populate offline graph
-                graph_db.populate_from_chunk(chunk_hash, chunk_text, tenant_id)
-
                 # --- Layer 4: Batch Embedding (batch=32) ---
                 if len(pending_chunks) >= BATCH_SIZE:
                     inserted = _process_chunk_batch(
@@ -513,9 +584,8 @@ def ingest_file(
                         img = Image.open(io.BytesIO(img_bytes))
                         img.verify()  # Catch truncation/corruption early
                         img = Image.open(io.BytesIO(img_bytes))  # Re-open after verify
-                        vector = encode_image(img)
-                        if not vector:
-                            continue
+                        # Vision model removed to save VRAM
+                        continue
                         img_hash = hash_chunk(str(img_bytes))
                         # Collect all OCR texts from this page as context for LLM
                         img_ocr_text = " ".join(getattr(page, "image_texts", []) or [])
@@ -659,6 +729,18 @@ def _process_chunk_batch(
             "child_idx": c.get("child_idx"),
             "entities": c.get("entities", []),
             "table_group": c.get("table_group"),
+            # --- Table-aware fields ---
+            "table_id": c.get("table_id") or c.get("table_group"),
+            "section_title": c.get("section_title", ""),
+            "cell_values": c.get("cell_values"),
+            "header_path": c.get("header_path", []),
+            "row_index": c.get("row_index"),
+            # --- Document format classifier fields (v5.1) ---
+            "content_type": c.get("type", "text"),   # mcq, fill_blank, form_field, specification, ...
+            "structured_data": c.get("structured_data"),  # MCQ options, form fields, spec values
+            "search_tags": c.get("search_tags", []),     # Boosted BM25 terms
+            "format_confidence": c.get("format_confidence", 1.0),
+            "nl_sentence": c.get("nl_text"),             # Embeddable NL sentence
         }
         
         chunk_obj = DocumentChunk(
@@ -689,6 +771,12 @@ def _process_chunk_batch(
                             "text_content": c["text"],
                             "section": c["section"],
                             "table_group": c.get("table_group"),
+                            # NEW table-aware payload fields (enables Qdrant metadata filters)
+                            "table_id": c.get("table_id") or c.get("table_group"),
+                            "section_title": c.get("section_title", ""),
+                            "cell_values": c.get("cell_values"),
+                            "header_path": c.get("header_path", []),
+                            "row_index": c.get("row_index"),
                             "metadata": doc_metadata
                         }
                     )

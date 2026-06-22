@@ -12,15 +12,11 @@ EMBEDDING_DIM = int(os.getenv("RAG_EMBEDDING_DIM", "1024"))
 RAG_ENV = os.getenv("RAG_ENV", "local").lower()
 EMBEDDING_MODEL = os.getenv(
     "RAG_EMBEDDING_MODEL",
-    "BAAI/bge-large-en-v1.5",
-)
-CLIP_MODEL = os.getenv(
-    "RAG_CLIP_MODEL",
-    "sentence-transformers/clip-ViT-L-14"
+    "BAAI/bge-small-en-v1.5",
 )
 RERANKER_MODEL = os.getenv(
     "RAG_RERANKER_MODEL",
-    "BAAI/bge-reranker-large",
+    "BAAI/bge-reranker-base",
 )
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 MODEL_CACHE_DIR = os.getenv("HF_HOME")
@@ -461,76 +457,4 @@ if __name__ == "__main__":
     print("  PRE-LOADING COMPLETE. YOU CAN NOW START IN OFFLINE MODE.")
     print("="*60 + "\n")
 
-# ---------------------------------------------------------------------------
-# Offline Vision (CLIP) & Offline Graph (spaCy) Additions
-# ---------------------------------------------------------------------------
-@lru_cache(maxsize=1)
-def get_clip_model() -> Any:
-    try:
-        from sentence_transformers import SentenceTransformer
-        print(f"[RAG Vision] Loading CLIP model: {CLIP_MODEL} on CPU (VRAM optimization)")
-        return SentenceTransformer(CLIP_MODEL, device="cpu")
-    except Exception as exc:
-        print(f"[RAG Vision] CLIP Model failed to load: {exc}")
-        return None
 
-def encode_image(image) -> Optional[List[float]]:
-    """Encode a PIL Image using CLIP for multi-modal vector search."""
-    model = get_clip_model()
-    if model:
-        return model.encode(image).tolist()
-    return None
-
-def encode_image_text_query(text: str) -> Optional[List[float]]:
-    """Encode a user's text query using CLIP to search against image vectors."""
-    model = get_clip_model()
-    if model:
-        return model.encode(text).tolist()
-    return None
-
-@lru_cache(maxsize=1)
-def get_spacy_model() -> Any:
-    try:
-        import spacy
-        print("[RAG Graph] Loading offline spaCy model (en_core_web_sm)")
-        return spacy.load("en_core_web_sm")
-    except Exception as exc:
-        print(f"[RAG Graph] spaCy Model failed to load: {exc}")
-        return None
-
-def extract_entities(text: str) -> List[str]:
-    """Offline Knowledge Graph: Extract entities like Products/Organizations."""
-    nlp = get_spacy_model()
-    if not nlp or not text:
-        return []
-    try:
-        doc = nlp(text[:100000]) # Limit chunk to 100k chars for fast NER
-        entities = []
-        for ent in doc.ents:
-            if ent.label_ in {"PERSON", "ORG", "GPE", "PRODUCT", "LOC", "FAC"}:
-                entities.append(ent.text)
-        return list(set(entities))
-    except Exception:
-        return []
-
-def extract_triplets(text: str) -> List[tuple]:
-    """Offline Knowledge Graph: Extract (Subject, Verb, Object) triplets using dependency parsing."""
-    nlp = get_spacy_model()
-    if not nlp or not text:
-        return []
-    try:
-        doc = nlp(text[:10000]) # Limit chunk to 10k chars for fast dependency parsing
-        triplets = []
-        for sent in doc.sents:
-            subjects = [tok for tok in sent if ("subj" in tok.dep_)]
-            objects = [tok for tok in sent if ("obj" in tok.dep_)]
-            verbs = [tok for tok in sent if tok.pos_ == "VERB"]
-            
-            if subjects and objects and verbs:
-                verb = verbs[0].lemma_
-                subj = subjects[0].text
-                obj = objects[0].text
-                triplets.append((subj, verb, obj))
-        return list(set(triplets))
-    except Exception:
-        return []

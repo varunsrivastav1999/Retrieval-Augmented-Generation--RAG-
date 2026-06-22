@@ -1,12 +1,13 @@
 <div align="center">
-  <h1>Enterprise Level RAG — World-Class 17-Layer Production Engine</h1>
+  <h1>Enterprise Level RAG — World-Class 18-Layer Production Engine</h1>
   <p><strong>Developed & Owned by: Varun Srivastav</strong></p>
-  <p><strong>Zero-Hallucination · Sub-10ms Extractive Mode · 30+ Formats · 100% Air-Gapped · High Concurrency</strong></p>
+  <p><strong>Zero-Hallucination · Sub-10ms Extractive Mode · 30+ Formats · 100% Air-Gapped · Enterprise Complex Table QA</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/Architecture-17--Layer_RAG-blue" alt="17-Layer RAG" />
+    <img src="https://img.shields.io/badge/Architecture-18--Layer_RAG-blue" alt="18-Layer RAG" />
+    <img src="https://img.shields.io/badge/Table_Engine-v5.0-orange" alt="Table Engine v5.0" />
     <img src="https://img.shields.io/badge/Embedding-BAAI/bge--large--en--v1.5-8A2BE2" alt="bge-large" />
-    <img src="https://img.shields.io/badge/Reranker-bge--reranker--large-8A2BE2" alt="bge-reranker" />
+    <img src="https://img.shields.io/badge/Reranker-ColBERTv2-8A2BE2" alt="ColBERT" />
     <img src="https://img.shields.io/badge/LLM-llama3.1:8b-FF6B35" alt="llama3.1:8b" />
     <img src="https://img.shields.io/badge/VectorDB-Qdrant-FE4155?logo=qdrant" alt="Qdrant" />
     <img src="https://img.shields.io/badge/MetaDB-PostgreSQL-336791?logo=postgresql" alt="PostgreSQL" />
@@ -19,12 +20,21 @@
 
 ---
 
-A **production-grade RAG engine** built for industrial-scale document understanding. Combines state-of-the-art open-source models, a 17-layer agentic pipeline, and intelligent auto-routing to deliver **sub-10ms exact-text answers** or **deep multi-document analysis** — all from a single API call.
+A **production-grade RAG engine** built for industrial-scale document understanding. Combines state-of-the-art open-source models, an 18-layer agentic pipeline, and a dedicated **Table Reconstruction Engine** to deliver **near-human accuracy on complex PDF table QA** — all from a single API call.
 
 ---
 
 ## 🌟 Key Features
 
+- **🌞 Table Reconstruction Engine v5.0**: Purpose-built `table_engine.py` for enterprise catalogue and technical document QA:
+  - **Nested Header Resolution**: Reconstructs multi-level headers (e.g., "Dimensions > W") from PDF tables.
+  - **Merged Cell Inheritance**: Bi-directional fill reconstructs rowspan/colspan merges that standard parsers flatten.
+  - **Multi-Page Table Stitching**: Detects continuation tables across pages and merges into a single `RichTable`.
+  - **1-Row-Per-Chunk Strategy**: Every data row is its own embedding chunk with full header context.
+  - **Natural-Language Row Serialization**: Rows embedded as NL sentences for better semantic matching.
+  - **HTML Table Renderer**: Context assembled as structured HTML for precise LLM column alignment.
+  - **Section Title Tracking**: Every table tagged with its owning document section title.
+- **🔍 Exact Catalogue Lookup**: Pattern-based SQL `ILIKE` lookup bypasses vector search for model/part number queries.
 - **World-Class Models**: `BAAI/bge-large-en-v1.5` (embedding, 1024d), `ColBERTv2` (late-interaction reranker via RAGatouille), `llama3.1:8b` (LLM), `CLIP-ViT-L-14` (vision, 768d).
 - **Auto Mode** (`auto: true`): Simple fact lookups return exact verbatim text in **6–15ms**; complex analysis questions route to the full LLM pipeline automatically.
 - **Extractive Mode**: Skips the LLM entirely — returns verbatim text from the top document chunk with source citation.
@@ -87,24 +97,38 @@ graph TD
 
 ---
 
-## 🛡️ 17 Processing Layers Deep Dive
+## 🛡️ 18 Processing Layers Deep Dive
 
-The pipeline is split into **Ingestion** (Layers 1-5), **Retrieval & Routing** (Layers 6-11), and **Generation & Verification** (Layers 12-17).
+The pipeline is split into **Ingestion** (Layers 0-5), **Retrieval & Routing** (Layers 6-11), and **Generation & Verification** (Layers 12-17).
+
+### Layer 0: Table Reconstruction Engine *(v5.0)* — `app/rag/table_engine.py`
+A dedicated table understanding module that executes between parsing and ingestion:
+- **`SpanMatrix` Builder**: Resolves rowspan/colspan via pdfplumber bounding-box geometry.
+- **Nested Header Resolver**: Builds `"Section > SubSection > Column"` paths for every data cell.
+- **`MultiPageTableStitcher`**: Detects continuation tables (same column count, no new headers) and merges them across pages.
+- **`RichTable`**: Structured data class with `to_markdown()`, `to_html()`, and `row_to_natural_language()` exports.
+- **`classify_query()`**: Fast rule-based query classifier (`table_lookup` / `table_compare` / `table_aggregate` / `text`).
+- **`extract_catalogue_patterns()`**: Regex detection for model/part numbers for instant SQL filtering.
 
 ### Phase 1: Universal Ingestion Engine
-1. **Layer 1: Universal Parser** (`app/rag/parsers.py`): Automatically detects file type from 30+ formats. Uses IBM Docling for perfect table structure and MinerU (Magic-PDF) for heavy PDFs. Gracefully falls back to native parsers (e.g., pdfplumber, openpyxl, python-pptx) if needed.
+1. **Layer 1: Universal Parser** (`app/rag/parsers.py`): Automatically detects file type from 30+ formats. **Section headings are tracked**—every table is annotated with its owning section title. Multi-page stitching runs post-parse.
 2. **Layer 2: Smart OCR & Vision Extraction**: Tesseract OCR extracts text from floating images. High-res images are extracted as raw bytes, embedded natively via the CLIP vision model, and passed alongside their captions.
-3. **Layer 3: Semantic Parent-Child Chunking & Table Processing** (`app/rag/ingestion.py`): Instead of blindly slicing by character count, it chunks naturally by semantic boundaries (paragraphs). **Crucially**, massive tables are split precisely into 5-row blocks with column headers repeated and assigned globally unique `table_group` IDs to prevent LLM context-flooding during retrieval.
-4. **Layer 4: Batch Vector Embedding**: Encodes chunks in highly optimized parallel batches using `bge-large-en-v1.5`. Vectors are INT8 Quantized natively via TurboQuant (4x-8x size reduction) and stored in Qdrant.
+3. **Layer 3: Table-Aware 1-Row-Per-Chunk** (`app/rag/ingestion.py`): **1 row per chunk** (was 5-row groups). Each chunk carries: full resolved header path, section title, `{header: value}` JSON cells, row ordinal, and context. Plain text uses semantic paragraph chunking.
+4. **Layer 4: Dual Embedding**: Encodes text via `bge-large-en-v1.5` (1024d) and table rows via NL-serialized sentences for optimized semantic search. Vectors are INT8 Quantized natively and stored in Qdrant.
 5. **Layer 5: RAPTOR Hierarchical Indexing**: Background workers continuously cluster vector embeddings via UMAP and Gaussian Mixture Models (GMM), summarizing them upward to provide answers for broad, document-spanning questions.
 
 ### Phase 2: Retrieval & Intelligence
-6. **Layer 6: Hybrid Multi-Modal Search** (`app/rag/retrieval.py`): Concurrently runs Dense Vector Search (Qdrant), HyDE (Hypothetical Document Embeddings), CLIP Vision Search, and Sparse BM25 (PostgreSQL Full-Text).
-7. **Layer 7: Late-Interaction Reranking**: Re-scores the top hybrid search candidates using the cross-encoder `ColBERTv2` model to understand the deep semantic relationship between the query and each chunk.
-8. **Layer 8: Max Marginal Relevance (MMR) & Expansion**: Balances relevance with diversity (MMR). Also dynamically executes **Table Sibling Expansion**—fetching exactly the right remaining rows for a retrieved table using the unique `table_group` ID so the LLM gets the complete grid without noise.
-9. **Layer 9: Contextual Assembly & Compression** (`app/rag/context.py`): Compresses overflowing text chunks while absolutely preserving table structures. Formats strict source citations `[filename.pdf, Page X]`.
-10. **Layer 10: Agentic Router**: LLM analyzes the query intent to route to the correct sub-engine (Extractive Fast-Path, Vector DB, SQL Analytics, or Knowledge Graph).
-11. **Layer 11: Query Intelligence**: Expands the user's query into multiple sub-queries, auto-corrects spelling, and adds technical synonyms to vastly improve retrieval recall.
+6. **Layer 6: 5-Signal Hybrid Search** (`app/rag/retrieval.py`): Five parallel retrieval signals fused via Reciprocal Rank Fusion:
+   - **① Exact SQL ILIKE** — catalogue/model number exact text match (score 2.0, highest priority)
+   - **② Dense Vector** — Qdrant HNSW cosine search (bge-large-en-v1.5)
+   - **③ HyDE** — Hypothetical Document Embedding for semantic retrieval
+   - **④ CLIP Vision** — image/diagram retrieval via vision model
+   - **⑤ BM25 Postgres** — table-noise-cleaned full-text search (strips `|` and `---` tokens)
+7. **Layer 7: ColBERT Late-Interaction Reranking**: Re-scores top candidates using `ColBERTv2` cross-encoder for deep semantic alignment.
+8. **Layer 8: MMR + Table Group Expansion**: MMR diversity pruning. Table row hits trigger `table_group` Qdrant scroll to fetch all sibling rows so the LLM sees the complete grid.
+9. **Layer 9: Table-Aware Context Assembly** (`app/rag/context.py`): Table chunks → HTML table via `build_table_html_context()` for precise column alignment. Text chunks → parent-child window expansion. Strict `[filename.pdf, Page X]` citations attached.
+10. **Layer 10: Agentic Router**: LLM analyzes query intent to route to Extractive/Vector/SQL/GraphRAG sub-engine.
+11. **Layer 11: Query Intelligence**: Multi-query expansion, spelling correction, technical synonym injection for maximum retrieval recall.
 
 ### Phase 3: Generation & Anti-Hallucination
 12. **Layer 12: Grounding Guard**: The pre-generation hallucination block. Compares query keywords against retrieved context. If the overlap and similarity fall below a strict threshold (e.g., `0.35`), the LLM is blocked from answering and forced to return "Information Not Found."

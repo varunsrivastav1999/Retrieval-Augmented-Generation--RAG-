@@ -60,8 +60,7 @@ from app.rag.jobs import (
 )
 from app.rag.model_loader import get_embedding_model_id, runtime_model_info, validate_runtime_models
 from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search
-from app.rag.router import query_router
-from app.rag.graph import graph_db
+from app.rag.query_router import query_router, get_execution_strategy, QueryRoute
 from app.rag.reranker import rerank_results
 from app.rag.context import assemble_context
 from app.rag.grounding import (
@@ -389,8 +388,7 @@ def on_shutdown():
     if ingestion_worker_thread:
         ingestion_worker_thread.join(timeout=5)
     try:
-        from app.rag.graph import graph_db
-        graph_db.close()
+        pass
     except Exception:
         pass
 
@@ -1031,7 +1029,6 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 self.current_state = "route"
                 self.queries_to_search = [search_query]
                 self.metadata_filters = None
-                self.graph_context = ""
                 self.final_context = []
                 self.grounding_result = None
                 self.retry_count = 0
@@ -1057,16 +1054,6 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 print(f"[Agent:Router] Routed to: {route.upper()}")
                 if route == "sql":
                     agent.metadata_filters = text_to_sql_filters(search_query)
-                elif route == "graph":
-                    agent.graph_context = graph_db.query_graph(search_query, tenant_id)
-                    if agent.graph_context:
-                        agent.final_context = [{"text": agent.graph_context, "metadata": {"type": "graph", "source": "Neo4j"}}]
-                        agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
-                        agent.sources = ["Neo4j Knowledge Graph"]
-                        agent.current_state = "generate"
-                        continue
-                    else:
-                        route = "vector"
                 elif route == "raptor":
                     # Fetch highest-level RAPTOR summaries
                     highest_level_summaries = db.query(DocumentChunk).filter(

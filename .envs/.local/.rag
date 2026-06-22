@@ -38,7 +38,6 @@ RAG_MODEL_DEVICE=
 RAG_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
 RAG_EMBEDDING_DIM=1024
 RAG_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
-RAG_CLIP_MODEL=sentence-transformers/clip-ViT-L-14
 RAG_HF_OFFLINE=false
 RAG_ALLOW_HASH_FALLBACK=true
 RAG_ALLOW_RERANKER_FALLBACK=true
@@ -60,9 +59,7 @@ RAG_USE_HALFVEC=false
 # ------------------------------------------------------------------------------
 RAG_ENABLE_CONTEXT_EXPANSION=false
 
-# Neo4j Graph (optional — app runs fine without it)
-# ------------------------------------------------------------------------------
-NEO4J_URI=bolt://neo4j:7687
+
 
 # Ingestion Worker
 # ------------------------------------------------------------------------------

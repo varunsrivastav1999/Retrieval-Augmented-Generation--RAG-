@@ -1,5 +1,6 @@
 import requests
 import os
+import re
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from qdrant_client.http import models
@@ -14,6 +15,13 @@ from app.rag.model_loader import (
     get_ollama_generate_url,
     OLLAMA_MODEL,
 )
+try:
+    from app.rag.table_engine import extract_catalogue_patterns, classify_query, QueryType
+    TABLE_ENGINE_AVAILABLE = True
+except ImportError:
+    TABLE_ENGINE_AVAILABLE = False
+    def extract_catalogue_patterns(q): return []
+    def classify_query(q): return "text"
 
 RRF_K = 60
 DENSE_WEIGHT = 0.5
@@ -40,6 +48,12 @@ def _candidate_from_payload(point_id: str, payload: dict, distance: float) -> di
             "file_type": payload.get("file_type", metadata.get("file_type", "unknown")),
             "entities": metadata.get("entities", []),
             "table_group": payload.get("table_group", metadata.get("table_group")),
+            # --- table-aware fields (v5.0) ---
+            "table_id": payload.get("table_id", metadata.get("table_id")),
+            "section_title": payload.get("section_title", metadata.get("section_title", "")),
+            "cell_values": payload.get("cell_values", metadata.get("cell_values")),
+            "header_path": payload.get("header_path", metadata.get("header_path", [])),
+            "row_index": payload.get("row_index", metadata.get("row_index")),
         }
     }
 
@@ -69,7 +83,11 @@ def _generate_hyde(query: str) -> str:
     return ""
 
 def _perform_postgres_bm25(db: Session, query: str, tenant_id: str, limit: int) -> list:
-    """Uses PostgreSQL's native Full-Text Search (tsvector) for sparse keyword match."""
+    """Uses PostgreSQL's native Full-Text Search (tsvector) for sparse keyword match.
+    Table-aware: strips markdown pipe characters before tokenization.
+    """
+    # Strip table-markdown noise so BM25 doesn't treat | and --- as tokens
+    clean_query = re.sub(r'[|\-]{2,}', ' ', query).strip()
     sql = text("""
         SELECT id, doc_id, text_content, section, file_type, doc_metadata,
                ts_rank(to_tsvector('english', text_content), plainto_tsquery('english', :query)) as rank_score
@@ -82,7 +100,7 @@ def _perform_postgres_bm25(db: Session, query: str, tenant_id: str, limit: int) 
     """)
     candidates = []
     try:
-        results = db.execute(sql, {"query": query, "tenant_id": tenant_id, "limit": limit}).fetchall()
+        results = db.execute(sql, {"query": clean_query, "tenant_id": tenant_id, "limit": limit}).fetchall()
         for row in results:
             doc_metadata = row.doc_metadata or {}
             candidates.append({
@@ -104,23 +122,98 @@ def _perform_postgres_bm25(db: Session, query: str, tenant_id: str, limit: int) 
                     "file_type": row.file_type or "unknown",
                     "entities": doc_metadata.get("entities", []),
                     "table_group": doc_metadata.get("table_group"),
+                    # table-aware fields
+                    "table_id": doc_metadata.get("table_id"),
+                    "section_title": doc_metadata.get("section_title", ""),
+                    "cell_values": doc_metadata.get("cell_values"),
+                    "header_path": doc_metadata.get("header_path", []),
+                    "row_index": doc_metadata.get("row_index"),
                 }
             })
     except Exception as e:
         print(f"[Retrieval] PostgreSQL BM25 failed: {e}")
     return candidates
 
+
+def exact_catalogue_lookup(db: Session, query: str, tenant_id: str) -> list:
+    """
+    Extract catalogue/model number patterns from the query and do a direct
+    SQL text_content LIKE search — no vector search needed for exact strings.
+    Handles patterns like ECL2412SD, SNC2448L1125, EQL40200D, DK10-1A.
+    """
+    patterns = extract_catalogue_patterns(query)
+    if not patterns:
+        return []
+
+    candidates = []
+    seen_ids: set = set()
+    for pattern in patterns[:3]:  # Cap to 3 patterns to avoid query sprawl
+        sql = text("""
+            SELECT id, doc_id, text_content, section, file_type, doc_metadata
+            FROM document_chunks
+            WHERE tenant_id = :tenant_id
+              AND text_content ILIKE :pattern
+            LIMIT 20
+        """)
+        try:
+            results = db.execute(sql, {
+                "tenant_id": tenant_id,
+                "pattern": f"%{pattern}%",
+            }).fetchall()
+            for row in results:
+                if row.id in seen_ids:
+                    continue
+                seen_ids.add(row.id)
+                doc_metadata = row.doc_metadata or {}
+                candidates.append({
+                    "id": str(row.id),
+                    "text": row.text_content,
+                    "score": 2.0,           # Exact match gets highest score
+                    "hybrid_score": 2.0,
+                    "dense_score": 0.0,
+                    "file_type": row.file_type or "unknown",
+                    "table_group": doc_metadata.get("table_group"),
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "source": row.doc_id,
+                        "section": row.section,
+                        "type": doc_metadata.get("type", "text"),
+                        "page_num": doc_metadata.get("page_num"),
+                        "embedding_model": "exact_lookup",
+                        "file_type": row.file_type or "unknown",
+                        "entities": [],
+                        "table_group": doc_metadata.get("table_group"),
+                        "table_id": doc_metadata.get("table_id"),
+                        "section_title": doc_metadata.get("section_title", ""),
+                        "cell_values": doc_metadata.get("cell_values"),
+                        "header_path": doc_metadata.get("header_path", []),
+                        "row_index": doc_metadata.get("row_index"),
+                        "match_pattern": pattern,
+                    }
+                })
+        except Exception as e:
+            print(f"[Retrieval] Exact catalogue lookup failed for {pattern}: {e}")
+
+    if candidates:
+        print(f"[Retrieval] Exact catalogue lookup found {len(candidates)} matches for patterns {patterns}")
+    return candidates
+
 def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 20, metadata_filters: dict = None, fast_path: bool = False) -> list:
     print(f"[Retrieval] Executing {'fast ' if fast_path else ''}hybrid search for tenant={tenant_id!r}, query={query!r}, filters={metadata_filters}")
-    
+
     qdrant = get_qdrant_client()
-    
+
     hyde_text = None
     hyde_vector = None
     vision_vector = None
     query_entities = []
     bm25_results = []
-    
+    exact_results = []  # Catalogue number exact matches
+
+    # --- Exact catalogue lookup (fast, zero-latency SQL path) ---
+    if TABLE_ENGINE_AVAILABLE and not fast_path:
+        exact_results = exact_catalogue_lookup(db, query, tenant_id)
+
     if fast_path:
         query_vector = encode_text(query)
     else:
@@ -131,7 +224,7 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
             fut_vision = executor.submit(encode_image_text_query, query)
             fut_entities = executor.submit(extract_entities, query)
             fut_bm25 = executor.submit(_perform_postgres_bm25, db, query, tenant_id, max(top_k * 4, 50))
-            
+
             query_vector = fut_dense.result()
             hyde_text = fut_hyde.result()
             hyde_vector = encode_text(hyde_text) if hyde_text else None
@@ -229,6 +322,18 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
                 candidates[point_id]["sparse_score"] = bm25_candidate["sparse_score"]
             candidates[point_id]["hybrid_score"] += BM25_WEIGHT * _rrf_score(rank)
             candidates[point_id]["metadata"]["bm25_rank"] = rank
+
+    # Inject exact catalogue lookup results at the top of the candidate pool
+    if exact_results:
+        for exact_candidate in exact_results:
+            cid = exact_candidate["id"]
+            if cid not in candidates:
+                candidates[cid] = exact_candidate
+            else:
+                # Boost existing candidate's score
+                candidates[cid]["hybrid_score"] = max(
+                    candidates[cid]["hybrid_score"] + 1.5, exact_candidate["hybrid_score"]
+                )
 
     if not fast_path:
         for candidate in candidates.values():

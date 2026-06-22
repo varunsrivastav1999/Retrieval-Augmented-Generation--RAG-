@@ -2,7 +2,7 @@ volumes:
   local_postgres_data: {}
   local_qdrant_data: {}
   local_redis_data: {}
-  local_neo4j_data: {}
+
   local_media: {}
 services:
   rag_api:
@@ -18,8 +18,6 @@ services:
       qdrant:
         condition: service_started
       redis:
-        condition: service_healthy
-      neo4j:
         condition: service_healthy
     volumes:
       - .:/app:z
@@ -37,7 +35,6 @@ services:
       - ./.envs/.local/.postgres
       - ./.envs/.local/.qdrant
       - ./.envs/.local/.redis
-      - ./.envs/.local/.neo4j
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:1000/health/ready"]
       interval: 30s
@@ -90,20 +87,3 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
-  neo4j:
-    image: neo4j:5.17.0
-    container_name: neo4j_rag_local
-    restart: unless-stopped
-    volumes:
-      - local_neo4j_data:/data:z
-    environment:
-      - NEO4J_AUTH=neo4j/rag_password
-    expose:
-      - "7474"
-      - "7687"
-    healthcheck:
-      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "rag_password", "RETURN 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
