@@ -444,7 +444,7 @@ def ingest_file(
                 for table_idx, table_md in enumerate(page.tables):
                     if table_md and table_md.strip():
                         unique_table_group = f"{os.path.basename(file_path)}_p{page.page_num}_t{table_idx}"
-                        section = getattr(page, 'section_title', '')
+                        sec_title = getattr(page, 'section_title', '')
                         table_parts = chunk_table_per_row(table_md, unique_table_group)
                         for t_part in table_parts:
                             pc = {
@@ -454,7 +454,7 @@ def ingest_file(
                                 "child_idx": None,
                                 "content_type": "table",
                                 "table_group": t_part.get("table_group"),
-                                "section_title": section,
+                                "section_title": sec_title,
                             }
                             page_chunks.append(pc)
 
