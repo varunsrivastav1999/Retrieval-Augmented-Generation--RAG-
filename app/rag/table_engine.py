@@ -69,6 +69,10 @@ class RichTable:
         lines = ["| " + " | ".join(headers) + " |", "| " + sep + " |"]
         for row in self.data_rows:
             cells = [c.text.replace("|", "\\|").replace("\n", " ") for c in row]
+            # Pad or trim cells to match header count (prevents silent data loss)
+            while len(cells) < len(headers):
+                cells.append("")
+            cells = cells[:len(headers)]
             lines.append("| " + " | ".join(cells) + " |")
         return "\n".join(lines)
 
@@ -307,6 +311,10 @@ def _fill_empty_cells(rows: List[List[TableCell]]) -> List[List[TableCell]]:
     Bi-directional empty cell inheritance.
     Forward fill (top-to-bottom) then backward fill (bottom-to-top)
     to reconstruct merged cells that were flattened.
+
+    Uses column fill-rate heuristic: only fills columns where < 50% of cells
+    have data (indicating they are likely merged/spanning cells).
+    Columns with > 50% fill are treated as having their own data per-row.
     """
     if not rows:
         return rows
@@ -318,15 +326,26 @@ def _fill_empty_cells(rows: List[List[TableCell]]) -> List[List[TableCell]]:
         while len(row) < col_count:
             row.append(TableCell())
 
-    # Forward fill (top → bottom)
+    # Calculate fill rate per column to identify truly merged columns
+    n_rows = len(rows)
+    col_fill_rate = []
+    for c_idx in range(col_count):
+        filled = sum(1 for r in rows if r[c_idx].text.strip())
+        col_fill_rate.append(filled / max(n_rows, 1))
+
+    # Forward fill (top → bottom) — only for columns with low fill rate (likely merged)
     for r_idx in range(1, len(rows)):
         for c_idx in range(col_count):
+            if col_fill_rate[c_idx] > 0.5:
+                continue  # This column has its own data per-row, don't fill
             if not rows[r_idx][c_idx].text and rows[r_idx - 1][c_idx].text:
                 rows[r_idx][c_idx].text = rows[r_idx - 1][c_idx].text
 
-    # Backward fill (bottom → top)
+    # Backward fill (bottom → top) — only for columns with low fill rate
     for r_idx in range(len(rows) - 2, -1, -1):
         for c_idx in range(col_count):
+            if col_fill_rate[c_idx] > 0.5:
+                continue  # This column has its own data per-row, don't fill
             if not rows[r_idx][c_idx].text and rows[r_idx + 1][c_idx].text:
                 rows[r_idx][c_idx].text = rows[r_idx + 1][c_idx].text
 
@@ -381,10 +400,16 @@ def _is_continuation(table_a: RichTable, table_b: RichTable) -> bool:
     """
     Returns True if table_b is a continuation of table_a.
     Checks:
-    1. Column count matches (±1 tolerance)
-    2. table_b has no header rows (or headers identical to table_a)
-    3. First data row of table_b is NOT a full header row (all text, no numbers)
+    1. Section titles must match (if both present)
+    2. Column count matches (±1 tolerance)
+    3. table_b has no header rows (or headers identical to table_a)
+    4. First data row of table_b is NOT a full header row (all text, no numbers)
     """
+    # If both tables have explicit section titles and they differ, it's a new table
+    if (table_a.section_title and table_b.section_title
+            and table_a.section_title.strip() != table_b.section_title.strip()):
+        return False
+
     col_a = len(table_a.resolved_headers) or len(table_a.raw_headers)
     col_b = len(table_b.resolved_headers) or len(table_b.raw_headers)
 
@@ -633,7 +658,8 @@ def assemble_html_table_from_chunks(chunks: List[Dict]) -> str:
             lines.append("<thead><tr>" + "".join(f"<th>{h}</th>" for h in headers) + "</tr></thead>")
         lines.append("<tbody>")
         for row in rows:
-            cells = row.get("metadata", {}).get("cell_values", {})
+            # Check both 'cell_values' (from canonical_table_store) and 'json_cells' (from chunk_rich_table)
+            cells = row.get("metadata", {}).get("cell_values", {}) or row.get("metadata", {}).get("json_cells", {})
             if cells:
                 lines.append("<tr>" + "".join(f"<td>{v}</td>" for v in cells.values()) + "</tr>")
             else:

@@ -495,6 +495,14 @@ def _extract_numeric_cells(cells: Dict[str, str]) -> Dict[str, float]:
             continue
         val_str = value.strip()
 
+        # Try parenthetical metric extraction: "36 (362)" or "14 1/4 (362)"
+        paren_pattern = re.compile(r'(\d+(?:\.\d+)?)\s*\((\d+)\)')
+        m = paren_pattern.match(val_str)
+        if m:
+            numeric[header] = float(m.group(1))  # inches
+            numeric[f"{header}_mm"] = float(m.group(2))  # mm
+            continue
+
         # Try fraction: "13-5/16"
         m = fraction_pattern.match(val_str)
         if m:
