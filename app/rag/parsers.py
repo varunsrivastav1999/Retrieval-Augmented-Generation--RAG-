@@ -25,7 +25,10 @@ from typing import List, Optional
 try:
     from docling.document_converter import DocumentConverter
     DOCLING_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    import traceback
+    print(f"[Parsers] Docling import failed: {e}")
+    traceback.print_exc()
     DOCLING_AVAILABLE = False
 
 try:
