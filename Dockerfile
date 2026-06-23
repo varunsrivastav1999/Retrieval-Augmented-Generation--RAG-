@@ -36,18 +36,20 @@ ENV HF_HOME=/models/huggingface
 ENV SENTENCE_TRANSFORMERS_HOME=/models/huggingface/sentence-transformers
 ENV HF_HUB_CACHE=/models/huggingface/hub
 
-# Install Python dependencies with pip cache
+# Install Python dependencies with pip cache mount
+# The --mount=type=cache persists /root/.cache/pip across builds so that
+# unchanged packages are NOT re-downloaded. Only new/updated packages install.
 WORKDIR /app
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
     pip install -r requirements.txt
 
-# Pre-download models# Use a lightweight python script to pre-download the model into the image
+# Pre-download models — Use a lightweight python script to pre-download the model into the image
 RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-large-en-v1.5'); SentenceTransformer('sentence-transformers/clip-ViT-L-14'); CrossEncoder('BAAI/bge-reranker-large')"
 
-# Download spaCy model (direct pip install — spacy download generates broken URLs)
-RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
+# NOTE: spaCy model en_core_web_sm-3.8.0 is already installed via requirements.txt
+# No duplicate install needed here.
 
 # ---- Stage 2: Runtime --------------------------------------------------------
 FROM python:3.10-slim AS runtime
