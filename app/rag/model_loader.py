@@ -412,6 +412,35 @@ def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
     return dot / (left_norm * right_norm)
 
 
+# ---------------------------------------------------------------------------
+# Stubs for removed CLIP vision & spaCy NER models (VRAM savings)
+# ---------------------------------------------------------------------------
+# These were full model pipelines previously. After removing CLIP and spaCy
+# to free GPU VRAM for Ollama, the retrieval pipeline still imports them for
+# the ThreadPoolExecutor-based parallel search. They must return safe no-op
+# values so the hybrid search gracefully skips vision/entity branches.
+# ---------------------------------------------------------------------------
+
+
+def encode_image_text_query(query: str) -> Optional[List[float]]:
+    """Vision CLIP encoder — removed to save VRAM.
+
+    Returns ``None`` so that the vision search branch in
+    ``retrieval.perform_hybrid_search`` is skipped (guarded by
+    ``if vision_vector:``).
+    """
+    return None
+
+
+def extract_entities(text: str) -> List[str]:
+    """spaCy NER entity extractor — removed to save VRAM.
+
+    Returns an empty list so the entity-overlap boosting branch in
+    ``retrieval.perform_hybrid_search`` is a harmless no-op.
+    """
+    return []
+
+
 if __name__ == "__main__":
     import os
     print("\n" + "="*60)

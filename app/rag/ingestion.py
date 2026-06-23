@@ -348,7 +348,6 @@ def ingest_file(
         page_count = len(parse_result.pages)
         section = 0
         pending_chunks = []
-        pending_vision_chunks = []
         total_pages = len(parse_result.pages)
         doc_title = os.path.basename(file_path)
 
@@ -572,101 +571,12 @@ def ingest_file(
                             progress_pct=round(progress, 1),
                         )
 
-            # Process any raw image bytes for Vision embeddings (batched)
-            # NOTE: images are NEVER sent to the LLM — they go through CLIP to Qdrant image_chunks.
-            # The text_content field carries OCR text so the LLM sees what was in the image.
-            if getattr(page, "image_bytes", None):
-                for idx, img_bytes in enumerate(page.image_bytes):
-                    if len(img_bytes) > MAX_IMAGE_BYTES:
-                        print(f"[Ingest] Skipping oversized image {idx} on page {page.page_num} ({len(img_bytes)} bytes)")
-                        continue
-                    try:
-                        img = Image.open(io.BytesIO(img_bytes))
-                        img.verify()  # Catch truncation/corruption early
-                        img = Image.open(io.BytesIO(img_bytes))  # Re-open after verify
-                        # Vision model removed to save VRAM
-                        continue
-                        img_hash = hash_chunk(str(img_bytes))
-                        # Collect all OCR texts from this page as context for LLM
-                        img_ocr_text = " ".join(getattr(page, "image_texts", []) or [])
-                        doc_metadata = {
-                            "page_num": page.page_num,
-                            "type": "image",
-                            "source": file_path,
-                            "embedding_model": embedding_model,
-                        }
-                        img_chunk = DocumentChunk(
-                            tenant_id=tenant_id,
-                            doc_id=file_path,
-                            chunk_hash=img_hash,
-                            text_content=img_ocr_text,
-                            file_type=file_type,
-                            embedding_model=embedding_model,
-                            doc_metadata=doc_metadata,
-                        )
-                        db.add(img_chunk)
-                        pending_vision_chunks.append((img_chunk, vector, doc_metadata, img_ocr_text))
-                        chunks_total += 1
+            # --- Vision Pipeline (DISABLED — CLIP removed to save VRAM) ---
+            # Image bytes are extracted by parsers.py and OCR text is already
+            # embedded as text chunks above via image_texts.  When a vision
+            # model is re-enabled, re-add CLIP encoding + Qdrant image_chunks
+            # insertion here.
 
-                        if len(pending_vision_chunks) >= BATCH_SIZE:
-                            from app.rag.qdrant_client import insert_qdrant_points
-                            from qdrant_client.http import models
-                            db.flush()  # Assign DB ids before building PointStruct
-                            points = []
-                            for ic, vec, d_meta, ocr_text in pending_vision_chunks:
-                                payload = {
-                                    "tenant_id": tenant_id,
-                                    "doc_id": file_path,
-                                    "file_type": file_type,
-                                    "metadata": d_meta,
-                                }
-                                if ocr_text:
-                                    payload["text_content"] = ocr_text
-                                points.append(models.PointStruct(
-                                    id=ic.id,
-                                    vector=vec,
-                                    payload=payload,
-                                ))
-                            try:
-                                insert_qdrant_points("image_chunks", points)
-                                db.commit()
-                                chunks_inserted += len(pending_vision_chunks)
-                            except Exception as e:
-                                db.rollback()
-                                print(f"[Ingest] Failed to insert {len(pending_vision_chunks)} vision chunks: {e}")
-                            finally:
-                                pending_vision_chunks = []
-                    except Exception as e:
-                        print(f"[Ingest] Vision extract failed (page {page.page_num}, image {idx}): {e}")
-        # Flush pending vision batches
-        if pending_vision_chunks:
-            from app.rag.qdrant_client import insert_qdrant_points
-            from qdrant_client.http import models
-            db.flush()  # Assign DB ids before building PointStruct
-            points = []
-            for img_chunk, vector, doc_metadata, ocr_text in pending_vision_chunks:
-                payload = {
-                    "tenant_id": tenant_id,
-                    "doc_id": file_path,
-                    "file_type": file_type,
-                    "metadata": doc_metadata,
-                }
-                if ocr_text:
-                    payload["text_content"] = ocr_text
-                points.append(models.PointStruct(
-                    id=img_chunk.id,
-                    vector=vector,
-                    payload=payload,
-                ))
-            try:
-                insert_qdrant_points("image_chunks", points)
-                db.commit()
-                chunks_inserted += len(pending_vision_chunks)
-            except Exception as e:
-                db.rollback()
-                print(f"[Ingest] Failed to insert {len(pending_vision_chunks)} vision chunks: {e}")
-            finally:
-                pending_vision_chunks = []
 
         # Process remaining chunks
         if pending_chunks:
