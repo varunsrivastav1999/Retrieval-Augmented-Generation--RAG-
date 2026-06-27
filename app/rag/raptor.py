@@ -75,7 +75,7 @@ def generate_cluster_summary(texts: list[str], retries: int = 2) -> str:
     }
     for attempt in range(retries + 1):
         try:
-            response = requests.post(get_ollama_generate_url(), json=payload, timeout=240)
+            response = requests.post(get_ollama_generate_url(), json=payload, timeout=1200)
             if response.status_code == 200:
                 summary = response.json().get("response", "").strip()
                 if summary:
