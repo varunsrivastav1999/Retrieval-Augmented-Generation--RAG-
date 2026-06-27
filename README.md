@@ -39,8 +39,9 @@ A **production-grade RAG engine** built for industrial-scale document understand
 - **Extractive Mode**: Skips the LLM entirely — returns verbatim text from the top document chunk with source citation.
 - **FLARE Active RAG (Layer 15)**: Three-tier retry (keyword extraction → LLM alternative queries → sub-question decomposition) with adaptive thresholds.
 - **RAPTOR (Layer 5)**: Hierarchical summarization with UMAP + GMM clustering + LLM summarization.
+- **"One Topic, One PDF" Isolation**: The Self-Query Retriever dynamically extracts target document names/topics from the user query (e.g., "in the welding manual") and pushes strict SQL `ILIKE` and Qdrant `MatchText` metadata filters deep into the pipeline, guaranteeing 100% exact isolation with zero cross-contamination.
 - **Zero Hallucination**: Four-layer guard — pre-generation grounding check, strict citation prompt, mid-generation FLARE verification, post-generation verification.
-- **30+ File Formats**: Powered by **IBM Docling** and `pdfplumber` for flawless PDF/layout/math extraction. Light CPU OCR (Tesseract via Docling) used for scanned documents to save VRAM.
+- **30+ File Formats**: Powered by **IBM Docling** executing strictly in `TableFormerMode.ACCURATE` for flawless PDF/layout/math extraction. Fallbacks are disabled to ensure noisy data is never ingested. Light CPU OCR (Tesseract via Docling) used for scanned documents to save VRAM.
 - **10GB VRAM Stability**: Fully stripped of heavy vision models and graph databases. The entire stack fits perfectly in consumer-grade GPUs without crashing.
 - **Lightning Fast Vector Search**: Powered by **Qdrant** for sub-millisecond retrieval.
 
@@ -117,7 +118,7 @@ A dedicated table understanding module that executes between parsing and ingesti
 8. **Layer 8: MMR + Table Group Expansion**: MMR diversity pruning.
 9. **Layer 9: Table-Aware Context Assembly**: Table chunks assembled into structured HTML tables for the LLM.
 10. **Layer 10: 4-Tier Semantic Router**: Analyzes query intent to route to Extractive/Vector/SQL pipelines via DuckDB aggregation.
-11. **Layer 11: Query Intelligence**: Multi-query expansion, spelling correction.
+11. **Layer 11: Query Intelligence**: Multi-query expansion, spelling correction, and **Self-Query Filter Extraction** to enforce "One PDF" isolation rules prior to vector search.
 
 ### Phase 3: Generation & Anti-Hallucination
 12. **Layer 12: Grounding Guard**: The pre-generation hallucination block.
@@ -249,7 +250,7 @@ Key environment variables:
 
 ## 🔐 Security
 
-- **100% air-gapped**: All models cached locally, zero external API calls.
+- **100% air-gapped**: All models cached locally, zero external API calls. Enforced via strict `RAG_AIRGAP_MODE=true` blocks at the parser layer.
 - **Non-root user** in Docker container.
 - **Secrets externalized** to `.envs/.production/`.
 
