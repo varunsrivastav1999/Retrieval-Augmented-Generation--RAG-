@@ -967,8 +967,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             RAG_QUERY_LATENCY.labels(fast_path="false").observe(latency_ms / 1000.0)
             if request.stream:
                 def stream_greeting():
-                    yield f"data: {json.dumps({'token': answer})}\n\n"
-                    yield f"data: {json.dumps({'done': True, 'sources': [], 'grounding': grounding_result, 'verification': response_data['verification'], 'latency_ms': response_data.get('latency_ms', 0)})}\n\n"
+                    yield "data: " + json.dumps({'token': answer}) + "\n\n"
+                    yield "data: " + json.dumps({'done': True, 'sources': [], 'grounding': grounding_result, 'verification': response_data['verification'], 'latency_ms': response_data.get('latency_ms', 0)}) + "\n\n"
                 return StreamingResponse(stream_greeting(), media_type="text/event-stream")
             return response_data
 
@@ -1003,224 +1003,181 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
 
         if request.stream:
             def stream_cache():
-                yield f"data: {json.dumps({'token': cached.get('answer', '')})}\n\n"
-                yield f"data: {json.dumps({'done': True, 'sources': cached.get('sources', []), 'grounding': cached.get('grounding'), 'verification': cached.get('verification'), 'latency_ms': cached.get('latency_ms', 0)})}\n\n"
+                yield "data: " + json.dumps({'token': cached.get('answer', '')}) + "\n\n"
+                yield "data: " + json.dumps({'done': True, 'sources': cached.get('sources', []), 'grounding': cached.get('grounding'), 'verification': cached.get('verification'), 'latency_ms': cached.get('latency_ms', 0)}) + "\n\n"
             return StreamingResponse(stream_cache(), media_type="text/event-stream")
 
         return cached
 
-    # --- FAST PATH (sub-5ms): single dense HNSW search, skip all LLM calls ---
-    if request.fast_path:
-        retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
-        final_context = retrieved_chunks[:effective_top_k]
-        for c in final_context:
-            c["rerank_score"] = c.get("dense_score", 0.0)
-        sources = _context_sources(final_context)
-        grounding_result = compute_grounding_score(search_query, final_context)
-        # Skip the full state machine
-        state_machine_used = False
-    else:
-        state_machine_used = True
-        
-        # Layer 13: Query Intelligence (Spelling, Expansion, Decomposition)
-        query_intel = intelligent_query_pipeline(search_query)
-        
-        # --- FULL AGENTIC STATE MACHINE (multi-query, HyDE, BM25, reranker, FLARE) ---
-        MAX_FLARE_RETRIES = 3
-        FLARE_THRESHOLDS = [0.35, 0.25, 0.15]
-        FLARE_TIMEOUT = float(os.getenv("RAG_FLARE_TIMEOUT", "180.0"))  # seconds total before circuit-breaker
-        
-        class AgentState:
-            def __init__(self):
-                self.current_state = "route"
-                self.queries_to_search = [search_query]
-                self.metadata_filters = None
-                self.final_context = []
-                self.grounding_result = None
-                self.retry_count = 0
-                self.sources = []
-                self.answer = ""
+    if request.stream:
+        def stream_llm():
+            nonlocal ingest_summary, corpus_version
+            final_context = []
+            sources = []
+            grounding_result = None
+            force_general = False
+            effective_top_k = request.top_k
+            original_top_k = effective_top_k
+            if broad_query:
+                effective_top_k = min(MAX_TOP_K, max(effective_top_k, BROAD_QUERY_TOP_K))
+
+            if request.fast_path:
+                yield "data: " + json.dumps({'token': '> ⚡ *Fast Path: Retrieving context directly...*\n'}) + "\n\n"
+                retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
+                final_context = retrieved_chunks[:effective_top_k]
+                for c in final_context:
+                    c["rerank_score"] = c.get("dense_score", 0.0)
+                sources = _context_sources(final_context)
+                grounding_result = compute_grounding_score(search_query, final_context)
+            else:
+                yield "data: " + json.dumps({'token': '> 🧠 *Analyzing query intelligence...*\n'}) + "\n\n"
+                query_intel = intelligent_query_pipeline(search_query)
                 
-        agent = AgentState()
-        flare_start = time.time()
-        
-        while agent.current_state not in ["generate", "end"]:
-            
-            # Circuit breaker: stop retrying after FLARE_TIMEOUT seconds
-            if time.time() - flare_start > FLARE_TIMEOUT:
-                print(f"[FLARE] Timeout after {FLARE_TIMEOUT}s. Accepting current context.")
-                if agent.final_context:
-                    agent.current_state = "generate"
-                else:
-                    agent.current_state = "end"
-                break
-            
-            if agent.current_state == "route":
-                route = query_router.route_query(search_query)
-                print(f"[Agent:Router] Routed to: {route.upper()}")
-                if route == "sql":
-                    agent.metadata_filters = text_to_sql_filters(search_query)
-                elif route == "raptor":
-                    # Fetch highest-level RAPTOR summaries
-                    highest_level_summaries = db.query(DocumentChunk).filter(
-                        DocumentChunk.tenant_id == tenant_id,
-                        DocumentChunk.file_type == "raptor_summary"
-                    ).order_by(DocumentChunk.raptor_level.desc()).limit(10).all()
-                    
-                    if highest_level_summaries:
-                        raptor_context = "\n\n".join([c.text_content for c in highest_level_summaries])
-                        agent.final_context = [{"text": raptor_context, "metadata": {"type": "raptor", "source": "RAPTOR Global Index"}}]
-                        agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
-                        agent.sources = ["RAPTOR Global Index"]
-                        agent.current_state = "generate"
-                        continue
-                    else:
-                        route = "vector"
+                MAX_FLARE_RETRIES = 3
+                FLARE_THRESHOLDS = [0.35, 0.25, 0.15]
+                FLARE_TIMEOUT = float(os.getenv("RAG_FLARE_TIMEOUT", "180.0"))
                 
-                agent.queries_to_search = query_intel["expanded_queries"][:2]
-                agent.current_state = "retrieve"
+                class AgentState:
+                    def __init__(self):
+                        self.current_state = "route"
+                        self.queries_to_search = [search_query]
+                        self.metadata_filters = None
+                        self.final_context = []
+                        self.grounding_result = None
+                        self.retry_count = 0
+                        self.sources = []
+                        self.answer = ""
+                        
+                agent = AgentState()
+                flare_start = time.time()
                 
-            elif agent.current_state == "retrieve":
-                print(f"[Agent:Retriever] Searching: {agent.queries_to_search}")
-                retrieved_chunks = perform_multi_query_search(db, agent.queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4), metadata_filters=agent.metadata_filters)
-                reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
-                agent.final_context = assemble_context(search_query, reranked_chunks, db=db)
-                agent.sources = _context_sources(agent.final_context)
-                agent.current_state = "grade"
-                
-            elif agent.current_state == "grade":
-                # FLARE: adaptive threshold based on retry count
-                threshold = FLARE_THRESHOLDS[min(agent.retry_count, len(FLARE_THRESHOLDS) - 1)]
-                agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
-                score = agent.grounding_result.get("score", 0.0)
-                print(f"[FLARE] Try {agent.retry_count+1}/{MAX_FLARE_RETRIES+1} Score: {score} (threshold: {threshold})")
-                
-                if agent.grounding_result["is_grounded"] or score >= threshold:
-                    agent.current_state = "generate" if agent.final_context else "end"
-                else:
-                    agent.retry_count += 1
-                    if agent.retry_count > MAX_FLARE_RETRIES:
-                        print(f"[FLARE] Max retries ({MAX_FLARE_RETRIES}) reached. Accepting if score >= 0.10.")
-                        if score >= 0.10 and agent.final_context:
+                while agent.current_state not in ["generate", "end"]:
+                    if time.time() - flare_start > FLARE_TIMEOUT:
+                        yield "data: " + json.dumps({'token': '> ⚠️ *Timeout reached, proceeding with current context.*\n'}) + "\n\n"
+                        if agent.final_context:
                             agent.current_state = "generate"
                         else:
                             agent.current_state = "end"
-                    else:
-                        agent.current_state = "rewrite"
+                        break
                     
-            elif agent.current_state == "rewrite":
-                print(f"[FLARE] Retry {agent.retry_count}/{MAX_FLARE_RETRIES}: generating alternative queries...")
-                # FLARE: escalate query strategy per retry
-                agent.queries_to_search = flare_query_decomposition(
-                    original_query=search_query,
-                    retry_count=agent.retry_count,
-                )
-                # Expand the search pool on retries (more chunks)
-                effective_top_k = min(original_top_k * agent.retry_count, 48)
-                agent.current_state = "retrieve"
+                    if agent.current_state == "route":
+                        yield "data: " + json.dumps({'token': '> 🚦 *Routing query...*\n'}) + "\n\n"
+                        route = query_router.route_query(search_query)
+                        if route == "sql":
+                            agent.metadata_filters = text_to_sql_filters(search_query)
+                        elif route == "raptor":
+                            yield "data: " + json.dumps({'token': '> 🦅 *Fetching RAPTOR global summary...*\n'}) + "\n\n"
+                            highest_level_summaries = db.query(DocumentChunk).filter(
+                                DocumentChunk.tenant_id == tenant_id,
+                                DocumentChunk.file_type == "raptor_summary"
+                            ).order_by(DocumentChunk.raptor_level.desc()).limit(10).all()
+                            
+                            if highest_level_summaries:
+                                raptor_context = "\n\n".join([c.text_content for c in highest_level_summaries])
+                                agent.final_context = [{"text": raptor_context, "metadata": {"type": "raptor", "source": "RAPTOR Global Index"}}]
+                                agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
+                                agent.sources = ["RAPTOR Global Index"]
+                                agent.current_state = "generate"
+                                continue
+                            else:
+                                route = "vector"
+                        
+                        agent.queries_to_search = query_intel["expanded_queries"][:2]
+                        agent.current_state = "retrieve"
+                        
+                    elif agent.current_state == "retrieve":
+                        yield "data: " + json.dumps({'token': '> 🔍 *Retrieving and reranking documents...*\n'}) + "\n\n"
+                        retrieved_chunks = perform_multi_query_search(db, agent.queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4), metadata_filters=agent.metadata_filters)
+                        reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
+                        agent.final_context = assemble_context(search_query, reranked_chunks, db=db)
+                        agent.sources = _context_sources(agent.final_context)
+                        agent.current_state = "grade"
+                        
+                    elif agent.current_state == "grade":
+                        threshold = FLARE_THRESHOLDS[min(agent.retry_count, len(FLARE_THRESHOLDS) - 1)]
+                        agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
+                        score = agent.grounding_result.get("score", 0.0)
+                        
+                        if agent.grounding_result["is_grounded"] or score >= threshold:
+                            yield "data: " + json.dumps({'token': '> ✅ *Context successfully grounded!*\n'}) + "\n\n"
+                            agent.current_state = "generate" if agent.final_context else "end"
+                        else:
+                            agent.retry_count += 1
+                            if agent.retry_count > MAX_FLARE_RETRIES:
+                                yield "data: " + json.dumps({'token': '> ⚠️ *Max FLARE retries reached.*\n'}) + "\n\n"
+                                if score >= 0.10 and agent.final_context:
+                                    agent.current_state = "generate"
+                                else:
+                                    agent.current_state = "end"
+                            else:
+                                agent.current_state = "rewrite"
+                            
+                    elif agent.current_state == "rewrite":
+                        yield "data: " + json.dumps({'token': f'> 🔄 *FLARE Retry {agent.retry_count}/{MAX_FLARE_RETRIES}: Decomposing alternative queries...*\n'}) + "\n\n"
+                        agent.queries_to_search = flare_query_decomposition(
+                            original_query=search_query,
+                            retry_count=agent.retry_count,
+                        )
+                        effective_top_k = min(original_top_k * agent.retry_count, 48)
+                        agent.current_state = "retrieve"
 
-        final_context = agent.final_context
-        sources = agent.sources
-        grounding_result = agent.grounding_result
-    
-    force_general = False
-    if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
-        force_general = True
-        latency = int((time.time() - start_time) * 1000)
-        print(f"[API: Warning] Grounding failed or no context. Falling back to general knowledge.")
-        RAG_QUERY_TOTAL.labels(status="general_fallback").inc()
-        RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency / 1000.0)
-        
-        # We will use the LLM to generate a general answer
-        if not grounding_result:
-            grounding_result = {"is_grounded": False, "score": 0.0, "detail": "Fallback to general knowledge"}
+                final_context = agent.final_context
+                sources = agent.sources
+                grounding_result = agent.grounding_result
 
-    # ------------------------------------------------------------
-    # Extractive Mode: skip LLM, return verbatim text from top chunk
-    # ------------------------------------------------------------
-    if request.extractive:
-        answer = ""
-        if final_context:
-            best = final_context[0]
-            text = best.get("text", "")
-            source_name = "unknown"
-            if best.get("metadata"):
-                src = best["metadata"].get("source", "")
-                if src:
-                    source_name = os.path.basename(str(src))
-            page = best.get("metadata", {}).get("page_num")
-            page_str = f", Page {page}" if page else ""
-            if len(text) > 4000:
-                text = text[:4000] + "..."
-            answer = f"[{source_name}{page_str}]\n{text}"
-        verification = verify_answer_grounding(answer, final_context) if answer else {"confidence": "low", "confidence_score": 0.0, "grounded_sentences": 0, "total_sentences": 0, "evidence": []}
-        latency = int((time.time() - start_time) * 1000)
-        print(f"[API: OUT] Response: {answer}")
-        
-        response_data = {
-            "answer": answer,
-            "context": final_context,
-            "sources": sources,
-            "latency_ms": latency,
-            "ingest": ingest_summary,
-            "grounding": grounding_result,
-            "verification": verification,
-        }
-        if not request.fast_path:
-            set_cached_response(
-                request.query, tenant_id, request.user_id, effective_top_k,
-                embedding_model, corpus_version,
-                {key: value for key, value in response_data.items() if key != "ingest"},
-                scope=cache_scope,
-            )
-        elapsed = time.time() - request_start
-        status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
-        RAG_QUERY_TOTAL.labels(status=status).inc()
-        RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(elapsed)
-        
-        if request.stream:
-            # Release DB transaction before streaming to prevent EOF errors
-            db.commit()
-            def stream_extractive():
-                latency = int((time.time() - start_time) * 1000)
-                yield f"data: {json.dumps({'token': answer})}\n\n"
-                yield f"data: {json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency})}\n\n"
-            return StreamingResponse(stream_extractive(), media_type="text/event-stream")
+            if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
+                force_general = True
+                yield "data: " + json.dumps({'token': '> ⚠️ *Grounding failed or no context. Falling back to general knowledge.*\n'}) + "\n\n"
+                if not grounding_result:
+                    grounding_result = {"is_grounded": False, "score": 0.0, "detail": "Fallback to general knowledge"}
             
-        return response_data
+            yield "data: " + json.dumps({'token': '---\n\n'}) + "\n\n"
 
-    # ------------------------------------------------------------
-    # Layer 12: LLM Answer Synthesis (Ollama)
-    # ------------------------------------------------------------
-    if force_general:
-        prompt = (
-            "═══════════════════════════════════════════════════════════\n"
-            "  SYSTEM: Expert Technical Assistant\n"
-            "  MODE: GENERAL KNOWLEDGE FALLBACK\n"
-            "═══════════════════════════════════════════════════════════\n\n"
-            f"The user asked: '{search_query}'.\n\n"
-            "This information is not explicitly found in the uploaded documents. "
-            "Please provide a highly confident, aggressive, and accurate general answer based on your broad knowledge, "
-            "but clearly state at the beginning that this information is not from the provided records."
-        )
-    else:
-        context_texts = []
-        for chunk in final_context:
-            text = chunk.get('text', '')
-            # Aggressively strip any [filename, Page X] or [TABLE - Page X] headers 
-            # so the LLM doesn't try to regurgitate them as inline citations.
-            text = re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', text)
-            context_texts.append(text.strip())
-        context_text = "\n\n---\n\n".join(context_texts)
-        
-        prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
-    
-    # Release DB transaction before calling external LLM to prevent EOF/connection drops
-    db.commit()
+            if request.extractive:
+                answer = ""
+                if final_context:
+                    best = final_context[0]
+                    text = best.get("text", "")
+                    source_name = "unknown"
+                    if best.get("metadata"):
+                        src = best["metadata"].get("source", "")
+                        if src:
+                            source_name = os.path.basename(str(src))
+                    page = best.get("metadata", {}).get("page_num")
+                    page_str = f", Page {page}" if page else ""
+                    if len(text) > 4000:
+                        text = text[:4000] + "..."
+                    answer = f"[{source_name}{page_str}]\n{text}"
+                verification = verify_answer_grounding(answer, final_context) if answer else {"confidence": "low", "confidence_score": 0.0, "grounded_sentences": 0, "total_sentences": 0, "evidence": []}
+                latency = int((time.time() - start_time) * 1000)
+                
+                db.commit()
+                yield "data: " + json.dumps({'token': answer}) + "\n\n"
+                yield "data: " + json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency}) + "\n\n"
+                return
 
-    if request.stream:
-        def stream_llm():
-            nonlocal final_context, sources, effective_top_k
+            if force_general:
+                prompt = (
+                    "═══════════════════════════════════════════════════════════\n"
+                    "  SYSTEM: Expert Technical Assistant\n"
+                    "  MODE: GENERAL KNOWLEDGE FALLBACK\n"
+                    "═══════════════════════════════════════════════════════════\n\n"
+                    f"The user asked: '{search_query}'.\n\n"
+                    "This information is not explicitly found in the uploaded documents. "
+                    "Please provide a highly confident, aggressive, and accurate general answer based on your broad knowledge, "
+                    "but clearly state at the beginning that this information is not from the provided records."
+                )
+            else:
+                context_texts = []
+                for chunk in final_context:
+                    text = chunk.get('text', '')
+                    text = re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', text)
+                    context_texts.append(text.strip())
+                context_text = "\n\n---\n\n".join(context_texts)
+                prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
+            
+            db.commit()
+            
             payload = {
                 "model": OLLAMA_MODEL,
                 "system": "",
@@ -1249,14 +1206,13 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                             
                             if "error" in data:
                                 err_msg = f"\n\n**Ollama Error:** {data['error']}"
-                                yield f"data: {json.dumps({'token': err_msg})}\n\n"
+                                yield "data: " + json.dumps({'token': err_msg}) + "\n\n"
                                 break
                                 
                             token = data.get("response", "")
                             answer_acc += token
-                            yield f"data: {json.dumps({'token': token})}\n\n"
+                            yield "data: " + json.dumps({'token': token}) + "\n\n"
                             
-                            # FLARE: mid-generation sentence-level confidence check
                             token_buffer += token
                             if len(token_buffer) >= 40 and (token.endswith('.') or token.endswith('!') or token.endswith('?')):
                                 flare_query = flare_mid_generation_retrieval(
@@ -1265,7 +1221,6 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                                     existing_context=final_context + flare_retrieved_chunks,
                                 )
                                 if flare_query and flare_query.strip():
-                                    print(f"[FLARE] Mid-generation re-retrieval for: '{flare_query}'")
                                     new_chunks = perform_multi_query_search(
                                         db, [flare_query], tenant_id,
                                         top_k=effective_top_k,
@@ -1276,29 +1231,24 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                                         for nc in new_reranked:
                                             if nc not in flare_retrieved_chunks:
                                                 flare_retrieved_chunks.append(nc)
-                                                # NOTE: Do NOT yield FLARE notes to the user stream.
-                                                # They are kept internal-only for the post-generation regeneration pass.
                                 token_buffer = ""
                 else:
                     err = f"Ollama Error: {response.text}"
-                    yield f"data: {json.dumps({'token': err})}\n\n"
+                    yield "data: " + json.dumps({'token': err}) + "\n\n"
             except requests.exceptions.Timeout:
                 err = "Ollama Timeout. The model took too long to respond."
-                yield f"data: {json.dumps({'token': err})}\n\n"
+                yield "data: " + json.dumps({'token': err}) + "\n\n"
             except requests.exceptions.RequestException:
                 err = "Ollama Connection Error. The model service is unavailable."
-                yield f"data: {json.dumps({'token': err})}\n\n"
+                yield "data: " + json.dumps({'token': err}) + "\n\n"
                 
-            # Final safety check
             answer_acc = answer_acc.strip()
             
-            # FLARE post-generation: if new chunks were retrieved, do a final regeneration pass
             if flare_retrieved_chunks:
                 enriched_context = final_context + flare_retrieved_chunks
                 enriched_texts = [re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', c.get('text', '')).strip() for c in enriched_context]
                 enriched_text = "\n\n---\n\n".join(enriched_texts)
                 flare_prompt = build_strict_grounding_prompt(search_query, enriched_text, broad_query)
-                print(f"[FLARE] Post-generation pass with {len(flare_retrieved_chunks)} new chunks.")
                 try:
                     final_payload = {
                         "model": OLLAMA_MODEL,
@@ -1317,139 +1267,284 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 final_context = enriched_context
                 sources = _context_sources(enriched_context)
             
-            # Strip FLARE notes from answer before verification
             clean_answer = re.sub(r'\[FLARE re-retrieved:.*?\]', '', answer_acc).strip()
             verification = verify_answer_grounding(clean_answer, final_context)
             latency_ms = int((time.time() - start_time) * 1000)
-            print(f"[API: OUT] Response: {clean_answer}")
-            yield f"data: {json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency_ms})}\n\n"
+            
+            yield "data: " + json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency_ms}) + "\n\n"
+            
+            status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
+            RAG_QUERY_TOTAL.labels(status=status).inc()
+            RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency_ms / 1000.0)
+            if grounding_result and not grounding_result.get("is_grounded"):
+                RAG_GROUNDING_BLOCKED.inc()
             
             try:
                 set_cached_response(
                     request.query, tenant_id, request.user_id, effective_top_k,
                     embedding_model, corpus_version,
-                    {"answer": answer_acc, "context": final_context, "sources": sources,
+                    {"answer": clean_answer, "context": final_context, "sources": sources,
                      "grounding": grounding_result, "verification": verification},
                     scope=cache_scope,
                 )
             except Exception as cache_err:
                 print(f"[Cache] Error saving streamed response: {cache_err}")
-        
+
         return StreamingResponse(stream_llm(), media_type="text/event-stream")
-
-    # Non-streaming fallback
-    flare_retrieved_chunks = []
-    answer = ""
-    try:
-        payload = {
-            "model": OLLAMA_MODEL,
-            "system": "",
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "num_predict": OLLAMA_NUM_PREDICT,
-                "temperature": 0.0,
-                "num_gpu": 99,
-                "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
-            }
-        }
-        response = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT_SECONDS)
-        if response.status_code == 200:
-            answer = response.json().get("response", "").strip()
-            
-            # FLARE: post-generation sentence-level re-retrieval
-            flare_query = flare_mid_generation_retrieval(
-                partial_answer=answer,
-                original_query=search_query,
-                existing_context=final_context,
-                is_full_answer=True,
-            )
-            if flare_query and flare_query.strip():
-                print(f"[FLARE] Post-generation re-retrieval for: '{flare_query}'")
-                new_chunks = perform_multi_query_search(
-                    db, [flare_query], tenant_id,
-                    top_k=effective_top_k,
-                    metadata_filters=None,
-                )
-                if new_chunks:
-                    new_reranked = rerank_results(flare_query, new_chunks, top_n=3)
-                    for nc in new_reranked:
-                        if nc not in flare_retrieved_chunks:
-                            flare_retrieved_chunks.append(nc)
-            
-            if flare_retrieved_chunks:
-                enriched_context = final_context + flare_retrieved_chunks
-                enriched_texts = [re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', c.get('text', '')).strip() for c in enriched_context]
-                enriched_text = "\n\n---\n\n".join(enriched_texts)
-                flare_prompt = build_strict_grounding_prompt(search_query, enriched_text, broad_query)
-                print(f"[FLARE] Regenerating answer with {len(flare_retrieved_chunks)} new chunks.")
-                final_payload = {
-                    "model": OLLAMA_MODEL,
-                    "system": "",
-                    "prompt": flare_prompt,
-                    "stream": False,
-                    "options": {"num_predict": OLLAMA_NUM_PREDICT, "temperature": 0.0, "num_gpu": 99}
-                }
-                final_resp = requests.post(OLLAMA_URL, json=final_payload, timeout=OLLAMA_TIMEOUT_SECONDS)
-                if final_resp.status_code == 200:
-                    answer = final_resp.json().get("response", "").strip()
-                final_context = enriched_context
-                sources = _context_sources(enriched_context)
-            
-            # Do NOT strip answer prefixes — they indicate uncertainty
-            # and removing them hides the model's hedging from the user.
+        
+    else:
+        # NON-STREAMING FALLBACK
+        final_context = []
+        sources = []
+        grounding_result = None
+        force_general = False
+        
+        if request.fast_path:
+            retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
+            final_context = retrieved_chunks[:effective_top_k]
+            for c in final_context:
+                c["rerank_score"] = c.get("dense_score", 0.0)
+            sources = _context_sources(final_context)
+            grounding_result = compute_grounding_score(search_query, final_context)
         else:
-            answer = "Ollama Error: The model service returned an error."
-    except Exception:
-        answer = "Ollama Error: An unexpected error occurred."
-        
-    verification = verify_answer_grounding(answer, final_context)
-    
-    # Layer 14: Optional RAGAS Evaluation
-    evaluation = None
-    if request.evaluate and final_context and not answer.startswith("Ollama Error"):
-        from app.rag.evaluation import evaluate_rag_response
-        contexts_str = [c.get("text", "") for c in final_context]
-        print(f"[RAGAS] Running evaluation...")
-        evaluation = evaluate_rag_response(search_query, answer, contexts_str)
-        print(f"[RAGAS] Evaluation result: {evaluation}")
-        
-    latency = int((time.time() - start_time) * 1000)
-    print(f"[API: OUT] Response: {answer}")
-    
-    response_data = {
-        "answer": answer,
-        "context": final_context,
-        "sources": sources,
-        "latency_ms": latency,
-        "ingest": ingest_summary,
-        "grounding": grounding_result,
-        "verification": verification,
-        "evaluation": evaluation,
-    }
-    
-    # Layer 11: Save to Cache (skip caching errors)
-    if not answer.startswith("Ollama Error:"):
-        set_cached_response(
-            request.query,
-            tenant_id,
-            request.user_id,
-            effective_top_k,
-            embedding_model,
-            corpus_version,
-            {key: value for key, value in response_data.items() if key != "ingest"},
-            scope=cache_scope,
-    )
+            query_intel = intelligent_query_pipeline(search_query)
+            MAX_FLARE_RETRIES = 3
+            FLARE_THRESHOLDS = [0.35, 0.25, 0.15]
+            FLARE_TIMEOUT = float(os.getenv("RAG_FLARE_TIMEOUT", "180.0"))
+            
+            class AgentState:
+                def __init__(self):
+                    self.current_state = "route"
+                    self.queries_to_search = [search_query]
+                    self.metadata_filters = None
+                    self.final_context = []
+                    self.grounding_result = None
+                    self.retry_count = 0
+                    self.sources = []
+                    
+            agent = AgentState()
+            flare_start = time.time()
+            
+            while agent.current_state not in ["generate", "end"]:
+                if time.time() - flare_start > FLARE_TIMEOUT:
+                    if agent.final_context:
+                        agent.current_state = "generate"
+                    else:
+                        agent.current_state = "end"
+                    break
+                
+                if agent.current_state == "route":
+                    route = query_router.route_query(search_query)
+                    if route == "sql":
+                        agent.metadata_filters = text_to_sql_filters(search_query)
+                    elif route == "raptor":
+                        highest_level_summaries = db.query(DocumentChunk).filter(
+                            DocumentChunk.tenant_id == tenant_id,
+                            DocumentChunk.file_type == "raptor_summary"
+                        ).order_by(DocumentChunk.raptor_level.desc()).limit(10).all()
+                        if highest_level_summaries:
+                            raptor_context = "\n\n".join([c.text_content for c in highest_level_summaries])
+                            agent.final_context = [{"text": raptor_context, "metadata": {"type": "raptor", "source": "RAPTOR Global Index"}}]
+                            agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
+                            agent.sources = ["RAPTOR Global Index"]
+                            agent.current_state = "generate"
+                            continue
+                        else:
+                            route = "vector"
+                    agent.queries_to_search = query_intel["expanded_queries"][:2]
+                    agent.current_state = "retrieve"
+                    
+                elif agent.current_state == "retrieve":
+                    retrieved_chunks = perform_multi_query_search(db, agent.queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4), metadata_filters=agent.metadata_filters)
+                    reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
+                    agent.final_context = assemble_context(search_query, reranked_chunks, db=db)
+                    agent.sources = _context_sources(agent.final_context)
+                    agent.current_state = "grade"
+                    
+                elif agent.current_state == "grade":
+                    threshold = FLARE_THRESHOLDS[min(agent.retry_count, len(FLARE_THRESHOLDS) - 1)]
+                    agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
+                    score = agent.grounding_result.get("score", 0.0)
+                    if agent.grounding_result["is_grounded"] or score >= threshold:
+                        agent.current_state = "generate" if agent.final_context else "end"
+                    else:
+                        agent.retry_count += 1
+                        if agent.retry_count > MAX_FLARE_RETRIES:
+                            if score >= 0.10 and agent.final_context:
+                                agent.current_state = "generate"
+                            else:
+                                agent.current_state = "end"
+                        else:
+                            agent.current_state = "rewrite"
+                elif agent.current_state == "rewrite":
+                    agent.queries_to_search = flare_query_decomposition(original_query=search_query, retry_count=agent.retry_count)
+                    effective_top_k = min(original_top_k * agent.retry_count, 48)
+                    agent.current_state = "retrieve"
 
-    # Record Prometheus metrics
-    elapsed = time.time() - request_start
-    status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
-    RAG_QUERY_TOTAL.labels(status=status).inc()
-    RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(elapsed)
-    if grounding_result and not grounding_result.get("is_grounded"):
-        RAG_GROUNDING_BLOCKED.inc()
-    
-    return response_data
+            final_context = agent.final_context
+            sources = agent.sources
+            grounding_result = agent.grounding_result
+
+        if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
+            force_general = True
+            if not grounding_result:
+                grounding_result = {"is_grounded": False, "score": 0.0, "detail": "Fallback to general knowledge"}
+
+        if request.extractive:
+            answer = ""
+            if final_context:
+                best = final_context[0]
+                text = best.get("text", "")
+                source_name = "unknown"
+                if best.get("metadata"):
+                    src = best["metadata"].get("source", "")
+                    if src:
+                        source_name = os.path.basename(str(src))
+                page = best.get("metadata", {}).get("page_num")
+                page_str = f", Page {page}" if page else ""
+                if len(text) > 4000:
+                    text = text[:4000] + "..."
+                answer = f"[{source_name}{page_str}]\n{text}"
+            verification = verify_answer_grounding(answer, final_context) if answer else {"confidence": "low", "confidence_score": 0.0, "grounded_sentences": 0, "total_sentences": 0, "evidence": []}
+            latency = int((time.time() - start_time) * 1000)
+            response_data = {
+                "answer": answer,
+                "context": final_context,
+                "sources": sources,
+                "latency_ms": latency,
+                "ingest": ingest_summary,
+                "grounding": grounding_result,
+                "verification": verification,
+            }
+            if not request.fast_path:
+                set_cached_response(
+                    request.query, tenant_id, request.user_id, effective_top_k,
+                    embedding_model, corpus_version,
+                    {key: value for key, value in response_data.items() if key != "ingest"},
+                    scope=cache_scope,
+                )
+            return response_data
+
+        if force_general:
+            prompt = (
+                "═══════════════════════════════════════════════════════════\n"
+                "  SYSTEM: Expert Technical Assistant\n"
+                "  MODE: GENERAL KNOWLEDGE FALLBACK\n"
+                "═══════════════════════════════════════════════════════════\n\n"
+                f"The user asked: '{search_query}'.\n\n"
+                "This information is not explicitly found in the uploaded documents. "
+                "Please provide a highly confident, aggressive, and accurate general answer based on your broad knowledge, "
+                "but clearly state at the beginning that this information is not from the provided records."
+            )
+        else:
+            context_texts = []
+            for chunk in final_context:
+                text = chunk.get('text', '')
+                text = re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', text)
+                context_texts.append(text.strip())
+            context_text = "\n\n---\n\n".join(context_texts)
+            prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
+        
+        flare_retrieved_chunks = []
+        answer = ""
+        try:
+            payload = {
+                "model": OLLAMA_MODEL,
+                "system": "",
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "num_predict": OLLAMA_NUM_PREDICT,
+                    "temperature": 0.0,
+                    "num_gpu": 99,
+                    "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
+                }
+            }
+            response = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT_SECONDS)
+            if response.status_code == 200:
+                answer = response.json().get("response", "").strip()
+                
+                flare_query = flare_mid_generation_retrieval(
+                    partial_answer=answer,
+                    original_query=search_query,
+                    existing_context=final_context,
+                    is_full_answer=True,
+                )
+                if flare_query and flare_query.strip():
+                    new_chunks = perform_multi_query_search(
+                        db, [flare_query], tenant_id,
+                        top_k=effective_top_k,
+                        metadata_filters=None,
+                    )
+                    if new_chunks:
+                        new_reranked = rerank_results(flare_query, new_chunks, top_n=3)
+                        for nc in new_reranked:
+                            if nc not in flare_retrieved_chunks:
+                                flare_retrieved_chunks.append(nc)
+                
+                if flare_retrieved_chunks:
+                    enriched_context = final_context + flare_retrieved_chunks
+                    enriched_texts = [re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', c.get('text', '')).strip() for c in enriched_context]
+                    enriched_text = "\n\n---\n\n".join(enriched_texts)
+                    flare_prompt = build_strict_grounding_prompt(search_query, enriched_text, broad_query)
+                    final_payload = {
+                        "model": OLLAMA_MODEL,
+                        "system": "",
+                        "prompt": flare_prompt,
+                        "stream": False,
+                        "options": {"num_predict": OLLAMA_NUM_PREDICT, "temperature": 0.0, "num_gpu": 99}
+                    }
+                    final_resp = requests.post(OLLAMA_URL, json=final_payload, timeout=OLLAMA_TIMEOUT_SECONDS)
+                    if final_resp.status_code == 200:
+                        answer = final_resp.json().get("response", "").strip()
+                    final_context = enriched_context
+                    sources = _context_sources(enriched_context)
+            else:
+                answer = "Ollama Error: The model service returned an error."
+        except Exception:
+            answer = "Ollama Error: An unexpected error occurred."
+            
+        verification = verify_answer_grounding(answer, final_context)
+        
+        evaluation = None
+        if request.evaluate and final_context and not answer.startswith("Ollama Error"):
+            from app.rag.evaluation import evaluate_rag_response
+            contexts_str = [c.get("text", "") for c in final_context]
+            evaluation = evaluate_rag_response(search_query, answer, contexts_str)
+            
+        latency = int((time.time() - start_time) * 1000)
+        
+        response_data = {
+            "answer": answer,
+            "context": final_context,
+            "sources": sources,
+            "latency_ms": latency,
+            "ingest": ingest_summary,
+            "grounding": grounding_result,
+            "verification": verification,
+            "evaluation": evaluation,
+        }
+        
+        if not answer.startswith("Ollama Error:"):
+            set_cached_response(
+                request.query,
+                tenant_id,
+                request.user_id,
+                effective_top_k,
+                embedding_model,
+                corpus_version,
+                {key: value for key, value in response_data.items() if key != "ingest"},
+                scope=cache_scope,
+            )
+
+        elapsed = time.time() - request_start
+        status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
+        RAG_QUERY_TOTAL.labels(status=status).inc()
+        RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(elapsed)
+        if grounding_result and not grounding_result.get("is_grounded"):
+            RAG_GROUNDING_BLOCKED.inc()
+        
+        return response_data
 
 
 if __name__ == "__main__":
