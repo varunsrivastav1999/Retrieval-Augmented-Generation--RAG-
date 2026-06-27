@@ -284,7 +284,7 @@ def _parse_docling(file_path: str) -> ParseResult:
         # Build converter with optimal options (v1 API) or without (v2 auto-detect)
         try:
             from docling.document_converter import PdfFormatOption
-            from docling.datamodel.pipeline_options import PdfPipelineOptions, TableStructureOptions, OcrOptions
+            from docling.datamodel.pipeline_options import PdfPipelineOptions, TableStructureOptions, EasyOcrOptions
             from docling.datamodel.base_models import InputFormat
             from docling.datamodel.accelerator_options import AcceleratorOptions, AcceleratorDevice
 
@@ -304,6 +304,7 @@ def _parse_docling(file_path: str) -> ParseResult:
             
             # --- MOST POWERFUL VERSION CONFIGURATION ---
             pipeline_options.do_ocr = True
+            pipeline_options.ocr_options = EasyOcrOptions()
             pipeline_options.generate_page_images = True
             pipeline_options.generate_picture_images = True
             pipeline_options.do_table_structure = True
@@ -315,8 +316,26 @@ def _parse_docling(file_path: str) -> ParseResult:
                 }
             )
         except (ImportError, AttributeError):
-            # Docling v2+ API — auto-detect format, no explicit options needed
-            converter = DocumentConverter()
+            # Docling v2+ API
+            try:
+                from docling.document_converter import DocumentConverter, PdfFormatOption
+                from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode, EasyOcrOptions
+                from docling.datamodel.base_models import InputFormat
+                
+                pipeline_options = PdfPipelineOptions()
+                pipeline_options.do_ocr = True
+                pipeline_options.ocr_options = EasyOcrOptions()
+                pipeline_options.do_table_structure = True
+                pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
+                
+                converter = DocumentConverter(
+                    format_options={
+                        InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                    }
+                )
+            except Exception as e:
+                print(f"[Docling Parser] Fallback triggered: {e}")
+                converter = DocumentConverter()
 
         result = converter.convert(file_path)
         doc = result.document
