@@ -47,6 +47,7 @@ langchain-core==0.1.52
 
 # --- OCR & MEDIA ---
 pytesseract==0.3.10
+easyocr==1.7.2
 Pillow==10.2.0
 
 # Download spacy model (must match spacy==3.8.2)
