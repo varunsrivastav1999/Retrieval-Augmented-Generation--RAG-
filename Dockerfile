@@ -51,26 +51,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-large-en-v1.5')"
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/clip-ViT-L-14')"
 RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('BAAI/bge-reranker-large')"
-RUN python -c "import sys; \
-try: \
-    from docling.document_converter import DocumentConverter; \
-    try: \
-        from docling.document_converter import PdfFormatOption; \
-    except ImportError: \
-        from docling.datamodel.document import PdfFormatOption; \
-    from docling.datamodel.pipeline_options import PdfPipelineOptions, TableStructureOptions; \
-    from docling.datamodel.base_models import InputFormat; \
-    opts = PdfPipelineOptions(); \
-    opts.do_ocr = True; opts.do_table_structure = True; \
-    try: \
-        from docling.datamodel.pipeline_options import TableFormerMode; \
-        opts.table_structure_options.mode = TableFormerMode.ACCURATE; \
-    except ImportError: \
-        opts.table_structure_options = TableStructureOptions(mode='accurate'); \
-    DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}); \
-except Exception as e: \
-    print(f'Fallback triggered: {e}'); \
-    from docling.document_converter import DocumentConverter; DocumentConverter()"
+COPY scripts/download_docling_models.py ./scripts/
+RUN python scripts/download_docling_models.py
 
 # NOTE: spaCy model en_core_web_sm-3.8.0 is already installed via requirements.txt
 # No duplicate install needed here.
