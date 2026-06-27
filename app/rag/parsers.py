@@ -872,9 +872,12 @@ def _parse_url(file_path: str) -> ParseResult:
         if not url:
             return ParseResult(success=False, error="No valid URL found in file")
 
-        if os.getenv("RAG_HF_OFFLINE", "false").lower() in {"1", "true", "yes", "on"}:
+        is_offline = os.getenv("RAG_HF_OFFLINE", "false").lower() in {"1", "true", "yes", "on"}
+        is_airgap = os.getenv("RAG_AIRGAP_MODE", "true").lower() in {"1", "true", "yes", "on"}
+        
+        if is_offline or is_airgap:
             return ParseResult(
-                pages=[PageContent(page_num=1, text=f"[WEB URL]\n{url}\n\n(Offline mode: content not scraped)")],
+                pages=[PageContent(page_num=1, text=f"[WEB URL]\n{url}\n\n(Offline/Air-gap mode active: content not scraped)")],
                 metadata={"format": "url", "page_count": 1, "source": url},
             )
 

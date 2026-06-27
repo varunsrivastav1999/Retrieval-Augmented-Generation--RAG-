@@ -82,7 +82,7 @@ def _generate_hyde(query: str) -> str:
         print(f"[HyDE] Failed to generate: {e}")
     return ""
 
-def _perform_postgres_bm25(db: Session, query: str, tenant_id: str, limit: int) -> list:
+def _perform_postgres_bm25(query: str, tenant_id: str, limit: int) -> list:
     """Uses PostgreSQL's native Full-Text Search (tsvector) for sparse keyword match.
     Table-aware: strips markdown pipe characters before tokenization.
     """
@@ -100,36 +100,38 @@ def _perform_postgres_bm25(db: Session, query: str, tenant_id: str, limit: int) 
     """)
     candidates = []
     try:
-        results = db.execute(sql, {"query": clean_query, "tenant_id": tenant_id, "limit": limit}).fetchall()
-        for row in results:
-            doc_metadata = row.doc_metadata or {}
-            candidates.append({
-                "id": str(row.id),
-                "text": row.text_content,
-                "score": 0.0,
-                "hybrid_score": 0.0,
-                "dense_score": 0.0,
-                "sparse_score": row.rank_score,
-                "file_type": row.file_type or "unknown",
-                "table_group": doc_metadata.get("table_group"),
-                "metadata": {
-                    "tenant_id": tenant_id,
-                    "source": row.doc_id,
-                    "section": row.section,
-                    "type": doc_metadata.get("type", "text"),
-                    "page_num": doc_metadata.get("page_num"),
-                    "embedding_model": "bm25_postgres",
+        from app.database import SessionLocal
+        with SessionLocal() as thread_db:
+            results = thread_db.execute(sql, {"query": clean_query, "tenant_id": tenant_id, "limit": limit}).fetchall()
+            for row in results:
+                doc_metadata = row.doc_metadata or {}
+                candidates.append({
+                    "id": str(row.id),
+                    "text": row.text_content,
+                    "score": 0.0,
+                    "hybrid_score": 0.0,
+                    "dense_score": 0.0,
+                    "sparse_score": row.rank_score,
                     "file_type": row.file_type or "unknown",
-                    "entities": doc_metadata.get("entities", []),
                     "table_group": doc_metadata.get("table_group"),
-                    # table-aware fields
-                    "table_id": doc_metadata.get("table_id"),
-                    "section_title": doc_metadata.get("section_title", ""),
-                    "cell_values": doc_metadata.get("cell_values"),
-                    "header_path": doc_metadata.get("header_path", []),
-                    "row_index": doc_metadata.get("row_index"),
-                }
-            })
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "source": row.doc_id,
+                        "section": row.section,
+                        "type": doc_metadata.get("type", "text"),
+                        "page_num": doc_metadata.get("page_num"),
+                        "embedding_model": "bm25_postgres",
+                        "file_type": row.file_type or "unknown",
+                        "entities": doc_metadata.get("entities", []),
+                        "table_group": doc_metadata.get("table_group"),
+                        # table-aware fields
+                        "table_id": doc_metadata.get("table_id"),
+                        "section_title": doc_metadata.get("section_title", ""),
+                        "cell_values": doc_metadata.get("cell_values"),
+                        "header_path": doc_metadata.get("header_path", []),
+                        "row_index": doc_metadata.get("row_index"),
+                    }
+                })
     except Exception as e:
         print(f"[Retrieval] PostgreSQL BM25 failed: {e}")
     return candidates
@@ -223,7 +225,7 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
             fut_hyde = executor.submit(_generate_hyde, query)
             fut_vision = executor.submit(encode_image_text_query, query)
             fut_entities = executor.submit(extract_entities, query)
-            fut_bm25 = executor.submit(_perform_postgres_bm25, db, query, tenant_id, max(top_k * 4, 50))
+            fut_bm25 = executor.submit(_perform_postgres_bm25, query, tenant_id, max(top_k * 4, 50))
 
             query_vector = fut_dense.result()
             hyde_text = fut_hyde.result()
