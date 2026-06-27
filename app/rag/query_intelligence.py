@@ -385,8 +385,9 @@ def text_to_sql_filters(query: str) -> dict:
     """
     prompt = f"""
     You are a metadata filter extractor.
-    Extract the 'file_type' (extension) and 'page' number from this query if present.
-    Return ONLY a raw JSON object with keys "file_type" (string or null) and "page" (integer or null).
+    Extract the 'file_type' (extension), 'page' number, and 'target_file' (specific document name or topic) from this query if present.
+    Return ONLY a raw JSON object with keys "file_type" (string or null), "page" (integer or null), and "target_file" (string or null).
+    If the user mentions a specific manual or document (e.g., "in the welding manual"), set target_file to "welding" or "manual".
     Do NOT include any markdown, explanation, or code blocks.
     
     Query: "{query}"

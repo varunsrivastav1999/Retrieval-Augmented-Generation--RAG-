@@ -82,19 +82,28 @@ def _generate_hyde(query: str) -> str:
         print(f"[HyDE] Failed to generate: {e}")
     return ""
 
-def _perform_postgres_bm25(query: str, tenant_id: str, limit: int) -> list:
+def _perform_postgres_bm25(query: str, tenant_id: str, limit: int, metadata_filters: dict = None) -> list:
     """Uses PostgreSQL's native Full-Text Search (tsvector) for sparse keyword match.
     Table-aware: strips markdown pipe characters before tokenization.
     """
     # Strip table-markdown noise so BM25 doesn't treat | and --- as tokens
     clean_query = re.sub(r'[|\-]{2,}', ' ', query).strip()
-    sql = text("""
+    
+    target_file_clause = ""
+    params = {"query": clean_query, "tenant_id": tenant_id, "limit": limit}
+    
+    if metadata_filters and "target_file" in metadata_filters and metadata_filters["target_file"]:
+        target_file_clause = "AND doc_id ILIKE :target_file"
+        params["target_file"] = f"%{metadata_filters['target_file']}%"
+
+    sql = text(f"""
         SELECT id, doc_id, text_content, section, file_type, doc_metadata,
                ts_rank(to_tsvector('english', text_content), plainto_tsquery('english', :query)) as rank_score
         FROM document_chunks
         WHERE tenant_id = :tenant_id
           AND text_content IS NOT NULL
           AND plainto_tsquery('english', :query) @@ to_tsvector('english', text_content)
+          {target_file_clause}
         ORDER BY rank_score DESC
         LIMIT :limit
     """)
@@ -102,7 +111,7 @@ def _perform_postgres_bm25(query: str, tenant_id: str, limit: int) -> list:
     try:
         from app.database import SessionLocal
         with SessionLocal() as thread_db:
-            results = thread_db.execute(sql, {"query": clean_query, "tenant_id": tenant_id, "limit": limit}).fetchall()
+            results = thread_db.execute(sql, params).fetchall()
             for row in results:
                 doc_metadata = row.doc_metadata or {}
                 candidates.append({
@@ -225,7 +234,7 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
             fut_hyde = executor.submit(_generate_hyde, query)
             fut_vision = executor.submit(encode_image_text_query, query)
             fut_entities = executor.submit(extract_entities, query)
-            fut_bm25 = executor.submit(_perform_postgres_bm25, query, tenant_id, max(top_k * 4, 50))
+            fut_bm25 = executor.submit(_perform_postgres_bm25, query, tenant_id, max(top_k * 4, 50), metadata_filters)
 
             query_vector = fut_dense.result()
             hyde_text = fut_hyde.result()
@@ -254,6 +263,8 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
     if metadata_filters:
         if "file_type" in metadata_filters and metadata_filters["file_type"]:
             must_conditions.append(models.FieldCondition(key="file_type", match=models.MatchValue(value=metadata_filters["file_type"])))
+        if "target_file" in metadata_filters and metadata_filters["target_file"]:
+            must_conditions.append(models.FieldCondition(key="metadata.source", match=models.MatchText(text=metadata_filters["target_file"])))
         if "page" in metadata_filters and metadata_filters["page"]:
             try:
                 page_val = int(metadata_filters["page"])
