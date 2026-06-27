@@ -8,9 +8,20 @@ try:
     print("Found docling.utils.model_downloader, downloading all models via official API...")
     download_models()
     print("Successfully downloaded Docling models via download_models API.")
-    sys.exit(0)
 except ImportError:
     print("download_models API not found, falling back to dummy conversion...")
+
+# Approach 1.5: Pre-download EasyOCR weights to guarantee 100% offline air-gap
+try:
+    import easyocr
+    print("Pre-downloading EasyOCR weights to prevent runtime network access...")
+    # Initializing the Reader triggers the model downloads (craft_mlt_25k and english_g2)
+    reader = easyocr.Reader(['en'], gpu=False)
+    print("Successfully pre-downloaded EasyOCR weights.")
+except ImportError:
+    print("easyocr not installed, skipping EasyOCR offline pre-download.")
+except Exception as e:
+    print(f"Warning during EasyOCR pre-download: {e}")
 
 # Approach 2: Dummy conversion to force lazy-loading
 try:
