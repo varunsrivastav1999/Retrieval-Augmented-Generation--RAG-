@@ -166,6 +166,7 @@ def validate_tenant_id(tenant_id: str) -> str:
 def _cache_key(
     query: str,
     tenant_id: str,
+    user_id: str,
     top_k: int,
     embedding_model: str,
     corpus_version: str,
@@ -173,6 +174,7 @@ def _cache_key(
 ) -> str:
     payload = {
         "tenant_id": tenant_id,
+        "user_id": user_id,
         "query": query,
         "top_k": top_k,
         "embedding_model": embedding_model,
@@ -190,6 +192,7 @@ CACHE_SEMANTIC_THRESHOLD = float(os.getenv("RAG_CACHE_SEMANTIC_THRESHOLD", "0.95
 def get_cached_response(
     query: str,
     tenant_id: str,
+    user_id: str,
     top_k: int,
     embedding_model: str,
     corpus_version: str,
@@ -199,7 +202,7 @@ def get_cached_response(
     try:
         # Layer 11: Semantic Query Cache — aggressive matching (0.95 threshold)
         query_vector = encode_text(query)
-        index_key = f"semantic_index:{tenant_id}:{embedding_model}:{corpus_version}"
+        index_key = f"semantic_index:{tenant_id}:{user_id}:{embedding_model}:{corpus_version}"
         
         raw_entries = redis_client.lrange(index_key, 0, -1)
         if raw_entries:
@@ -255,6 +258,7 @@ def get_cached_response(
 def set_cached_response(
     query: str,
     tenant_id: str,
+    user_id: str,
     top_k: int,
     embedding_model: str,
     corpus_version: str,
@@ -263,12 +267,12 @@ def set_cached_response(
 ):
     if not redis_client: return
     try:
-        cache_key = _cache_key(query, tenant_id, top_k, embedding_model, corpus_version, scope)
+        cache_key = _cache_key(query, tenant_id, user_id, top_k, embedding_model, corpus_version, scope)
         redis_client.setex(cache_key, 86400, json.dumps(response))
         
         # Update semantic index atomically with Redis list
         query_vector = encode_text(query)
-        index_key = f"semantic_index:{tenant_id}:{embedding_model}:{corpus_version}"
+        index_key = f"semantic_index:{tenant_id}:{user_id}:{embedding_model}:{corpus_version}"
         entry = json.dumps({"cache_key": cache_key, "embedding": query_vector, "query": query})
         
         pipe = redis_client.pipeline()
@@ -395,6 +399,7 @@ def on_shutdown():
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4000)
     tenant_id: str = Field("default", pattern=TENANT_PATTERN)
+    user_id: str = Field("default", pattern=TENANT_PATTERN)
     top_k: int = Field(DEFAULT_TOP_K, ge=1, le=MAX_TOP_K)
     parent: Optional[str] = None
     child: Optional[str] = None
@@ -982,6 +987,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     cached = get_cached_response(
         request.query,
         tenant_id,
+        request.user_id,
         effective_top_k,
         embedding_model,
         corpus_version,
@@ -1162,7 +1168,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         }
         if not request.fast_path:
             set_cached_response(
-                request.query, tenant_id, effective_top_k,
+                request.query, tenant_id, request.user_id, effective_top_k,
                 embedding_model, corpus_version,
                 {key: value for key, value in response_data.items() if key != "ingest"},
                 scope=cache_scope,
@@ -1320,7 +1326,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             
             try:
                 set_cached_response(
-                    request.query, tenant_id, effective_top_k,
+                    request.query, tenant_id, request.user_id, effective_top_k,
                     embedding_model, corpus_version,
                     {"answer": answer_acc, "context": final_context, "sources": sources,
                      "grounding": grounding_result, "verification": verification},
@@ -1427,6 +1433,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         set_cached_response(
             request.query,
             tenant_id,
+            request.user_id,
             effective_top_k,
             embedding_model,
             corpus_version,

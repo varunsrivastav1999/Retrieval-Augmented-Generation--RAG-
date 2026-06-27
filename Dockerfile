@@ -35,6 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV HF_HOME=/models/huggingface
 ENV SENTENCE_TRANSFORMERS_HOME=/models/huggingface/sentence-transformers
 ENV HF_HUB_CACHE=/models/huggingface/hub
+ENV DOCLING_HOME=/models/docling
+ENV EASYOCR_MODULE_PATH=/models/easyocr
 
 # Install Python dependencies with pip cache mount
 # The --mount=type=cache persists /root/.cache/pip across builds so that
@@ -46,7 +48,18 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
 # Pre-download models — Use a lightweight python script to pre-download the model into the image
-RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-large-en-v1.5'); SentenceTransformer('sentence-transformers/clip-ViT-L-14'); CrossEncoder('BAAI/bge-reranker-large')"
+RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; \
+    SentenceTransformer('BAAI/bge-large-en-v1.5'); \
+    SentenceTransformer('sentence-transformers/clip-ViT-L-14'); \
+    CrossEncoder('BAAI/bge-reranker-large'); \
+    from docling.document_converter import DocumentConverter, PdfFormatOption; \
+    from docling.datamodel.pipeline_options import PdfPipelineOptions, TableStructureOptions; \
+    from docling.datamodel.base_models import InputFormat; \
+    opts = PdfPipelineOptions(); \
+    opts.do_ocr = True; \
+    opts.do_table_structure = True; \
+    opts.table_structure_options = TableStructureOptions(mode='accurate'); \
+    DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)})"
 
 # NOTE: spaCy model en_core_web_sm-3.8.0 is already installed via requirements.txt
 # No duplicate install needed here.
@@ -93,6 +106,8 @@ RUN ollama serve &>/tmp/ollama-srv.log & \
 ENV HF_HOME=/models/huggingface
 ENV SENTENCE_TRANSFORMERS_HOME=/models/huggingface/sentence-transformers
 ENV HF_HUB_CACHE=/models/huggingface/hub
+ENV DOCLING_HOME=/models/docling
+ENV EASYOCR_MODULE_PATH=/models/easyocr
 
 # Ensure NVIDIA runtime passes GPU libraries
 ENV NVIDIA_VISIBLE_DEVICES=all
