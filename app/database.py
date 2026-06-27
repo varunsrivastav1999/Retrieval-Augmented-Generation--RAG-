@@ -140,6 +140,8 @@ def _run_schema_migrations():
             "CREATE INDEX IF NOT EXISTS idx_chunks_content_format ON document_chunks(content_format)")
         # GIN index on doc_metadata for cell_values JSON queries
         _execute_best_effort(conn,
+            "ALTER TABLE document_chunks ALTER COLUMN doc_metadata TYPE JSONB USING doc_metadata::jsonb")
+        _execute_best_effort(conn,
             "CREATE INDEX IF NOT EXISTS idx_chunks_metadata_gin ON document_chunks USING gin(doc_metadata)")
         _execute_best_effort(conn,
             "CREATE INDEX IF NOT EXISTS idx_chunks_structured_gin ON document_chunks USING gin(structured_content)")
