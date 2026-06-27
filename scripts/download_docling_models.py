@@ -1,19 +1,6 @@
+print("Starting Docling models pre-download...")
 import sys
 import os
-
-print("Starting Docling models pre-download...")
-
-import huggingface_hub
-import os
-
-print("Force-downloading ds4sd/docling-models repository to bypass internal allow_patterns bug...")
-try:
-    # Explicitly download the entire model repo so .pt and .onnx files are all cached.
-    # This prevents the "Missing ONNX file: .../model.pt" bug.
-    huggingface_hub.snapshot_download(repo_id="ds4sd/docling-models")
-    print("Successfully fetched ds4sd/docling-models!")
-except Exception as e:
-    print(f"Warning: Failed to manual snapshot download: {e}")
 
 # Approach 1: Official v2 model downloader
 try:
