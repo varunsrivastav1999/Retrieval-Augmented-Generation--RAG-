@@ -1028,7 +1028,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         # --- FULL AGENTIC STATE MACHINE (multi-query, HyDE, BM25, reranker, FLARE) ---
         MAX_FLARE_RETRIES = 3
         FLARE_THRESHOLDS = [0.35, 0.25, 0.15]
-        FLARE_TIMEOUT = 30.0  # seconds total before circuit-breaker
+        FLARE_TIMEOUT = float(os.getenv("RAG_FLARE_TIMEOUT", "180.0"))  # seconds total before circuit-breaker
         
         class AgentState:
             def __init__(self):
