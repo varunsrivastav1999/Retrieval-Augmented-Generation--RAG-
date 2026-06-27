@@ -133,9 +133,9 @@ ENABLE_INGESTION_WORKER = os.getenv("RAG_ENABLE_INGESTION_WORKER", "true").lower
 }
 INGESTION_WORKER_POLL_SECONDS = float(os.getenv("RAG_INGESTION_WORKER_POLL_SECONDS", "5"))
 INGESTION_STALE_TIMEOUT_SECONDS = int(os.getenv("RAG_INGESTION_STALE_TIMEOUT_SECONDS", "1800"))
-DEFAULT_TOP_K = int(os.getenv("RAG_DEFAULT_TOP_K", "12"))
-MAX_TOP_K = int(os.getenv("RAG_MAX_TOP_K", "50"))
-BROAD_QUERY_TOP_K = int(os.getenv("RAG_BROAD_QUERY_TOP_K", "32"))
+DEFAULT_TOP_K = int(os.getenv("RAG_DEFAULT_TOP_K", "24"))
+MAX_TOP_K = int(os.getenv("RAG_MAX_TOP_K", "100"))
+BROAD_QUERY_TOP_K = int(os.getenv("RAG_BROAD_QUERY_TOP_K", "48"))
 SOURCE_LIMIT = int(os.getenv("RAG_SOURCE_LIMIT", "24"))
 # File size limit — prevents zip bombs and OOM
 MAX_UPLOAD_SIZE_BYTES = int(os.getenv("RAG_MAX_UPLOAD_SIZE_BYTES", str(5000 * 1024 * 1024)))  # 5000MB default
