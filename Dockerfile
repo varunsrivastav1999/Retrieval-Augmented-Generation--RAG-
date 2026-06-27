@@ -47,12 +47,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
     pip install -r requirements.txt
 
-# Pre-download models — Use a lightweight python script to pre-download the model into the image
-RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; \
-    SentenceTransformer('BAAI/bge-large-en-v1.5'); \
-    SentenceTransformer('sentence-transformers/clip-ViT-L-14'); \
-    CrossEncoder('BAAI/bge-reranker-large'); \
-    from docling.document_converter import DocumentConverter, PdfFormatOption; \
+# Pre-download models in separate steps to prevent Docker OOM crashes
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-large-en-v1.5')"
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/clip-ViT-L-14')"
+RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('BAAI/bge-reranker-large')"
+RUN python -c "from docling.document_converter import DocumentConverter, PdfFormatOption; \
     from docling.datamodel.pipeline_options import PdfPipelineOptions, TableStructureOptions; \
     from docling.datamodel.base_models import InputFormat; \
     opts = PdfPipelineOptions(); \
