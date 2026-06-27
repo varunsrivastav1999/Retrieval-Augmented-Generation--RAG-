@@ -1022,7 +1022,6 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 effective_top_k = min(MAX_TOP_K, max(effective_top_k, BROAD_QUERY_TOP_K))
 
             if request.fast_path:
-                yield "data: " + json.dumps({'token': '> ⚡ *Fast Path: Retrieving context directly...*\n'}) + "\n\n"
                 retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
                 final_context = retrieved_chunks[:effective_top_k]
                 for c in final_context:
@@ -1030,7 +1029,6 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 sources = _context_sources(final_context)
                 grounding_result = compute_grounding_score(search_query, final_context)
             else:
-                yield "data: " + json.dumps({'token': '> 🧠 *Analyzing query intelligence...*\n'}) + "\n\n"
                 query_intel = intelligent_query_pipeline(search_query)
                 
                 MAX_FLARE_RETRIES = 3
@@ -1053,7 +1051,6 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 
                 while agent.current_state not in ["generate", "end"]:
                     if time.time() - flare_start > FLARE_TIMEOUT:
-                        yield "data: " + json.dumps({'token': '> ⚠️ *Timeout reached, proceeding with current context.*\n'}) + "\n\n"
                         if agent.final_context:
                             agent.current_state = "generate"
                         else:
@@ -1061,12 +1058,10 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                         break
                     
                     if agent.current_state == "route":
-                        yield "data: " + json.dumps({'token': '> 🚦 *Routing query...*\n'}) + "\n\n"
                         route = query_router.route_query(search_query)
                         if route == "sql":
                             agent.metadata_filters = text_to_sql_filters(search_query)
                         elif route == "raptor":
-                            yield "data: " + json.dumps({'token': '> 🦅 *Fetching RAPTOR global summary...*\n'}) + "\n\n"
                             highest_level_summaries = db.query(DocumentChunk).filter(
                                 DocumentChunk.tenant_id == tenant_id,
                                 DocumentChunk.file_type == "raptor_summary"
@@ -1086,7 +1081,6 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                         agent.current_state = "retrieve"
                         
                     elif agent.current_state == "retrieve":
-                        yield "data: " + json.dumps({'token': '> 🔍 *Retrieving and reranking documents...*\n'}) + "\n\n"
                         retrieved_chunks = perform_multi_query_search(db, agent.queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4), metadata_filters=agent.metadata_filters)
                         reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
                         agent.final_context = assemble_context(search_query, reranked_chunks, db=db)
@@ -1099,12 +1093,10 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                         score = agent.grounding_result.get("score", 0.0)
                         
                         if agent.grounding_result["is_grounded"] or score >= threshold:
-                            yield "data: " + json.dumps({'token': '> ✅ *Context successfully grounded!*\n'}) + "\n\n"
                             agent.current_state = "generate" if agent.final_context else "end"
                         else:
                             agent.retry_count += 1
                             if agent.retry_count > MAX_FLARE_RETRIES:
-                                yield "data: " + json.dumps({'token': '> ⚠️ *Max FLARE retries reached.*\n'}) + "\n\n"
                                 if score >= 0.10 and agent.final_context:
                                     agent.current_state = "generate"
                                 else:
@@ -1113,7 +1105,6 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                                 agent.current_state = "rewrite"
                             
                     elif agent.current_state == "rewrite":
-                        yield "data: " + json.dumps({'token': f'> 🔄 *FLARE Retry {agent.retry_count}/{MAX_FLARE_RETRIES}: Decomposing alternative queries...*\n'}) + "\n\n"
                         agent.queries_to_search = flare_query_decomposition(
                             original_query=search_query,
                             retry_count=agent.retry_count,
@@ -1127,11 +1118,10 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
 
             if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
                 force_general = True
-                yield "data: " + json.dumps({'token': '> ⚠️ *Grounding failed or no context. Falling back to general knowledge.*\n'}) + "\n\n"
                 if not grounding_result:
                     grounding_result = {"is_grounded": False, "score": 0.0, "detail": "Fallback to general knowledge"}
             
-            yield "data: " + json.dumps({'token': '---\n\n'}) + "\n\n"
+
 
             if request.extractive:
                 answer = ""
