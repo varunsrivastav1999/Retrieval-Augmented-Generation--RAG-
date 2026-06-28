@@ -60,20 +60,29 @@ class CanonicalTableRow:
         return hashlib.sha256(key.encode()).hexdigest()[:16]
 
     def to_insert_dict(self) -> dict:
+        def clean_nulls(val):
+            if isinstance(val, str):
+                return val.replace('\x00', '')
+            if isinstance(val, dict):
+                return {clean_nulls(k): clean_nulls(v) for k, v in val.items()}
+            if isinstance(val, list):
+                return [clean_nulls(x) for x in val]
+            return val
+
         return {
             "tenant_id":    self.tenant_id,
             "doc_id":       self.doc_id,
             "table_id":     self.table_id,
-            "section_title": self.section_title,
+            "section_title": self.section_title.replace('\x00', '') if self.section_title else "",
             "page_start":   self.page_start,
             "page_end":     self.page_end,
             "row_id":       self.row_id,
             "row_index":    self.row_index,
-            "header_path":  json.dumps(self.header_path),
-            "cells":        json.dumps(self.cells),
-            "numeric_cells": json.dumps(self.numeric_cells),
-            "nl_sentence":  self.nl_sentence,
-            "note_refs":    json.dumps(self.note_refs),
+            "header_path":  json.dumps(clean_nulls(self.header_path)),
+            "cells":        json.dumps(clean_nulls(self.cells)),
+            "numeric_cells": json.dumps(clean_nulls(self.numeric_cells)),
+            "nl_sentence":  self.nl_sentence.replace('\x00', '') if self.nl_sentence else "",
+            "note_refs":    json.dumps(clean_nulls(self.note_refs)),
         }
 
 
@@ -149,8 +158,8 @@ def upsert_canonical_rows(db: Session, rows: List[CanonicalTableRow]) -> int:
              row_id, row_index, header_path, cells, numeric_cells, nl_sentence, note_refs)
         VALUES
             (:tenant_id, :doc_id, :table_id, :section_title, :page_start, :page_end,
-             :row_id, :row_index, :header_path::jsonb, :cells::jsonb,
-             :numeric_cells::jsonb, :nl_sentence, :note_refs::jsonb)
+             :row_id, :row_index, CAST(:header_path AS JSONB), CAST(:cells AS JSONB),
+             CAST(:numeric_cells AS JSONB), :nl_sentence, CAST(:note_refs AS JSONB))
         ON CONFLICT (row_id) DO UPDATE SET
             cells         = EXCLUDED.cells,
             numeric_cells = EXCLUDED.numeric_cells,
