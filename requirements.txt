@@ -28,10 +28,7 @@ torch==2.2.2
 transformers>=4.42.0,<5.0.0
 rank_bm25==0.2.2
 
-# --- RAPTOR TREE (Required for RAPTOR hierarchical indexing) ---
-umap-learn==0.5.6
-scikit-learn==1.5.2
-numba==0.60.0
+
 
 # --- ANALYTICS (Required) ---
 duckdb==1.1.3

@@ -10,7 +10,8 @@
    2. Smart OCR & Table/Image Extraction
    3. Semantic Parent-Child Chunking
    4. Batch Embedding (offline, GPU-accelerated)
-   5. RAPTOR Hierarchical Summarization
+   4. Vector DB: Qdrant
+   5. Agentic RAG: Multi-hop Query Resolution
    6. Hybrid Search (HNSW + BM25 + Trigram)
    7. ColBERT Late-Interaction Reranking
    8. Max Marginal Relevance (MMR)
@@ -71,11 +72,11 @@ from app.rag.grounding import (
 )
 from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported_file
 from app.rag.query_intelligence import intelligent_query_pipeline, reformulate_query, text_to_sql_filters, flare_query_decomposition, flare_mid_generation_retrieval
-from app.rag.raptor import build_raptor_tree
+
 
 app = FastAPI(
     title="Enterprise Level RAG 17-Layer Microservice",
-    description="World's best zero-hallucination RAG with unlimited file support, sub-5ms exact extraction, ColBERT reranking, RAPTOR indexing, and Active RAG.",
+    description="World's best zero-hallucination Agentic RAG with unlimited file support, sub-5ms exact extraction, ColBERT reranking, and NVIDIA AI Blueprint Plan-and-Execute Architecture.",
     version="4.0.0",
 )
 
@@ -750,36 +751,6 @@ def list_supported_formats():
     }
 
 
-# ---------------------------------------------------------------------------
-# Layer 5: RAPTOR Hierarchical Tree Builder
-# ---------------------------------------------------------------------------
-class RaptorBuildRequest(BaseModel):
-    tenant_id: str = Field(default="default", description="Tenant namespace")
-    max_levels: int = Field(default=3, ge=1, le=10, description="Max RAPTOR tree depth")
-    n_clusters: int = Field(default=10, ge=2, le=100, description="Number of clusters per level")
-
-
-@app.post("/api/v1/raptor/build")
-def build_raptor_index(request: RaptorBuildRequest, db: Session = Depends(get_db)):
-    """Trigger RAPTOR hierarchical summarization on ingested chunks."""
-    try:
-        build_raptor_tree(
-            db=db,
-            tenant_id=request.tenant_id,
-            max_levels=request.max_levels,
-            n_clusters=request.n_clusters,
-        )
-        return {
-            "status": "completed",
-            "tenant_id": request.tenant_id,
-            "max_levels": request.max_levels,
-            "n_clusters": request.n_clusters,
-            "message": "RAPTOR tree built successfully. Summaries stored in vector DB.",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="RAPTOR build failed. Check server logs.")
-
-
 @app.get("/health/live")
 def live_health():
     return {"status": "ok"}
@@ -1027,92 +998,48 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 sources = _context_sources(final_context)
                 grounding_result = compute_grounding_score(search_query, final_context)
             else:
-                query_intel = intelligent_query_pipeline(search_query)
+                # Plan and Execute Pipeline (NVIDIA RAG Blueprint Style)
+                import asyncio
+                from app.rag.agentic import AgenticRAGPipeline
                 
-                MAX_FLARE_RETRIES = 3
-                FLARE_THRESHOLDS = [0.35, 0.25, 0.15]
-                FLARE_TIMEOUT = float(os.getenv("RAG_FLARE_TIMEOUT", "180.0"))
-                
-                class AgentState:
-                    def __init__(self):
-                        self.current_state = "route"
-                        self.queries_to_search = [search_query]
-                        self.metadata_filters = None
-                        self.final_context = []
-                        self.grounding_result = None
-                        self.retry_count = 0
-                        self.sources = []
-                        self.answer = ""
-                        
-                agent = AgentState()
-                flare_start = time.time()
-                
-                while agent.current_state not in ["generate", "end"]:
-                    if time.time() - flare_start > FLARE_TIMEOUT:
-                        if agent.final_context:
-                            agent.current_state = "generate"
-                        else:
-                            agent.current_state = "end"
-                        break
+                pipeline = AgenticRAGPipeline(db, tenant_id, effective_top_k)
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    agentic_result = loop.run_until_complete(pipeline.run(search_query))
+                    loop.close()
+                except RuntimeError:
+                    agentic_result = asyncio.run(pipeline.run(search_query))
                     
-                    if agent.current_state == "route":
-                        route = query_router.route_query(search_query)
-                        if route == "sql":
-                            agent.metadata_filters = text_to_sql_filters(search_query)
-                        elif route == "raptor":
-                            highest_level_summaries = db.query(DocumentChunk).filter(
-                                DocumentChunk.tenant_id == tenant_id,
-                                DocumentChunk.file_type == "raptor_summary"
-                            ).order_by(DocumentChunk.raptor_level.desc()).limit(10).all()
-                            
-                            if highest_level_summaries:
-                                raptor_context = "\n\n".join([c.text_content for c in highest_level_summaries])
-                                agent.final_context = [{"text": raptor_context, "metadata": {"type": "raptor", "source": "RAPTOR Global Index"}}]
-                                agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
-                                agent.sources = ["RAPTOR Global Index"]
-                                agent.current_state = "generate"
-                                continue
-                            else:
-                                route = "vector"
-                        
-                        agent.queries_to_search = query_intel["expanded_queries"][:2]
-                        agent.current_state = "retrieve"
-                        
-                    elif agent.current_state == "retrieve":
-                        retrieved_chunks = perform_multi_query_search(db, agent.queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4), metadata_filters=agent.metadata_filters)
-                        reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
-                        agent.final_context = assemble_context(search_query, reranked_chunks, db=db)
-                        agent.sources = _context_sources(agent.final_context)
-                        agent.current_state = "grade"
-                        
-                    elif agent.current_state == "grade":
-                        threshold = FLARE_THRESHOLDS[min(agent.retry_count, len(FLARE_THRESHOLDS) - 1)]
-                        agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
-                        score = agent.grounding_result.get("score", 0.0)
-                        
-                        if agent.grounding_result["is_grounded"] or score >= threshold:
-                            agent.current_state = "generate" if agent.final_context else "end"
-                        else:
-                            agent.retry_count += 1
-                            if agent.retry_count > MAX_FLARE_RETRIES:
-                                if score >= 0.10 and agent.final_context:
-                                    agent.current_state = "generate"
-                                else:
-                                    agent.current_state = "end"
-                            else:
-                                agent.current_state = "rewrite"
-                            
-                    elif agent.current_state == "rewrite":
-                        agent.queries_to_search = flare_query_decomposition(
-                            original_query=search_query,
-                            retry_count=agent.retry_count,
+                final_context = agentic_result["context"]
+                sources = agentic_result["sources"]
+                grounding_result = agentic_result["grounding"]
+                
+                if agentic_result.get("answer"):
+                    # The agentic pipeline synthesized the answer directly, so we stream the final answer in one block (since it's already generated)
+                    # A true async stream of synthesis tokens requires async generator support across the pipeline.
+                    yield "data: " + json.dumps({'token': agentic_result["answer"]}) + "\n\n"
+                    latency = int((time.time() - start_time) * 1000)
+                    verification = verify_answer_grounding(agentic_result["answer"], final_context)
+                    
+                    db.commit()
+                    status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
+                    RAG_QUERY_TOTAL.labels(status=status).inc()
+                    RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency / 1000.0)
+                    
+                    try:
+                        set_cached_response(
+                            request.query, tenant_id, request.user_id, effective_top_k,
+                            embedding_model, corpus_version,
+                            {"answer": agentic_result["answer"], "context": final_context, "sources": sources,
+                             "grounding": grounding_result, "verification": verification},
+                            scope=cache_scope,
                         )
-                        effective_top_k = min(original_top_k * agent.retry_count, 48)
-                        agent.current_state = "retrieve"
+                    except Exception as cache_err:
+                        print(f"[Cache] Error saving agentic response: {cache_err}")
 
-                final_context = agent.final_context
-                sources = agent.sources
-                grounding_result = agent.grounding_result
+                    yield "data: " + json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency}) + "\n\n"
+                    return
 
             if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
                 if not grounding_result:
@@ -1277,12 +1204,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         return StreamingResponse(stream_llm(), media_type="text/event-stream")
         
     else:
-        # NON-STREAMING FALLBACK
-        final_context = []
-        sources = []
-        grounding_result = None
-        force_general = False
-        
+        # NON-STREAMING FALLBACK (Agentic RAG / Fast Path)
         if request.fast_path:
             retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
             final_context = retrieved_chunks[:effective_top_k]
@@ -1291,83 +1213,60 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             sources = _context_sources(final_context)
             grounding_result = compute_grounding_score(search_query, final_context)
         else:
-            query_intel = intelligent_query_pipeline(search_query)
-            MAX_FLARE_RETRIES = 3
-            FLARE_THRESHOLDS = [0.35, 0.25, 0.15]
-            FLARE_TIMEOUT = float(os.getenv("RAG_FLARE_TIMEOUT", "180.0"))
+            # Plan and Execute Pipeline (NVIDIA RAG Blueprint Style)
+            import asyncio
+            from app.rag.agentic import AgenticRAGPipeline
             
-            class AgentState:
-                def __init__(self):
-                    self.current_state = "route"
-                    self.queries_to_search = [search_query]
-                    self.metadata_filters = None
-                    self.final_context = []
-                    self.grounding_result = None
-                    self.retry_count = 0
-                    self.sources = []
-                    
-            agent = AgentState()
-            flare_start = time.time()
-            
-            while agent.current_state not in ["generate", "end"]:
-                if time.time() - flare_start > FLARE_TIMEOUT:
-                    if agent.final_context:
-                        agent.current_state = "generate"
-                    else:
-                        agent.current_state = "end"
-                    break
+            pipeline = AgenticRAGPipeline(db, tenant_id, effective_top_k)
+            try:
+                # FastAPI runs sync defs in a threadpool, so asyncio.run is safe here.
+                # If an event loop is already running, we create a new one.
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                agentic_result = loop.run_until_complete(pipeline.run(search_query))
+                loop.close()
+            except RuntimeError:
+                # Fallback if somehow already in an async context
+                agentic_result = asyncio.run(pipeline.run(search_query))
                 
-                if agent.current_state == "route":
-                    route = query_router.route_query(search_query)
-                    if route == "sql":
-                        agent.metadata_filters = text_to_sql_filters(search_query)
-                    elif route == "raptor":
-                        highest_level_summaries = db.query(DocumentChunk).filter(
-                            DocumentChunk.tenant_id == tenant_id,
-                            DocumentChunk.file_type == "raptor_summary"
-                        ).order_by(DocumentChunk.raptor_level.desc()).limit(10).all()
-                        if highest_level_summaries:
-                            raptor_context = "\n\n".join([c.text_content for c in highest_level_summaries])
-                            agent.final_context = [{"text": raptor_context, "metadata": {"type": "raptor", "source": "RAPTOR Global Index"}}]
-                            agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
-                            agent.sources = ["RAPTOR Global Index"]
-                            agent.current_state = "generate"
-                            continue
-                        else:
-                            route = "vector"
-                    agent.queries_to_search = query_intel["expanded_queries"][:2]
-                    agent.current_state = "retrieve"
-                    
-                elif agent.current_state == "retrieve":
-                    retrieved_chunks = perform_multi_query_search(db, agent.queries_to_search, tenant_id, top_k=max(20, effective_top_k * 4), metadata_filters=agent.metadata_filters)
-                    reranked_chunks = rerank_results(search_query, retrieved_chunks, top_n=effective_top_k)
-                    agent.final_context = assemble_context(search_query, reranked_chunks, db=db)
-                    agent.sources = _context_sources(agent.final_context)
-                    agent.current_state = "grade"
-                    
-                elif agent.current_state == "grade":
-                    threshold = FLARE_THRESHOLDS[min(agent.retry_count, len(FLARE_THRESHOLDS) - 1)]
-                    agent.grounding_result = compute_grounding_score(search_query, agent.final_context)
-                    score = agent.grounding_result.get("score", 0.0)
-                    if agent.grounding_result["is_grounded"] or score >= threshold:
-                        agent.current_state = "generate" if agent.final_context else "end"
-                    else:
-                        agent.retry_count += 1
-                        if agent.retry_count > MAX_FLARE_RETRIES:
-                            if score >= 0.10 and agent.final_context:
-                                agent.current_state = "generate"
-                            else:
-                                agent.current_state = "end"
-                        else:
-                            agent.current_state = "rewrite"
-                elif agent.current_state == "rewrite":
-                    agent.queries_to_search = flare_query_decomposition(original_query=search_query, retry_count=agent.retry_count)
-                    effective_top_k = min(original_top_k * agent.retry_count, 48)
-                    agent.current_state = "retrieve"
+            final_context = agentic_result["context"]
+            sources = agentic_result["sources"]
+            grounding_result = agentic_result["grounding"]
+            
+            if agentic_result.get("answer"):
+                # The agentic pipeline synthesized the answer directly!
+                latency = int((time.time() - start_time) * 1000)
+                verification = verify_answer_grounding(agentic_result["answer"], final_context)
+                
+                db.commit()
+                status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
+                RAG_QUERY_TOTAL.labels(status=status).inc()
+                RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency / 1000.0)
+                
+                try:
+                    set_cached_response(
+                        request.query, tenant_id, request.user_id, effective_top_k,
+                        embedding_model, corpus_version,
+                        {"answer": agentic_result["answer"], "context": final_context, "sources": sources,
+                         "grounding": grounding_result, "verification": verification},
+                        scope=cache_scope,
+                    )
+                except Exception as cache_err:
+                    print(f"[Cache] Error saving agentic response: {cache_err}")
 
-            final_context = agent.final_context
-            sources = agent.sources
-            grounding_result = agent.grounding_result
+                return {
+                    "answer": agentic_result["answer"],
+                    "context": final_context,
+                    "sources": sources,
+                    "latency_ms": latency,
+                    "ingest": ingest_summary,
+                    "grounding": grounding_result,
+                    "verification": verification,
+                }
+            
+            # If agentic_result["answer"] is empty, it means empty_plan was selected.
+            # We will fall through to standard generation below using the retrieved final_context.
+
 
         if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
             if not grounding_result:

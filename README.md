@@ -39,7 +39,7 @@ A **production-grade RAG engine** built for industrial-scale document understand
 - **Auto Mode** (`auto: true`): Simple fact lookups return exact verbatim text in **6–15ms**; complex analysis questions route to the full LLM pipeline automatically.
 - **Extractive Mode**: Skips the LLM entirely — returns verbatim text from the top document chunk with source citation.
 - **FLARE Active RAG (Layer 15)**: Three-tier retry (keyword extraction → LLM alternative queries → sub-question decomposition) with adaptive thresholds.
-- **RAPTOR (Layer 5)**: Hierarchical summarization with UMAP + GMM clustering + LLM summarization.
+- **Agentic Plan-and-Execute (Layer 5)**: NVIDIA AI Blueprint inspired multi-hop query resolution. An LLM planner decides between direct extraction or sub-task execution, and parallel mini-agents synthesize complex final answers.
 - **"One Topic, One PDF" Isolation**: The Self-Query Retriever dynamically extracts target document names/topics from the user query (e.g., "in the welding manual") and pushes strict SQL `ILIKE` and Qdrant `MatchText` metadata filters deep into the pipeline, guaranteeing 100% exact isolation with zero cross-contamination.
 - **Zero Hallucination**: Four-layer guard — pre-generation grounding check, strict citation prompt, mid-generation FLARE verification, post-generation verification.
 - **30+ File Formats**: Powered by **IBM Docling** executing strictly in `TableFormerMode.ACCURATE` for flawless PDF/layout/math extraction. Fallbacks are disabled to ensure noisy data is never ingested. Light CPU OCR (Tesseract via Docling) used for scanned documents to save VRAM.
@@ -59,8 +59,8 @@ graph TD
 
     QIntel --> Router[Layer 10: 4-Tier Semantic Router]
     
-    Router -- RAPTOR --> RaptorDB[(Layer 5: RAPTOR Index)]
-    RaptorDB --> ContextAssemble[Layer 9: Context Assembly]
+    Router -- Agentic --> AgenticRAG[(Layer 5: Agentic Pipeline)]
+    AgenticRAG --> ContextAssemble[Layer 9: Context Assembly]
     
     Router -- SQL --> ExtMeta[Extract Metadata Filters via DuckDB]
     ExtMeta --> Hybrid[Layer 6: Hybrid Search]
@@ -108,7 +108,7 @@ A dedicated table understanding module that executes between parsing and ingesti
 2. **Layer 2: CPU OCR Extraction**: Tesseract OCR via Docling extracts text from scanned PDFs without requiring massive VRAM allocations.
 3. **Layer 3: NeMo-Style Parent-Child Chunking**: Intelligent layout-aware splitting. Small child chunks are embedded for precise retrieval while linking directly to large, context-rich parent blocks.
 4. **Layer 4: Text Embedding**: Encodes text and NL-serialized table rows via `bge-small-en-v1.5` (384d). Vectors stored in Qdrant.
-5. **Layer 5: RAPTOR Hierarchical Indexing**: Clusters vector embeddings via UMAP and Gaussian Mixture Models (GMM).
+5. **Layer 5: Agentic Plan-and-Execute**: Replaces legacy graph-based approaches with a state-of-the-art LLM planner that breaks complex queries into parallel sub-tasks and orchestrates retrieval.
 
 ### Phase 2: Retrieval & Intelligence
 6. **Layer 6: Hybrid Search + Exact Lookups**: 
