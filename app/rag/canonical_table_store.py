@@ -516,7 +516,8 @@ def _extract_numeric_cells(cells: Dict[str, str]) -> Dict[str, float]:
         m = fraction_pattern.match(val_str)
         if m:
             whole, numer, denom = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            numeric[header] = round(whole + numer / denom, 4)
+            if denom != 0:
+                numeric[header] = round(whole + numer / denom, 4)
             continue
 
         # Try plain number or number+unit: "200", "200A", "34 in"
