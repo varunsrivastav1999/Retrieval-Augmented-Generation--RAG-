@@ -34,6 +34,16 @@ import requests
 import re
 import threading
 import time
+import json
+import hashlib
+import warnings
+
+# Suppress Pydantic v2 protected namespace warnings caused by third-party packages
+warnings.filterwarnings("ignore", message='Field "model_.*" has conflict with protected namespace "model_"', category=UserWarning, module="pydantic")
+
+# Suppress noisy third-party deprecation warnings (e.g., pynvml, huggingface_hub)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 from fastapi import Body, HTTPException, Depends, File, Query, UploadFile
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse, Response
