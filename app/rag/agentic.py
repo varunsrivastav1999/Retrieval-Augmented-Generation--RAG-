@@ -9,7 +9,7 @@ import requests
 from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search
 from app.rag.context import assemble_context, _context_sources
 from app.rag.reranker import rerank_results
-from app.rag.grounding import compute_grounding_score, verify_answer_grounding
+from app.rag.grounding import compute_grounding_score, verify_answer_grounding, build_strict_grounding_prompt
 from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
 
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
@@ -98,10 +98,9 @@ class AgenticRAGPipeline:
         
         context_text = "\n---\n".join([c.get('text', '') for c in context])
         
-        system_prompt = "You are a precise task executor. Answer the sub-question based solely on the context provided. Be concise."
-        prompt = f"Context:\n{context_text}\n\nSub-question: {sub_question}"
+        prompt = build_strict_grounding_prompt(sub_question, context_text, broad_query=False)
         
-        answer = await self._async_ollama_generate(prompt, system=system_prompt)
+        answer = await self._async_ollama_generate(prompt, system="")
         
         return {
             "sub_question": sub_question,
@@ -111,21 +110,15 @@ class AgenticRAGPipeline:
 
     async def synthesize(self, query: str, task_results: List[Dict[str, Any]], initial_context: List[Dict[str, Any]]) -> str:
         """Combine all sub-answers and initial context into a final cohesive response."""
-        system_prompt = (
-            "You are the final synthesizer. Combine the following sub-task answers and context into a complete, "
-            "cohesive, and highly accurate response to the original query. Do not mention that you used sub-tasks. "
-            "If the information is missing, clearly state what is known and unknown."
-        )
-        
-        synthesis_input = f"Original Query: {query}\n\n"
+        initial_text = "\n---\n".join([c.get('text', '') for c in initial_context[:5]])
+        context_text = f"Initial Context:\n{initial_text}\n\n"
         
         for i, task in enumerate(task_results):
-            synthesis_input += f"Sub-Task {i+1}: {task['sub_question']}\nAnswer: {task['answer']}\n\n"
+            context_text += f"Sub-Task {i+1} Output for '{task['sub_question']}':\n{task['answer']}\n\n"
             
-        initial_text = "\n---\n".join([c.get('text', '') for c in initial_context[:3]])
-        synthesis_input += f"Initial Context:\n{initial_text}"
+        prompt = build_strict_grounding_prompt(query, context_text, broad_query=True)
         
-        return await self._async_ollama_generate(synthesis_input, system=system_prompt)
+        return await self._async_ollama_generate(prompt, system="")
 
     async def run(self, query: str) -> Dict[str, Any]:
         """Run the full Agentic Plan-and-Execute pipeline."""
@@ -134,7 +127,8 @@ class AgenticRAGPipeline:
         # Stage 1: Initial Retrieval
         loop = asyncio.get_event_loop()
         def _initial_retrieval():
-            chunks = perform_hybrid_search(self.db, query, self.tenant_id, top_k=self.original_top_k, fast_path=True)
+            # fast_path=False enables exact_catalogue_lookup, pulling tables offline
+            chunks = perform_hybrid_search(self.db, query, self.tenant_id, top_k=self.original_top_k, fast_path=False)
             return chunks
         
         initial_context = await loop.run_in_executor(None, _initial_retrieval)
