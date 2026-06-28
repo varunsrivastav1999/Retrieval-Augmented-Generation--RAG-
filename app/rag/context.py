@@ -1,5 +1,6 @@
 import os
 from collections import defaultdict
+from typing import List, Dict, Any
 from app.database import DocumentChunk
 from app.rag.model_loader import cosine_similarity, encode_text, encode_texts, get_embedding_model_id
 try:
@@ -271,3 +272,25 @@ def _candidate_from_chunk(chunk) -> dict:
         },
         "quantized_embedding": chunk.quantized_embedding if hasattr(chunk, "quantized_embedding") else None,
     }
+
+def _context_sources(final_context: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    sources = []
+    seen = set()
+    for item in final_context:
+        metadata = item.get("metadata") or {}
+        source_path = metadata.get("source") or "unknown_source"
+        source_name = os.path.basename(str(source_path)) or str(source_path)
+        page_num = metadata.get("page_num")
+        key = (source_name, page_num)
+        if key in seen:
+            continue
+        seen.add(key)
+        sources.append(
+            {
+                "source": source_name,
+                "page": page_num,
+                "citation": item.get("citation"),
+                "metadata": metadata,
+            }
+        )
+    return sources

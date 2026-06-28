@@ -69,19 +69,18 @@ from app.rag.jobs import (
     get_ingestion_job,
     start_ingestion_worker,
 )
-from app.rag.model_loader import get_embedding_model_id, runtime_model_info, validate_runtime_models
+from app.rag.model_loader import get_embedding_model_id, runtime_model_info
 from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search
-from app.rag.query_router import query_router, get_execution_strategy, QueryRoute
 from app.rag.reranker import rerank_results
-from app.rag.context import assemble_context
+from app.rag.context import _context_sources
 from app.rag.grounding import (
     NOT_FOUND_RESPONSE,
     build_strict_grounding_prompt,
     compute_grounding_score,
     verify_answer_grounding,
 )
-from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported_file
-from app.rag.query_intelligence import intelligent_query_pipeline, reformulate_query, text_to_sql_filters, flare_query_decomposition, flare_mid_generation_retrieval
+from app.rag.parsers import SUPPORTED_EXTENSIONS
+from app.rag.query_intelligence import flare_mid_generation_retrieval
 
 
 app = FastAPI(
@@ -577,30 +576,6 @@ def _retrieval_query(request: QueryRequest) -> str:
     return request.query
 
 
-def _context_sources(final_context: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    sources = []
-    seen = set()
-    for item in final_context:
-        metadata = item.get("metadata") or {}
-        source_path = metadata.get("source") or "unknown_source"
-        source_name = os.path.basename(str(source_path)) or str(source_path)
-        page_num = metadata.get("page_num")
-        key = (source_name, page_num)
-        if key in seen:
-            continue
-        seen.add(key)
-        sources.append(
-            {
-                "source": source_name,
-                "page": page_num,
-                "citation": item.get("citation"),
-                "metadata": metadata,
-            }
-        )
-        if len(sources) >= SOURCE_LIMIT:
-            break
-    return sources
-
 
 # =========================================================================
 # API Endpoints
@@ -990,7 +965,6 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
 
     if request.stream:
         def stream_llm():
-            nonlocal ingest_summary, corpus_version
             final_context = []
             sources = []
             grounding_result = None

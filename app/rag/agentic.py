@@ -6,7 +6,8 @@ import re
 from typing import List, Dict, Any, Optional
 
 import requests
-from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search, assemble_context, _context_sources
+from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search
+from app.rag.context import assemble_context, _context_sources
 from app.rag.reranker import rerank_results
 from app.rag.grounding import compute_grounding_score, verify_answer_grounding
 from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
