@@ -10,8 +10,6 @@ from app.rag.qdrant_client import get_qdrant_client
 from app.rag.model_loader import (
     encode_text,
     get_embedding_model_id,
-    encode_image_text_query,
-    extract_entities,
     get_ollama_generate_url,
     OLLAMA_MODEL,
 )
@@ -30,9 +28,16 @@ BM25_WEIGHT = 0.4
 
 def _candidate_from_payload(point_id: str, payload: dict, distance: float) -> dict:
     metadata = payload.get("metadata", {})
+    
+    # NeMo-style parent-child: swap child text with full parent block for better LLM context
+    text_content = payload.get("text_content", "")
+    parent_text = metadata.get("parent_text")
+    if parent_text:
+        text_content = parent_text
+
     return {
         "id": point_id,
-        "text": payload.get("text_content", ""),
+        "text": text_content,
         "score": 0.0,
         "hybrid_score": 0.0,
         "dense_score": distance,
@@ -114,9 +119,11 @@ def _perform_postgres_bm25(query: str, tenant_id: str, limit: int, metadata_filt
             results = thread_db.execute(sql, params).fetchall()
             for row in results:
                 doc_metadata = row.doc_metadata or {}
+                # NeMo-style replacement for BM25 candidates
+                text_content = doc_metadata.get("parent_text") or row.text_content
                 candidates.append({
                     "id": str(row.id),
-                    "text": row.text_content,
+                    "text": text_content,
                     "score": 0.0,
                     "hybrid_score": 0.0,
                     "dense_score": 0.0,
@@ -229,18 +236,14 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
         query_vector = encode_text(query)
     else:
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             fut_dense = executor.submit(encode_text, query)
             fut_hyde = executor.submit(_generate_hyde, query)
-            fut_vision = executor.submit(encode_image_text_query, query)
-            fut_entities = executor.submit(extract_entities, query)
             fut_bm25 = executor.submit(_perform_postgres_bm25, query, tenant_id, max(top_k * 4, 50), metadata_filters)
 
             query_vector = fut_dense.result()
             hyde_text = fut_hyde.result()
             hyde_vector = encode_text(hyde_text) if hyde_text else None
-            vision_vector = fut_vision.result()
-            query_entities = fut_entities.result()
             bm25_results = fut_bm25.result()
     
     
@@ -308,22 +311,7 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
         except Exception as e:
             print(f"[Retrieval] HyDE search failed: {e}")
 
-    # Vision search
-    if not fast_path and vision_vector:
-        try:
-            vision_results = qdrant.search(
-                collection_name="image_chunks",
-                query_vector=vision_vector,
-                query_filter=qdrant_filter,
-                limit=candidate_limit
-            )
-            for rank, point in enumerate(vision_results, start=1):
-                candidate = candidates.setdefault(point.id, _candidate_from_payload(point.id, point.payload, point.score))
-                candidate["dense_score"] = max(candidate["dense_score"], point.score)
-                candidate["hybrid_score"] += DENSE_WEIGHT * _rrf_score(rank)
-                candidate["metadata"]["vision_rank"] = rank
-        except Exception as e:
-            print(f"[Retrieval] Vision search failed: {e}")
+
 
     # BM25 Sparse Search (Postgres)
     if not fast_path and bm25_results:
@@ -348,27 +336,26 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
                     candidates[cid]["hybrid_score"] + 1.5, exact_candidate["hybrid_score"]
                 )
 
-    if not fast_path:
-        for candidate in candidates.values():
-            chunk_entities = candidate["metadata"].get("entities", [])
-            if chunk_entities and query_entities:
-                overlap = set(query_entities).intersection(set(chunk_entities))
-                if overlap:
-                    boost = len(overlap) * 0.2
-                    candidate["hybrid_score"] += boost
-                    candidate["metadata"]["entity_overlap"] = list(overlap)
+
 
     ranked = sorted(
         candidates.values(),
         key=lambda item: item["hybrid_score"],
         reverse=True,
     )
+    
+    # Deduplicate expanded parent blocks so the LLM doesn't see identical text multiple times
+    dedup_ranked = []
+    seen_texts = set()
     for item in ranked:
-        item["score"] = item["hybrid_score"]
+        if item["text"] not in seen_texts:
+            seen_texts.add(item["text"])
+            item["score"] = item["hybrid_score"]
+            dedup_ranked.append(item)
 
     # Table-aware expansion: if top results include table chunks, fetch all
     # sibling chunks from the same table_group so the LLM sees the complete table
-    top_results = ranked[:top_k]
+    top_results = dedup_ranked[:top_k]
     table_groups = set()
     for item in top_results:
         tg = item.get("table_group")

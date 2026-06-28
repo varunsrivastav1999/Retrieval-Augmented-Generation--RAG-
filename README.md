@@ -1,10 +1,10 @@
 <div align="center">
-  <h1>Enterprise Level RAG — World-Class 18-Layer Production Engine</h1>
+  <h1>Enterprise Level RAG — World-Class 17-Layer Production Engine</h1>
   <p><strong>Developed & Owned by: Varun Srivastav</strong></p>
   <p><strong>Zero-Hallucination · 10GB VRAM Optimized · Sub-10ms Extractive Mode · 30+ Formats · Enterprise Complex Table QA</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/Architecture-18--Layer_RAG-blue" alt="18-Layer RAG" />
+    <img src="https://img.shields.io/badge/Architecture-17--Layer_RAG-blue" alt="17-Layer RAG" />
     <img src="https://img.shields.io/badge/Table_Engine-v5.2-orange" alt="Table Engine v5.2" />
     <img src="https://img.shields.io/badge/Embedding-BAAI/bge--small--en--v1.5-8A2BE2" alt="bge-small" />
     <img src="https://img.shields.io/badge/Reranker-BAAI/bge--reranker--base-8A2BE2" alt="bge-reranker-base" />
@@ -19,7 +19,7 @@
 
 ---
 
-A **production-grade RAG engine** built for industrial-scale document understanding. Combines state-of-the-art open-source models, an 18-layer pipeline, and a dedicated **Table Reconstruction Engine** to deliver **near-human accuracy on complex PDF table QA**. Highly optimized to run fully offline within a strict **10GB VRAM** constraint.
+A **production-grade RAG engine** built for industrial-scale document understanding. Combines state-of-the-art open-source models, a streamlined 17-layer pipeline, and a dedicated **Table Reconstruction Engine** to deliver **near-human accuracy on complex PDF table QA**. Highly optimized to run fully offline within a strict **10GB VRAM** constraint.
 
 ---
 
@@ -34,6 +34,7 @@ A **production-grade RAG engine** built for industrial-scale document understand
   - **HTML Table Renderer**: Context assembled as structured HTML for precise LLM column alignment.
   - **Section Title Tracking**: Every table tagged with its owning document section title.
 - **🔍 Zero-Token Exact Catalogue Lookup**: Pattern-based SQL `ILIKE` lookup via PostgreSQL/DuckDB integration bypasses the LLM and vector search for model/part number queries.
+- **NeMo-Style Parent-Child Chunking**: Strict contextual preservation. Small precision chunks are indexed in Qdrant, but upon retrieval, the LLM receives the full encompassing parent block, completely eliminating linearization and context loss.
 - **Highly Optimized Models**: `BAAI/bge-small-en-v1.5` (embedding, 384d), `BAAI/bge-reranker-base` (reranker), `llama3.1:8b` (LLM).
 - **Auto Mode** (`auto: true`): Simple fact lookups return exact verbatim text in **6–15ms**; complex analysis questions route to the full LLM pipeline automatically.
 - **Extractive Mode**: Skips the LLM entirely — returns verbatim text from the top document chunk with source citation.
@@ -91,9 +92,9 @@ graph TD
 
 ---
 
-## 🛡️ 18 Processing Layers Deep Dive
+## 🛡️ 17 Processing Layers Deep Dive
 
-The pipeline is split into **Ingestion** (Layers 0-5), **Retrieval & Routing** (Layers 6-11), and **Generation & Verification** (Layers 12-17).
+The pipeline is split into **Ingestion** (Layers 0-5), **Retrieval & Routing** (Layers 6-11), and **Generation & Verification** (Layers 12-16).
 
 ### Layer 0: Table Reconstruction Engine *(v5.2)* — `app/rag/table_engine.py`
 A dedicated table understanding module that executes between parsing and ingestion:
@@ -105,7 +106,7 @@ A dedicated table understanding module that executes between parsing and ingesti
 ### Phase 1: Universal Ingestion Engine
 1. **Layer 1: Universal Parser**: Automatically detects file type from 30+ formats via Docling.
 2. **Layer 2: CPU OCR Extraction**: Tesseract OCR via Docling extracts text from scanned PDFs without requiring massive VRAM allocations.
-3. **Layer 3: Table-Aware 1-Row-Per-Chunk**: **1 row per chunk**. Each chunk carries: full resolved header path, section title, `{header: value}` JSON cells.
+3. **Layer 3: NeMo-Style Parent-Child Chunking**: Intelligent layout-aware splitting. Small child chunks are embedded for precise retrieval while linking directly to large, context-rich parent blocks.
 4. **Layer 4: Text Embedding**: Encodes text and NL-serialized table rows via `bge-small-en-v1.5` (384d). Vectors stored in Qdrant.
 5. **Layer 5: RAPTOR Hierarchical Indexing**: Clusters vector embeddings via UMAP and Gaussian Mixture Models (GMM).
 

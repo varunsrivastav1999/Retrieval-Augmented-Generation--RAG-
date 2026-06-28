@@ -314,11 +314,9 @@ def on_startup():
         if PRELOAD_MODELS_ON_STARTUP:
             print("[Plug&Play] Ensuring AI models are ready in background...")
             try:
-                from app.rag.model_loader import get_embedding_model, get_reranker_model, get_clip_model, get_spacy_model
+                from app.rag.model_loader import get_embedding_model, get_reranker_model
                 get_embedding_model()
                 get_reranker_model()
-                get_clip_model()
-                get_spacy_model()
                 
                 # Auto-Create/Update Custom Ollama Brain
                 import httpx
@@ -1117,9 +1115,17 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 grounding_result = agent.grounding_result
 
             if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
-                force_general = True
                 if not grounding_result:
-                    grounding_result = {"is_grounded": False, "score": 0.0, "detail": "Fallback to general knowledge"}
+                    grounding_result = {"is_grounded": False, "score": 0.0, "detail": "Ungrounded: No context found."}
+                latency = int((time.time() - start_time) * 1000)
+                db.commit()
+                status = "blocked"
+                RAG_QUERY_TOTAL.labels(status=status).inc()
+                RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency / 1000.0)
+                RAG_GROUNDING_BLOCKED.inc()
+                yield "data: " + json.dumps({'token': NOT_FOUND_RESPONSE}) + "\n\n"
+                yield "data: " + json.dumps({'done': True, 'sources': [], 'grounding': grounding_result, 'verification': {"confidence": "high", "confidence_score": 1.0, "grounded_sentences": 1, "total_sentences": 1, "evidence": []}, 'latency_ms': latency}) + "\n\n"
+                return
             
 
 
@@ -1146,25 +1152,13 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 yield "data: " + json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency}) + "\n\n"
                 return
 
-            if force_general:
-                prompt = (
-                    "═══════════════════════════════════════════════════════════\n"
-                    "  SYSTEM: Expert Technical Assistant\n"
-                    "  MODE: GENERAL KNOWLEDGE FALLBACK\n"
-                    "═══════════════════════════════════════════════════════════\n\n"
-                    f"The user asked: '{search_query}'.\n\n"
-                    "This information is not explicitly found in the uploaded documents. "
-                    "Please provide a highly confident, aggressive, and accurate general answer based on your broad knowledge, "
-                    "but clearly state at the beginning that this information is not from the provided records."
-                )
-            else:
-                context_texts = []
-                for chunk in final_context:
-                    text = chunk.get('text', '')
-                    text = re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', text)
-                    context_texts.append(text.strip())
-                context_text = "\n\n---\n\n".join(context_texts)
-                prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
+            context_texts = []
+            for chunk in final_context:
+                text = chunk.get('text', '')
+                text = re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', text)
+                context_texts.append(text.strip())
+            context_text = "\n\n---\n\n".join(context_texts)
+            prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
             
             db.commit()
             
@@ -1376,9 +1370,22 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             grounding_result = agent.grounding_result
 
         if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
-            force_general = True
             if not grounding_result:
-                grounding_result = {"is_grounded": False, "score": 0.0, "detail": "Fallback to general knowledge"}
+                grounding_result = {"is_grounded": False, "score": 0.0, "detail": "Ungrounded: No context found."}
+            latency = int((time.time() - start_time) * 1000)
+            status = "blocked"
+            RAG_QUERY_TOTAL.labels(status=status).inc()
+            RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency / 1000.0)
+            RAG_GROUNDING_BLOCKED.inc()
+            return {
+                "answer": NOT_FOUND_RESPONSE,
+                "context": [],
+                "sources": [],
+                "latency_ms": latency,
+                "ingest": ingest_summary,
+                "grounding": grounding_result,
+                "verification": {"confidence": "high", "confidence_score": 1.0, "grounded_sentences": 1, "total_sentences": 1, "evidence": []},
+            }
 
         if request.extractive:
             answer = ""
@@ -1415,25 +1422,13 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 )
             return response_data
 
-        if force_general:
-            prompt = (
-                "═══════════════════════════════════════════════════════════\n"
-                "  SYSTEM: Expert Technical Assistant\n"
-                "  MODE: GENERAL KNOWLEDGE FALLBACK\n"
-                "═══════════════════════════════════════════════════════════\n\n"
-                f"The user asked: '{search_query}'.\n\n"
-                "This information is not explicitly found in the uploaded documents. "
-                "Please provide a highly confident, aggressive, and accurate general answer based on your broad knowledge, "
-                "but clearly state at the beginning that this information is not from the provided records."
-            )
-        else:
-            context_texts = []
-            for chunk in final_context:
-                text = chunk.get('text', '')
-                text = re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', text)
-                context_texts.append(text.strip())
-            context_text = "\n\n---\n\n".join(context_texts)
-            prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
+        context_texts = []
+        for chunk in final_context:
+            text = chunk.get('text', '')
+            text = re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', text)
+            context_texts.append(text.strip())
+        context_text = "\n\n---\n\n".join(context_texts)
+        prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
         
         flare_retrieved_chunks = []
         answer = ""

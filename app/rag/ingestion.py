@@ -101,12 +101,7 @@ def semantic_chunking(text: str, max_chunk_size: int = PARENT_CHUNK_SIZE, child_
         nonlocal parent_idx, child_idx
         if not parent_text:
             return
-        result.append({
-            "text": parent_text,
-            "is_parent": True,
-            "parent_idx": parent_idx,
-            "child_idx": None,
-        })
+        
         start = 0
         while start < len(parent_text):
             end = min(start + child_chunk_size, len(parent_text))
@@ -114,6 +109,7 @@ def semantic_chunking(text: str, max_chunk_size: int = PARENT_CHUNK_SIZE, child_
             if child_text:
                 result.append({
                     "text": child_text,
+                    "parent_text": parent_text,  # NeMo-style context
                     "is_parent": False,
                     "parent_idx": parent_idx,
                     "child_idx": child_idx,
@@ -538,6 +534,7 @@ def ingest_file(
                     "is_parent": chunk_info.get("is_parent", False),
                     "parent_idx": chunk_info.get("parent_idx"),
                     "child_idx": chunk_info.get("child_idx"),
+                    "parent_text": chunk_info.get("parent_text"),
                     "entities": [], # GraphRAG extracted entities removed for VRAM
                     "table_group": chunk_info.get("table_group") or chunk_info.get("table_id"),
                     "table_id": chunk_info.get("table_id") or chunk_info.get("table_group"),
@@ -637,6 +634,7 @@ def _process_chunk_batch(
             "is_parent": c.get("is_parent", False),
             "parent_idx": c.get("parent_idx"),
             "child_idx": c.get("child_idx"),
+            "parent_text": c.get("parent_text"),
             "entities": c.get("entities", []),
             "table_group": c.get("table_group"),
             # --- Table-aware fields ---
