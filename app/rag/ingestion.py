@@ -29,7 +29,7 @@ from app.database import DocumentChunk, SessionLocal
 from app.rag.jobs import complete_ingestion_job, fail_ingestion_job, update_ingestion_job
 from app.rag.model_loader import encode_texts, get_embedding_model_id, get_ollama_generate_url, OLLAMA_MODEL, RAG_EMBEDDING_QUANTIZE
 from app.rag.parsers import ParseResult, get_file_type, parse_file
-from app.rag.extraction import looks_like_extractable_page, extract_structured_data_from_page, format_structured_data_for_embedding
+from app.rag.vision_extractor import looks_like_extractable_page, format_structured_data_for_embedding
 try:
     from app.rag.table_engine import chunk_rich_table, classify_query, extract_catalogue_patterns
     TABLE_ENGINE_AVAILABLE = True
@@ -396,21 +396,18 @@ def ingest_file(
                     from app.rag.vision_extractor import extract_table_with_vision
                     print(f"[Ingest] Vision Pre-processing Node triggered for Page {page.page_num}...")
                     extracted_root_obj = extract_table_with_vision(file_path, page_idx)
-                else:
-                    print(f"[Ingest] LLM Pre-processing Node triggered for Page {page.page_num}...")
-                    extracted_root_obj = extract_structured_data_from_page(page.text)
-                
-                if extracted_root_obj:
-                    formatted_chunks = format_structured_data_for_embedding(extracted_root_obj)
-                    for chunk_str in formatted_chunks:
-                        if chunk_str:
-                            page_chunks.append({
-                                "text": chunk_str,
-                                "is_parent": True,
-                                "parent_idx": None,
-                                "child_idx": None,
-                                "content_type": "llm_extracted_data"
-                            })
+                    
+                    if extracted_root_obj:
+                        formatted_chunks = format_structured_data_for_embedding(extracted_root_obj)
+                        for chunk_str in formatted_chunks:
+                            if chunk_str:
+                                page_chunks.append({
+                                    "text": chunk_str,
+                                    "is_parent": True,
+                                    "parent_idx": None,
+                                    "child_idx": None,
+                                    "content_type": "llm_extracted_data"
+                                })
                             
             # 1. Chunk normal text — but STRIP duplicate table content first
             #    PyMuPDF's get_text() garbles multi-column tables. If pdfplumber

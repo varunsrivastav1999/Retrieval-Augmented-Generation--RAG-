@@ -110,3 +110,104 @@ def extract_table_with_vision(pdf_path: str, page_index: int) -> Dict[str, Any]:
             
     print(f"[Vision] Failed to extract via Vision Model: {last_error}")
     return {}
+
+import re
+
+def looks_like_extractable_page(text: str) -> bool:
+    """
+    Heuristic to determine if a page contains dense extractable data 
+    (catalogs, SCADA manuals, financial reports, HR postings).
+    """
+    text_lower = text.lower()
+    keywords = [
+        # Catalog
+        "amps", "dimensions", "loadcentre", "catalogue", "catalog", "breaker", "suffix", "circuits", "skid",
+        # SCADA / Manual
+        "fault", "indicator", "status", "dashboard", "procedure", "step", "warning", "plc", "valve", "turbine", "nl/min",
+        # SOPs / Maintenance
+        "prerequisite", "defect", "root cause", "corrective action", "maintenance", "log",
+        # Finance
+        "revenue", "net profit", "fiscal", "quarter", "ebitda", "footnote", "discrepancy", "compliance", "yoy",
+        # HR
+        "salary", "ctc", "experience", "requirements", "responsibilities"
+    ]
+    
+    match_count = sum(1 for kw in keywords if kw in text_lower)
+    code_matches = len(re.findall(r'\b[A-Z]{2,4}[0-9]{3,5}[A-Z]*\b', text))
+    
+    return match_count >= 4 or code_matches >= 5
+
+def format_structured_data_for_embedding(root_obj: Dict[str, Any]) -> list[str]:
+    """
+    Converts the structured universal JSON object into a list of highly readable, key-value string chunks.
+    Each item in 'Structured_Payload' becomes its own chunk, enriched with the global metadata.
+    """
+    if not root_obj or not isinstance(root_obj, dict):
+        return []
+        
+    doc_type = root_obj.get("Document_Type", "Unknown")
+    metadata = root_obj.get("Metadata_Context", {})
+    category = metadata.get("Overarching_Category_or_Department", "")
+    system_model = metadata.get("System_Model_or_Fiscal_Period", "")
+    primary_entities = metadata.get("Primary_Entities", [])
+    entities_str = ", ".join(primary_entities) if isinstance(primary_entities, list) else str(primary_entities)
+    
+    chunks = []
+    payload = root_obj.get("Structured_Payload", [])
+    if not isinstance(payload, list):
+        payload = [payload]
+        
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+            
+        lines = []
+        lines.append(f"Document Type: {doc_type}")
+        if category and str(category).lower() != "null":
+            lines.append(f"Category/Department: {category}")
+        if system_model and str(system_model).lower() != "null":
+            lines.append(f"System/Model/Period: {system_model}")
+        if entities_str and str(entities_str).lower() != "null" and entities_str != "[]":
+            lines.append(f"Primary Entities: {entities_str}")
+            
+        identifier = item.get("Identifier")
+        if identifier and str(identifier).lower() != "null":
+            lines.append(f"Identifier: {identifier}")
+            
+        core_attrs = item.get("Core_Attributes", {})
+        if isinstance(core_attrs, dict):
+            sub_items = [f"{k.replace('_', ' ')}: {v}" for k, v in core_attrs.items() if v is not None and str(v).lower() != "null"]
+            if sub_items:
+                lines.append(f"Attributes: " + ", ".join(sub_items))
+                
+        # Also include standard dynamic attributes from Vision extractor
+        attrs = item.get("Attributes", {})
+        if isinstance(attrs, dict):
+            sub_items = [f"{k.replace('_', ' ')}: {v}" for k, v in attrs.items() if v is not None and str(v).lower() != "null"]
+            if sub_items:
+                lines.append(f"Attributes: " + ", ".join(sub_items))
+                
+        steps = item.get("Procedural_Steps", [])
+        if steps and isinstance(steps, list):
+            lines.append("Procedural Steps: " + " | ".join(str(s) for s in steps if str(s).lower() != "null"))
+            
+        ui_signals = item.get("UI_Safety_Signals", [])
+        if ui_signals and isinstance(ui_signals, list):
+            signal_strs = []
+            for sig in ui_signals:
+                if isinstance(sig, dict):
+                    el = sig.get("Element", "")
+                    st = sig.get("State_Condition", "")
+                    if el and st:
+                        signal_strs.append(f"{el} = {st}")
+            if signal_strs:
+                lines.append("UI/Safety Signals: " + ", ".join(signal_strs))
+                
+        notes = item.get("Notes_and_Modifications")
+        if notes and str(notes).lower() != "null":
+            lines.append(f"Notes: {notes}")
+            
+        if lines:
+            chunks.append("\n".join(lines))
+            
+    return chunks

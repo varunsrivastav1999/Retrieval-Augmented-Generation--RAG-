@@ -35,7 +35,6 @@ try:
     from app.rag.table_engine import (
         markdown_to_rich_table,
         annotate_section_title,
-        extract_tables_pdfplumber,
         stitch_continuation_tables,
     )
     TABLE_ENGINE_AVAILABLE = True
