@@ -392,8 +392,14 @@ def ingest_file(
             
             # --- LLM Pre-processing Node (Enterprise Documents) ---
             if looks_like_extractable_page(page.text):
-                print(f"[Ingest] LLM Pre-processing Node triggered for Page {page.page_num}...")
-                extracted_root_obj = extract_structured_data_from_page(page.text)
+                if file_path.lower().endswith(".pdf"):
+                    from app.rag.vision_extractor import extract_table_with_vision
+                    print(f"[Ingest] Vision Pre-processing Node triggered for Page {page.page_num}...")
+                    extracted_root_obj = extract_table_with_vision(file_path, page_idx)
+                else:
+                    print(f"[Ingest] LLM Pre-processing Node triggered for Page {page.page_num}...")
+                    extracted_root_obj = extract_structured_data_from_page(page.text)
+                
                 if extracted_root_obj:
                     formatted_chunks = format_structured_data_for_embedding(extracted_root_obj)
                     for chunk_str in formatted_chunks:
