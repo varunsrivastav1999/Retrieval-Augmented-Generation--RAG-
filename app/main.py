@@ -1055,7 +1055,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                     if len(text) > 4000:
                         text = text[:4000] + "..."
                     answer = f"[{source_name}{page_str}]\n{text}"
-                verification = verify_answer_grounding(answer, final_context) if answer else {"confidence": "low", "confidence_score": 0.0, "grounded_sentences": 0, "total_sentences": 0, "evidence": []}
+                verification = verify_answer_grounding(answer, final_context) if answer else {"confidence": "low", "confidence_score": 0.0, "reasoning": "No answer provided"}
                 latency = int((time.time() - start_time) * 1000)
                 
                 db.commit()
@@ -1267,7 +1267,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 "latency_ms": latency,
                 "ingest": ingest_summary,
                 "grounding": grounding_result,
-                "verification": {"confidence": "high", "confidence_score": 1.0, "grounded_sentences": 1, "total_sentences": 1, "evidence": []},
+                "verification": {"confidence": "high", "confidence_score": 1.0, "reasoning": "Grounding blocked; correct refusal"},
             }
 
         if request.extractive:
@@ -1285,7 +1285,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 if len(text) > 4000:
                     text = text[:4000] + "..."
                 answer = f"[{source_name}{page_str}]\n{text}"
-            verification = verify_answer_grounding(answer, final_context) if answer else {"confidence": "low", "confidence_score": 0.0, "grounded_sentences": 0, "total_sentences": 0, "evidence": []}
+            verification = verify_answer_grounding(answer, final_context) if answer else {"confidence": "low", "confidence_score": 0.0, "reasoning": "No answer provided"}
             latency = int((time.time() - start_time) * 1000)
             response_data = {
                 "answer": answer,

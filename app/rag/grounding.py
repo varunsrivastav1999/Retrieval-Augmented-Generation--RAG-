@@ -14,10 +14,12 @@
 =============================================================================
 """
 
-import re
+import json
+import requests
+import os
 from typing import Any, Dict, List, Optional
 
-from app.rag.model_loader import cosine_similarity, encode_text, encode_texts
+from app.rag.model_loader import cosine_similarity, encode_text, encode_texts, get_ollama_generate_url, OLLAMA_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -136,75 +138,84 @@ def verify_answer_grounding(
         {
             "confidence": str ("high" | "medium" | "low"),
             "confidence_score": float (0.0 - 1.0),
-            "grounded_sentences": int,
-            "total_sentences": int,
-            "evidence": List[dict],
+            "reasoning": str,
         }
     """
+    default_verification = {
+        "confidence": "low",
+        "confidence_score": 0.0,
+        "reasoning": "Answer or sources are empty.",
+    }
+    
     if not answer or not source_chunks:
-        return {
-            "confidence": "low",
-            "confidence_score": 0.0,
-            "grounded_sentences": 0,
-            "total_sentences": 0,
-            "evidence": [],
+        return default_verification
+
+    # In streaming mode, partial answers might trigger this. 
+    # For a full check, we need enough text.
+    if len(answer.split()) < 5:
+        return default_verification
+
+    all_source_text = "\n---\n".join(c.get("text", "") for c in source_chunks[:5])
+
+    prompt = f"""
+You are an expert strict fact-checker and groundedness verification judge (NeMo Guardrail).
+Your task is to determine if the generated ANSWER is fully supported by the provided CONTEXT.
+
+CONTEXT:
+{all_source_text}
+
+ANSWER:
+{answer}
+
+Evaluate if every claim in the ANSWER is backed by the CONTEXT.
+Output ONLY a valid JSON object with no markdown wrappers or extra text. Do not output anything other than JSON.
+Format:
+{{
+  "confidence": "high" | "medium" | "low",
+  "confidence_score": 1.0,
+  "reasoning": "Explain why the answer is or isn't grounded."
+}}
+"""
+
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.0,
+            "num_predict": 300,
         }
+    }
 
-    # Split answer into sentences
-    sentences = _split_sentences(answer)
-    if not sentences:
-        return {
-            "confidence": "low",
-            "confidence_score": 0.0,
-            "grounded_sentences": 0,
-            "total_sentences": 0,
-            "evidence": [],
-        }
+    try:
+        response = requests.post(get_ollama_generate_url(), json=payload, timeout=30)
+        if response.status_code == 200:
+            text = response.json().get("response", "").strip()
+            # Clean JSON markdown if present
+            if text.startswith("```json"):
+                text = text[7:]
+            elif text.startswith("```"):
+                text = text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            
+            result = json.loads(text.strip())
+            
+            # Ensure required fields exist
+            if "confidence" in result and "confidence_score" in result:
+                return {
+                    "confidence": str(result["confidence"]),
+                    "confidence_score": float(result["confidence_score"]),
+                    "reasoning": str(result.get("reasoning", "")),
+                }
+    except Exception as e:
+        print(f"[Guardrail] LLM Grounding verification failed: {e}")
 
-    # Check each sentence against source chunks
-    all_source_text = " ".join(c.get("text", "") for c in source_chunks).lower()
-    source_tokens = set(_extract_tokens(all_source_text))
-
-    grounded_count = 0
-    evidence = []
-
-    for sentence in sentences:
-        sentence_tokens = _extract_tokens(sentence)
-        if len(sentence_tokens) < 3:
-            grounded_count += 1  # Skip very short sentences (formatting, etc.)
-            continue
-
-        # Check token overlap with sources
-        overlap = sum(1 for t in sentence_tokens if t in source_tokens)
-        overlap_ratio = overlap / len(sentence_tokens) if sentence_tokens else 0.0
-
-        if overlap_ratio >= 0.4:
-            grounded_count += 1
-            # Find the best matching source chunk
-            best_match = _find_best_matching_chunk(sentence, source_chunks)
-            if best_match:
-                evidence.append({
-                    "sentence": sentence[:200],
-                    "source": best_match.get("citation", ""),
-                    "overlap_ratio": round(overlap_ratio, 3),
-                })
-
-    # Calculate confidence
-    confidence_score = grounded_count / len(sentences) if sentences else 0.0
-
-    if confidence_score >= 0.7:
-        confidence = "high"
-    elif confidence_score >= 0.4:
-        confidence = "medium"
-    else:
-        confidence = "low"
-
+    # Fallback to simple logic if LLM fails
     return {
-        "confidence": confidence,
-        "confidence_score": round(confidence_score, 4),
-        "grounded_sentences": grounded_count,
-        "total_sentences": len(sentences),
-        "evidence": evidence[:10],  # Limit evidence list size
+        "confidence": "medium",
+        "confidence_score": 0.5,
+        "reasoning": "LLM verification failed, defaulting to medium confidence.",
     }
 
 
