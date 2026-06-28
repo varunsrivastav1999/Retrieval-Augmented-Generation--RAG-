@@ -96,7 +96,7 @@ class AgenticRAGPipeline:
             
         context = await loop.run_in_executor(None, _retrieve)
         
-        context_text = "\n---\n".join([c.get('text', '') for c in context])
+        context_text = "\n---\n".join([f"{c.get('citation', 'Source: Unknown')}\n{c.get('text', '')}" for c in context])
         
         prompt = build_strict_grounding_prompt(sub_question, context_text, broad_query=False)
         
@@ -110,7 +110,7 @@ class AgenticRAGPipeline:
 
     async def synthesize(self, query: str, task_results: List[Dict[str, Any]], initial_context: List[Dict[str, Any]]) -> str:
         """Combine all sub-answers and initial context into a final cohesive response."""
-        initial_text = "\n---\n".join([c.get('text', '') for c in initial_context[:5]])
+        initial_text = "\n---\n".join([f"{c.get('citation', 'Source: Unknown')}\n{c.get('text', '')}" for c in initial_context[:5]])
         context_text = f"Initial Context:\n{initial_text}\n\n"
         
         for i, task in enumerate(task_results):
@@ -132,7 +132,7 @@ class AgenticRAGPipeline:
             return chunks
         
         initial_context = await loop.run_in_executor(None, _initial_retrieval)
-        initial_context_text = "\n".join([c.get('text', '') for c in initial_context])
+        initial_context_text = "\n".join([f"{c.get('citation', 'Source: Unknown')}\n{c.get('text', '')}" for c in initial_context])
         
         # Stage 2: Planner
         plan = await self.planner_stage(query, initial_context_text)
