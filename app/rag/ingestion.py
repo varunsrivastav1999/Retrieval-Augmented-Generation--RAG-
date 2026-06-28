@@ -22,16 +22,15 @@ import os
 import re
 from typing import Dict, List, Optional
 
-from sqlalchemy import func, cast, String
 from sqlalchemy.exc import IntegrityError
 
 from app.database import DocumentChunk, SessionLocal
 from app.rag.jobs import complete_ingestion_job, fail_ingestion_job, update_ingestion_job
-from app.rag.model_loader import encode_texts, get_embedding_model_id, get_ollama_generate_url, OLLAMA_MODEL, RAG_EMBEDDING_QUANTIZE
-from app.rag.parsers import ParseResult, get_file_type, parse_file
+from app.rag.model_loader import encode_texts, get_embedding_model_id, get_ollama_generate_url, OLLAMA_MODEL
+from app.rag.parsers import get_file_type, parse_file
 from app.rag.vision_extractor import looks_like_extractable_page, format_structured_data_for_embedding
 try:
-    from app.rag.table_engine import chunk_rich_table, classify_query, extract_catalogue_patterns
+    from app.rag.table_engine import chunk_rich_table
     TABLE_ENGINE_AVAILABLE = True
 except ImportError:
     TABLE_ENGINE_AVAILABLE = False
@@ -39,8 +38,6 @@ try:
     from app.rag.canonical_table_store import (
         rich_table_to_canonical_rows,
         upsert_canonical_rows,
-        delete_doc_rows,
-        init_canonical_store,
     )
     CANONICAL_STORE_AVAILABLE = True
 except ImportError:
@@ -48,15 +45,11 @@ except ImportError:
 try:
     from app.rag.doc_classifier import (
         classify_and_enrich_text_block,
-        detected_content_to_chunk,
         ContentType,
     )
     DOC_CLASSIFIER_AVAILABLE = True
 except ImportError:
     DOC_CLASSIFIER_AVAILABLE = False
-from PIL import Image
-import io
-
 
 # ---------------------------------------------------------------------------
 # Configuration

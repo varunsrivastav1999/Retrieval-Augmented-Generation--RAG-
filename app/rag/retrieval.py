@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from qdrant_client.http import models
 
-from app.database import DocumentChunk
 from app.rag.qdrant_client import get_qdrant_client
 from app.rag.model_loader import (
     encode_text,
@@ -14,12 +13,11 @@ from app.rag.model_loader import (
     OLLAMA_MODEL,
 )
 try:
-    from app.rag.table_engine import extract_catalogue_patterns, classify_query, QueryType
+    from app.rag.table_engine import extract_catalogue_patterns
     TABLE_ENGINE_AVAILABLE = True
 except ImportError:
     TABLE_ENGINE_AVAILABLE = False
     def extract_catalogue_patterns(q): return []
-    def classify_query(q): return "text"
 
 RRF_K = 60
 DENSE_WEIGHT = 0.5

@@ -2,14 +2,13 @@ import os
 import json
 import time
 import asyncio
-import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 import requests
 from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search
 from app.rag.context import assemble_context, _context_sources
 from app.rag.reranker import rerank_results
-from app.rag.grounding import compute_grounding_score, verify_answer_grounding, build_strict_grounding_prompt
+from app.rag.grounding import compute_grounding_score, build_strict_grounding_prompt
 from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
 
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))

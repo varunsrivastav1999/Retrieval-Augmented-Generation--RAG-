@@ -8,14 +8,8 @@
 """
 
 import csv
-import io
 import os
 import re
-import shutil
-import subprocess
-import email
-from email import policy
-import urllib.request
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -34,7 +28,6 @@ except ImportError as e:
 try:
     from app.rag.table_engine import (
         markdown_to_rich_table,
-        annotate_section_title,
         stitch_continuation_tables,
     )
     TABLE_ENGINE_AVAILABLE = True
