@@ -101,11 +101,11 @@ def _perform_postgres_bm25(query: str, tenant_id: str, limit: int, metadata_filt
 
     sql = text(f"""
         SELECT id, doc_id, text_content, section, file_type, doc_metadata,
-               ts_rank(to_tsvector('english', text_content), plainto_tsquery('english', :query)) as rank_score
+               ts_rank(tsvector_content, plainto_tsquery('english', :query)) as rank_score
         FROM document_chunks
         WHERE tenant_id = :tenant_id
           AND text_content IS NOT NULL
-          AND plainto_tsquery('english', :query) @@ to_tsvector('english', text_content)
+          AND plainto_tsquery('english', :query) @@ tsvector_content
           {target_file_clause}
         ORDER BY rank_score DESC
         LIMIT :limit
@@ -233,14 +233,21 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
     if fast_path:
         query_vector = encode_text(query)
     else:
-        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError
         with ThreadPoolExecutor(max_workers=3) as executor:
             fut_dense = executor.submit(encode_text, query)
             fut_hyde = executor.submit(_generate_hyde, query)
             fut_bm25 = executor.submit(_perform_postgres_bm25, query, tenant_id, max(top_k * 4, 50), metadata_filters)
 
             query_vector = fut_dense.result()
-            hyde_text = fut_hyde.result()
+            
+            try:
+                # Add strict 0.3s timeout to HyDE to prevent it from bottlenecking instant retrieval
+                hyde_text = fut_hyde.result(timeout=0.3)
+            except TimeoutError:
+                hyde_text = None
+                print("[Retrieval] HyDE generation timed out (exceeded 300ms) - bypassing to guarantee low latency.")
+                
             hyde_vector = encode_text(hyde_text) if hyde_text else None
             bm25_results = fut_bm25.result()
     

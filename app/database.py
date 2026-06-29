@@ -145,6 +145,26 @@ def _run_schema_migrations():
             "CREATE INDEX IF NOT EXISTS idx_chunks_metadata_gin ON document_chunks USING gin(doc_metadata)")
         _execute_best_effort(conn,
             "CREATE INDEX IF NOT EXISTS idx_chunks_structured_gin ON document_chunks USING gin(structured_content)")
+            
+        # v6.0 - High Performance Sparse Retrieval
+        _execute_best_effort(conn, "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS tsvector_content tsvector")
+        _execute_best_effort(conn, """
+            CREATE OR REPLACE FUNCTION update_tsvector_content() RETURNS trigger AS $$
+            BEGIN
+              NEW.tsvector_content := to_tsvector('english', coalesce(NEW.text_content, ''));
+              RETURN NEW;
+            END
+            $$ LANGUAGE plpgsql;
+        """)
+        _execute_best_effort(conn, "DROP TRIGGER IF EXISTS tsvector_content_update ON document_chunks")
+        _execute_best_effort(conn, """
+            CREATE TRIGGER tsvector_content_update 
+            BEFORE INSERT OR UPDATE ON document_chunks 
+            FOR EACH ROW EXECUTE FUNCTION update_tsvector_content();
+        """)
+        _execute_best_effort(conn, "CREATE INDEX IF NOT EXISTS idx_chunks_tsvector ON document_chunks USING gin(tsvector_content)")
+        # Backfill existing rows non-destructively
+        _execute_best_effort(conn, "UPDATE document_chunks SET tsvector_content = to_tsvector('english', text_content) WHERE tsvector_content IS NULL")
 
     # v5.1 — canonical table store (separate table for 0-token SQL exact lookup)
     try:

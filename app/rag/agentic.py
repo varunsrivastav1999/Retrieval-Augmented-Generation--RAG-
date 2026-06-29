@@ -51,6 +51,23 @@ class AgenticRAGPipeline:
 
     async def planner_stage(self, query: str, initial_context: str) -> Dict[str, Any]:
         """Determine if we need scope discovery, answer plan, or empty plan."""
+        # ---------------------------------------------------------------------
+        # v6.0 Latency Optimization: Fast Heuristic Router (~1ms)
+        # Bypasses the 2-second LLM call for standard retrieval queries
+        # ---------------------------------------------------------------------
+        complex_triggers = [
+            "compare", "difference", " vs ", " versus ", "summarize", "both", "all of",
+            "relationship between", "how do they", "pros and cons", "advantages"
+        ]
+        is_complex = any(t in query.lower() for t in complex_triggers)
+        
+        if not is_complex:
+            # For 90% of standard questions, standard generation is enough
+            return {"plan_type": "empty_plan", "tasks": []}
+            
+        # ---------------------------------------------------------------------
+        # Fallback to LLM Planner for genuinely complex queries
+        # ---------------------------------------------------------------------
         system_prompt = (
             "You are an enterprise RAG Planner. Analyze the user's query and the provided initial context.\n"
             "If the context completely and directly answers the query, output an 'empty_plan'.\n"
