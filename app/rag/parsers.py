@@ -8,6 +8,7 @@
 """
 
 import csv
+import io
 import os
 import re
 from dataclasses import dataclass, field

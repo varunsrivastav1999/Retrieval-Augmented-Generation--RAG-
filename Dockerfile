@@ -90,6 +90,7 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 RUN ollama serve &>/tmp/ollama-srv.log & \
     for i in $(seq 1 30); do ollama list 2>/dev/null && break; sleep 1; done && \
     ollama pull llama3.1:8b && \
+    ollama pull llama3.2-vision && \
     pkill ollama 2>/dev/null; true && \
     mkdir -p /models/ollama/blobs /models/ollama/manifests && \
     cp -r /root/.ollama/models/blobs/* /models/ollama/blobs/ && \
