@@ -215,9 +215,6 @@ services:
         max-size: "100m"
         max-file: "3"
   models:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: itips_rag_prod:latest
     pull_policy: if_not_present
     container_name: itips_rag_prod_models
