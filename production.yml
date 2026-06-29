@@ -182,7 +182,7 @@ services:
         max-size: "100m"
         max-file: "3"
   ollama:
-    image: ollama/ollama:0.3.14
+    image: ollama/ollama:latest
     container_name: ollama_rag_prod
     restart: unless-stopped
     environment:
