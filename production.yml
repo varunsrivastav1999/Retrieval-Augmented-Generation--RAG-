@@ -182,12 +182,12 @@ services:
         max-size: "100m"
         max-file: "3"
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.5.7
     container_name: ollama_rag_prod
     restart: unless-stopped
     environment:
       - OLLAMA_CONTEXT_LENGTH=8192
-      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_KEEP_ALIVE=5m
       - OLLAMA_FLASH_ATTENTION=1
       - OLLAMA_NUM_PARALLEL=1
       - OLLAMA_MAX_QUEUE=128
@@ -208,7 +208,7 @@ services:
       resources:
         limits:
           cpus: "4"
-          memory: 14G
+          memory: 32G
     logging:
       driver: "json-file"
       options:
