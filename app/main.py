@@ -984,16 +984,28 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             else:
                 # Plan and Execute Pipeline (NVIDIA RAG Blueprint Style)
                 import asyncio
-                from app.rag.agentic import AgenticRAGPipeline
-                
-                pipeline = AgenticRAGPipeline(db, tenant_id, effective_top_k)
-                try:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    agentic_result = loop.run_until_complete(pipeline.run(search_query))
-                    loop.close()
-                except RuntimeError:
-                    agentic_result = asyncio.run(pipeline.run(search_query))
+                if broad_query:
+                    from app.rag.summarization import run_map_reduce_summarize_sync
+                    # Retrieve chunks for the summary (using fast_path to avoid secondary LLM calls during retrieval)
+                    retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
+                    summary = run_map_reduce_summarize_sync(search_query, retrieved_chunks)
+                    agentic_result = {
+                        "answer": summary,
+                        "context": retrieved_chunks,
+                        "sources": _context_sources(retrieved_chunks),
+                        "grounding": {"is_grounded": True, "score": 1.0, "detail": "Map-Reduce Summary"}
+                    }
+                else:
+                    from app.rag.agentic import AgenticRAGPipeline
+                    
+                    pipeline = AgenticRAGPipeline(db, tenant_id, effective_top_k)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        agentic_result = loop.run_until_complete(pipeline.run(search_query))
+                        loop.close()
+                    except RuntimeError:
+                        agentic_result = asyncio.run(pipeline.run(search_query))
                     
                 final_context = agentic_result["context"]
                 sources = agentic_result["sources"]
@@ -1199,19 +1211,30 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
         else:
             # Plan and Execute Pipeline (NVIDIA RAG Blueprint Style)
             import asyncio
-            from app.rag.agentic import AgenticRAGPipeline
-            
-            pipeline = AgenticRAGPipeline(db, tenant_id, effective_top_k)
-            try:
-                # FastAPI runs sync defs in a threadpool, so asyncio.run is safe here.
-                # If an event loop is already running, we create a new one.
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                agentic_result = loop.run_until_complete(pipeline.run(search_query))
-                loop.close()
-            except RuntimeError:
-                # Fallback if somehow already in an async context
-                agentic_result = asyncio.run(pipeline.run(search_query))
+            if broad_query:
+                from app.rag.summarization import run_map_reduce_summarize_sync
+                retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
+                summary = run_map_reduce_summarize_sync(search_query, retrieved_chunks)
+                agentic_result = {
+                    "answer": summary,
+                    "context": retrieved_chunks,
+                    "sources": _context_sources(retrieved_chunks),
+                    "grounding": {"is_grounded": True, "score": 1.0, "detail": "Map-Reduce Summary"}
+                }
+            else:
+                from app.rag.agentic import AgenticRAGPipeline
+                
+                pipeline = AgenticRAGPipeline(db, tenant_id, effective_top_k)
+                try:
+                    # FastAPI runs sync defs in a threadpool, so asyncio.run is safe here.
+                    # If an event loop is already running, we create a new one.
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    agentic_result = loop.run_until_complete(pipeline.run(search_query))
+                    loop.close()
+                except RuntimeError:
+                    # Fallback if somehow already in an async context
+                    agentic_result = asyncio.run(pipeline.run(search_query))
                 
             final_context = agentic_result["context"]
             sources = agentic_result["sources"]
@@ -1238,6 +1261,12 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 except Exception as cache_err:
                     print(f"[Cache] Error saving agentic response: {cache_err}")
 
+                evaluation_data = None
+                if request.evaluate:
+                    from app.rag.evaluation import evaluate_rag_response
+                    context_strings = [c.get("text", "") for c in final_context]
+                    evaluation_data = evaluate_rag_response(search_query, agentic_result["answer"], context_strings)
+
                 return {
                     "answer": agentic_result["answer"],
                     "context": final_context,
@@ -1246,6 +1275,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                     "ingest": ingest_summary,
                     "grounding": grounding_result,
                     "verification": verification,
+                    "evaluation": evaluation_data,
                 }
             
             # If agentic_result["answer"] is empty, it means empty_plan was selected.
@@ -1287,6 +1317,13 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 answer = f"[{source_name}{page_str}]\n{text}"
             verification = verify_answer_grounding(answer, final_context) if answer else {"confidence": "low", "confidence_score": 0.0, "reasoning": "No answer provided"}
             latency = int((time.time() - start_time) * 1000)
+            
+            evaluation_data = None
+            if request.evaluate and answer:
+                from app.rag.evaluation import evaluate_rag_response
+                context_strings = [c.get("text", "") for c in final_context]
+                evaluation_data = evaluate_rag_response(search_query, answer, context_strings)
+                
             response_data = {
                 "answer": answer,
                 "context": final_context,
@@ -1295,6 +1332,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 "ingest": ingest_summary,
                 "grounding": grounding_result,
                 "verification": verification,
+                "evaluation": evaluation_data,
             }
             if not request.fast_path:
                 set_cached_response(
