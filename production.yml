@@ -182,7 +182,7 @@ services:
         max-size: "100m"
         max-file: "3"
   ollama:
-    image: ollama/ollama:0.5.7
+    image: ollama/ollama:latest
     container_name: ollama_rag_prod
     restart: unless-stopped
     environment:
@@ -243,10 +243,13 @@ services:
         mkdir -p /root/.ollama/models/blobs /root/.ollama/models/manifests
         cp -rn /models/ollama/blobs/* /root/.ollama/models/blobs/ 2>/dev/null || true
         cp -rn /models/ollama/manifests/* /root/.ollama/models/manifests/ 2>/dev/null || true
+        
         echo "=== Ensuring Ollama pulls the active model over network ==="
-        curl -s -X POST http://ollama:11434/api/pull -d "{\"name\": \"$${OLLAMA_MODEL}\", \"stream\": false}"
+        ollama pull $${OLLAMA_MODEL} || (echo "Pull failed, clearing cache and retrying..." && ollama rm $${OLLAMA_MODEL} && ollama pull $${OLLAMA_MODEL})
+        
         echo "=== Ensuring Ollama pulls the vision model over network ==="
-        curl -s -X POST http://ollama:11434/api/pull -d "{\"name\": \"$${OLLAMA_VISION_MODEL:-llama3.2-vision}\", \"stream\": false}"
+        ollama pull $${OLLAMA_VISION_MODEL:-llama3.2-vision} || (echo "Pull failed, clearing cache and retrying..." && ollama rm $${OLLAMA_VISION_MODEL:-llama3.2-vision} && ollama pull $${OLLAMA_VISION_MODEL:-llama3.2-vision})
+        
         echo "=== Models ready ==="
     networks:
       rag_network:
