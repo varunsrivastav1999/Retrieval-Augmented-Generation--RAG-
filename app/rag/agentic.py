@@ -10,6 +10,7 @@ from app.rag.context import assemble_context, _context_sources
 from app.rag.reranker import rerank_results
 from app.rag.grounding import compute_grounding_score, build_strict_grounding_prompt
 from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
+from app.rag.query_intelligence import decompose_query, extract_metadata_filters
 
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "1024"))
@@ -100,12 +101,16 @@ class AgenticRAGPipeline:
             print(f"[AgenticRAG] Planner failed to output valid JSON. Defaulting to empty_plan. Raw: {response}")
             return {"plan_type": "empty_plan", "tasks": []}
 
-    async def execute_task(self, sub_question: str) -> Dict[str, Any]:
+    async def execute_task(self, sub_question: str, metadata_filters: Dict = None) -> Dict[str, Any]:
         """A mini-agent that retrieves context for a sub-question and answers it."""
         loop = asyncio.get_event_loop()
         
         def _retrieve():
-            chunks = perform_multi_query_search(self.db, [sub_question], self.tenant_id, top_k=self.original_top_k)
+            chunks = perform_multi_query_search(
+                self.db, [sub_question], self.tenant_id,
+                top_k=self.original_top_k,
+                metadata_filters=metadata_filters,
+            )
             reranked = rerank_results(sub_question, chunks, top_n=self.original_top_k)
             context = assemble_context(sub_question, reranked, db=self.db)
             return context
@@ -137,22 +142,44 @@ class AgenticRAGPipeline:
         return await self._async_ollama_generate(prompt, system="")
 
     async def run(self, query: str) -> Dict[str, Any]:
-        """Run the full Agentic Plan-and-Execute pipeline."""
+        """Run the full Agentic Plan-and-Execute pipeline.
+        
+        Enterprise enhancements:
+        - Dynamic metadata filter extraction (file/page/section from natural language)
+        - Query decomposition (multi-sub-question parallel retrieval via RRF fusion)
+        Both run before initial retrieval so all downstream stages benefit.
+        """
         start_time = time.time()
         
-        # Stage 1: Initial Retrieval
+        # ── Enterprise Layer A: Dynamic Metadata Filters ───────────────────
+        # Extract file/page/section constraints from natural language.
+        # "torque spec in the welding manual" → {target_file: "welding"}
+        # Runs synchronously (Tier 1 regex = 0ms; Tier 2 LLM = ~150ms on edge cases)
+        auto_filters = extract_metadata_filters(query)
+        
+        # ── Enterprise Layer B: Query Decomposition ────────────────────────
+        # Split complex/multi-part queries into targeted sub-questions.
+        # "What is X and how does Y work" → [original, "What is X?", "How does Y work?"]
+        # All variants fed into perform_multi_query_search RRF fusion.
+        query_variants = decompose_query(query)
+        
+        # Stage 1: Initial Retrieval (multi-query + dynamic filters)
         loop = asyncio.get_event_loop()
         def _initial_retrieval():
-            # fast_path=False enables exact_catalogue_lookup, pulling tables offline
-            chunks = perform_hybrid_search(self.db, query, self.tenant_id, top_k=self.original_top_k, fast_path=False)
-            return chunks
+            return perform_multi_query_search(
+                self.db, query_variants, self.tenant_id,
+                top_k=self.original_top_k,
+                metadata_filters=auto_filters if auto_filters else None,
+                fast_path=False,
+            )
         
         initial_context = await loop.run_in_executor(None, _initial_retrieval)
         initial_context_text = "\n".join([f"{c.get('citation', 'Source: Unknown')}\n{c.get('text', '')}" for c in initial_context])
         
         # Stage 2: Planner
         plan = await self.planner_stage(query, initial_context_text)
-        print(f"[AgenticRAG] Plan formulated: {plan['plan_type']} with {len(plan['tasks'])} tasks.")
+        print(f"[AgenticRAG] Plan formulated: {plan['plan_type']} with {len(plan['tasks'])} tasks. "
+              f"Filters={auto_filters or '{}'} Variants={len(query_variants)}")
         
         final_context = list(initial_context)
         
@@ -161,8 +188,8 @@ class AgenticRAGPipeline:
             pass
             final_answer = "" # Indicates standard generation handles it later
         else:
-            # Stage 3: Parallel Task Execution
-            tasks = [self.execute_task(t) for t in plan["tasks"]]
+            # Stage 3: Parallel Task Execution (sub-tasks inherit auto_filters)
+            tasks = [self.execute_task(t, metadata_filters=auto_filters or None) for t in plan["tasks"]]
             task_results = await asyncio.gather(*tasks)
             
             # Aggregate context
@@ -175,7 +202,6 @@ class AgenticRAGPipeline:
             final_answer = await self.synthesize(query, task_results, initial_context)
         
         # Stage 5: Verification
-        # Let's verify the initial retrieval grounding if empty plan, or synthesize grounding
         grounding_result = compute_grounding_score(query, final_context)
         
         return {
@@ -184,5 +210,7 @@ class AgenticRAGPipeline:
             "sources": _context_sources(final_context),
             "grounding": grounding_result,
             "latency_ms": int((time.time() - start_time) * 1000),
-            "plan_type": plan["plan_type"]
+            "plan_type": plan["plan_type"],
+            "auto_filters": auto_filters,
+            "query_variants": query_variants,
         }

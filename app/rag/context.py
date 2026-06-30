@@ -57,13 +57,16 @@ def apply_mmr(query: str, chunks: list, diversity: float = 0.5) -> list:
 
 def compress_context(chunk: dict) -> dict:
     """
-    Layer 5: Compress chunks > 300 tokens using extractive summarization.
+    Layer 5: Compress chunks > 350 tokens using extractive summarization.
     Ensures we pack the context window efficiently without exceeding limits.
     
     IMPORTANT: Table chunks are NEVER truncated — every column and row matters
     for lookup queries (e.g., "SNC2448L1125 door kit number").
+
+    Limit raised to 3500 chars to preserve full multi-step procedure sequences
+    from industrial manuals (numbered steps routinely exceed 2500 chars).
     """
-    max_chars = 2500  # Increased to safely preserve the 2400-char PARENT_CHUNK_SIZE
+    max_chars = 3500  # Raised from 2500: industrial procedures can exceed 2500 chars
     text = chunk.get("text", "")
     
     if "[TABLE" in text or "| " in text:
@@ -146,13 +149,29 @@ def assemble_context(query: str, reranked_chunks: list, db=None, broad_query: bo
     if broad_query and db is not None:
         _append_broad_document_context(final_context, expanded_ids, reranked_chunks, db)
 
-    # 3. Format citations
+    # 3. Attach structured source-label headers to each chunk so the LLM
+    #    can anchor citations to exact document sections. We prepend a short
+    #    header line to the text itself rather than relying on the LLM to
+    #    infer the source from surrounding context.
     for chunk in final_context:
         metadata = chunk.get("metadata", {})
         source = os.path.basename(metadata.get("source", "unknown"))
         page = metadata.get("page_num", "?")
-        chunk["citation"] = f"[{source}, Page {page}]"
-        
+        section = metadata.get("section", "")
+        section_title = metadata.get("section_title", "")
+        # Build a concise but informative label
+        label_parts = [f"Source: {source}", f"Page {page}"]
+        if section_title:
+            label_parts.append(f"Section: {section_title}")
+        elif section is not None and section != "":
+            label_parts.append(f"Section: {section}")
+        label = "[" + ", ".join(label_parts) + "]"
+        chunk["citation"] = label
+        # Prepend the label to the text so it's visible to the LLM in the prompt
+        existing_text = chunk.get("text", "")
+        if not existing_text.startswith("[Source:"):
+            chunk["text"] = f"{label}\n{existing_text}"
+
     return final_context
 
 

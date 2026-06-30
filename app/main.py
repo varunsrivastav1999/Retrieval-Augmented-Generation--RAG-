@@ -78,6 +78,7 @@ from app.rag.grounding import (
     build_strict_grounding_prompt,
     compute_grounding_score,
     verify_answer_grounding,
+    remediate_low_confidence_answer,
 )
 from app.rag.parsers import SUPPORTED_EXTENSIONS
 from app.rag.query_intelligence import flare_mid_generation_retrieval
@@ -1131,7 +1132,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                                     new_chunks = perform_multi_query_search(
                                         db, [flare_query], tenant_id,
                                         top_k=effective_top_k,
-                                        metadata_filters=None,
+                                        metadata_filters=agentic_result.get("auto_filters") or None,
                                     )
                                     if new_chunks:
                                         new_reranked = rerank_results(flare_query, new_chunks, top_n=3)
@@ -1176,6 +1177,30 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             
             clean_answer = re.sub(r'\[FLARE re-retrieved:.*?\]', '', answer_acc).strip()
             verification = verify_answer_grounding(clean_answer, final_context)
+
+            # Layer 10b: Low-confidence remediation (streaming path)
+            # If verifier detects the answer diverged from the source, silently
+            # re-generate using an ultra-strict extractive prompt (1 retry max).
+            if (
+                verification.get("confidence_score", 1.0) < 0.4
+                and grounding_result
+                and grounding_result.get("is_grounded")
+                and final_context
+            ):
+                print(f"[Guardrail/10b] Low confidence ({verification['confidence_score']:.2f}) "
+                      "— triggering extractive remediation.")
+                context_texts_rem = [
+                    re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', c.get('text', '')).strip()
+                    for c in final_context
+                ]
+                context_text_rem = "\n\n---\n\n".join(context_texts_rem)
+                remediated = remediate_low_confidence_answer(
+                    search_query, context_text_rem, broad_query
+                )
+                if remediated:
+                    clean_answer = remediated
+                    verification = verify_answer_grounding(clean_answer, final_context)
+
             latency_ms = int((time.time() - start_time) * 1000)
             
             yield "data: " + json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency_ms}) + "\n\n"
@@ -1380,7 +1405,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                     new_chunks = perform_multi_query_search(
                         db, [flare_query], tenant_id,
                         top_k=effective_top_k,
-                        metadata_filters=None,
+                        metadata_filters=agentic_result.get("auto_filters") or None,
                     )
                     if new_chunks:
                         new_reranked = rerank_results(flare_query, new_chunks, top_n=3)
@@ -1411,7 +1436,28 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             answer = "Ollama Error: An unexpected error occurred."
             
         verification = verify_answer_grounding(answer, final_context)
-        
+
+        # Layer 10b: Low-confidence remediation (non-streaming path)
+        if (
+            verification.get("confidence_score", 1.0) < 0.4
+            and grounding_result
+            and grounding_result.get("is_grounded")
+            and final_context
+            and not answer.startswith("Ollama Error")
+        ):
+            print(f"[Guardrail/10b] Low confidence ({verification['confidence_score']:.2f}) "
+                  "— triggering extractive remediation (non-streaming).")
+            context_texts_rem = [
+                re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', c.get('text', '')).strip()
+                for c in final_context
+            ]
+            context_text_rem = "\n\n---\n\n".join(context_texts_rem)
+            remediated = remediate_low_confidence_answer(
+                search_query, context_text_rem, broad_query
+            )
+            if remediated:
+                answer = remediated
+                verification = verify_answer_grounding(answer, final_context)
         evaluation = None
         if request.evaluate and final_context and not answer.startswith("Ollama Error"):
             from app.rag.evaluation import evaluate_rag_response

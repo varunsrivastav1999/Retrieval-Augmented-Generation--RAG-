@@ -8,7 +8,7 @@ import re
 _IDX_MARKER = "__IDX_"
 
 
-def rerank_results(query: str, retrieved_chunks: list, top_n: int = 5) -> list:
+def rerank_results(query: str, retrieved_chunks: list, top_n: int = 8) -> list:
     """
     Layer 4/ColBERT: Reranking
     ColBERT Late-Interaction or Cross-encoder reranker.

@@ -64,16 +64,27 @@ def _rrf_score(rank: int) -> float:
     return 1.0 / (RRF_K + rank)
 
 def _generate_hyde(query: str) -> str:
-    """HyDE: Generate a hypothetical answer to embed for dense retrieval."""
-    prompt = f"Please write a very short, single sentence factual answer to the following question: {query}"
+    """HyDE: Generate a hypothetical answer to embed for dense retrieval.
+
+    Uses an industrial-documentation-aware prompt so the generated hypothesis
+    matches the vocabulary, structure, and conventions found in technical manuals
+    (step numbers, part numbers, section headings, safety notes, etc.).
+    """
+    prompt = (
+        "Write a short technical answer as it would appear verbatim in an industrial "
+        "equipment manual, installation guide, or maintenance procedure document. "
+        "Use precise technical language. Include any relevant step numbers, part numbers, "
+        "section references, or safety warnings that would typically appear in such a manual. "
+        f"Answer the following question in 1-3 sentences: {query}"
+    )
     payload = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
         "keep_alive": "30m",
         "options": {
-            "num_predict": 30, 
-            "temperature": 0.3,
+            "num_predict": 60,
+            "temperature": 0.2,
             "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
         }
     }

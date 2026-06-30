@@ -74,10 +74,10 @@ services:
       resources:
         limits:
           cpus: "4"
-          memory: 12G
+          memory: 16G
         reservations:
           cpus: "2"
-          memory: 4G
+          memory: 6G
     logging:
       driver: "json-file"
       options:
@@ -186,9 +186,12 @@ services:
     container_name: ollama_rag_prod
     restart: unless-stopped
     environment:
-      - OLLAMA_CONTEXT_LENGTH=8192
-      - OLLAMA_KEEP_ALIVE=5m
-      - OLLAMA_FLASH_ATTENTION=1
+      # ── 16GB VRAM Configuration (qwen2.5:14b + bge-large + bge-reranker-v2-m3) ──
+      # Active VRAM without vision: ~11GB | With vision (on-demand): ~8GB swap
+      - OLLAMA_CONTEXT_LENGTH=65536       # qwen2.5:14b supports 128K; 64K fits in 16GB
+      - OLLAMA_KV_CACHE_TYPE=q8_0         # 8-bit KV cache: ~40% VRAM saving on long context
+      - OLLAMA_KEEP_ALIVE=5m              # Unload after 5min idle to free VRAM for vision
+      - OLLAMA_FLASH_ATTENTION=1          # Flash attention: reduces VRAM quadratic cost
       - OLLAMA_NUM_PARALLEL=1
       - OLLAMA_MAX_QUEUE=128
     volumes:
