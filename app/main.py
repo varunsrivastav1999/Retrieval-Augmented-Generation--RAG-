@@ -1012,6 +1012,10 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 sources = agentic_result["sources"]
                 grounding_result = agentic_result["grounding"]
                 
+            auto_filters = None
+            if not request.fast_path:
+                auto_filters = agentic_result.get("auto_filters")
+                
                 if agentic_result.get("answer"):
                     # The agentic pipeline synthesized the answer directly, so we stream the final answer in one block (since it's already generated)
                     # A true async stream of synthesis tokens requires async generator support across the pipeline.
@@ -1132,7 +1136,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                                     new_chunks = perform_multi_query_search(
                                         db, [flare_query], tenant_id,
                                         top_k=effective_top_k,
-                                        metadata_filters=agentic_result.get("auto_filters") or None,
+                                        metadata_filters=auto_filters or None,
                                     )
                                     if new_chunks:
                                         new_reranked = rerank_results(flare_query, new_chunks, top_n=3)
@@ -1264,6 +1268,10 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             final_context = agentic_result["context"]
             sources = agentic_result["sources"]
             grounding_result = agentic_result["grounding"]
+            
+        auto_filters = None
+        if not request.fast_path:
+            auto_filters = agentic_result.get("auto_filters")
             
             if agentic_result.get("answer"):
                 # The agentic pipeline synthesized the answer directly!
@@ -1405,7 +1413,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                     new_chunks = perform_multi_query_search(
                         db, [flare_query], tenant_id,
                         top_k=effective_top_k,
-                        metadata_filters=agentic_result.get("auto_filters") or None,
+                        metadata_filters=auto_filters or None,
                     )
                     if new_chunks:
                         new_reranked = rerank_results(flare_query, new_chunks, top_n=3)
