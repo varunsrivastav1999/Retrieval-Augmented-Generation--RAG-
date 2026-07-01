@@ -233,16 +233,22 @@ def build_strict_grounding_prompt(
     broad_query: bool = False,
     parent: Optional[str] = None,
     child: Optional[str] = None,
+    query_type: Optional[str] = None,
 ) -> str:
     """
     Build the LLM prompt with STRICT grounding instructions.
     The LLM is explicitly forbidden from using general knowledge.
 
-    Key improvements over the original:
-    - CRITICAL CONSTRAINT block is placed FIRST before all other rules.
-    - Verbatim-quoting rule enforced for procedures and product names.
-    - PRECISE mode replaces AGGRESSIVE mode to avoid encouraging embellishment.
+    v6.0: Supports query_type-specific prompts for optimal answer quality:
+      - topic/chapter/summary → comprehensive extraction with all sections
+      - procedure → step-by-step mode with exact numbering
+      - troubleshoot → diagnostic mode with error codes and solutions
+      - comparison → comparative analysis with side-by-side structure
+      - fact/parameter/table → standard precise mode
     """
+    # v6.0: Map query_type to broad_query for backward compat
+    if query_type in ("topic", "chapter", "summary", "comparison"):
+        broad_query = True
     topic_hint = " / ".join([v for v in [parent, child] if v])
     topic_line = f"The user is looking at topic area: {topic_hint}.\n" if topic_hint else ""
 
@@ -265,6 +271,27 @@ def build_strict_grounding_prompt(
         "╚═══════════════════════════════════════════════════════════╝\n\n"
     )
 
+
+    # v6.0: Type-specific rules
+    type_specific_rules = ""
+    if query_type == "procedure":
+        type_specific_rules = (
+            "8. PROCEDURAL FOCUS: The user is asking for a step-by-step procedure. Extract all steps in exact order.\n"
+            "9. NO OMISSION: Do not skip any warnings, cautions, or prerequisites associated with the procedure.\n"
+        )
+    elif query_type == "troubleshoot":
+        type_specific_rules = (
+            "8. DIAGNOSTIC FOCUS: The user is trying to troubleshoot an issue. List possible causes and their respective solutions clearly.\n"
+            "9. ERROR CODES: If error codes or alarm messages are relevant, include them exactly as written.\n"
+        )
+    elif query_type == "comparison":
+        type_specific_rules = (
+            "8. COMPARATIVE FOCUS: The user is asking for a comparison. Structure your answer to clearly highlight differences and similarities.\n"
+            "9. BALANCED ANALYSIS: Ensure you draw evidence from the context for both sides of the comparison.\n"
+        )
+    else:
+        type_specific_rules = "8. EXHAUSTIVE EXTRACTION & NO TRUNCATION: Do NOT summarize away important details. Return all related details, clauses, headings, and context exactly as it appears in the documents.\n"
+
     if broad_query:
         return (
             critical_constraint
@@ -280,8 +307,7 @@ def build_strict_grounding_prompt(
             "5. STRUCTURE & FORMATTING: Use clean, modern Markdown. Use headings (###), bulleted lists, and bold text for emphasis. Ensure extreme readability.\n"
             "6. MATHEMATICS & DATA: If mathematical equations, formulas, or scientific data are present, output them using proper LaTeX format (e.g., $$E=mc^2$$ or $x^2$). Preserve all technical accuracy.\n"
             "7. MULTI-STEP REASONING: For complex questions, internally break down the logic step-by-step before answering. Ensure the final output is logical, rigorous, and completely accurate.\n"
-            "8. EXHAUSTIVE EXTRACTION & NO TRUNCATION: Do NOT summarize away important details. Return all related details, clauses, headings, and context exactly as it appears in the documents.\n"
-            "9. TONE: Maintain an expert, professional, and technically precise tone.\n"
+            + type_specific_rules +
             "10. NO FILLER WORDS: DO NOT use introductory filler phrases like 'According to the provided text'. Start your answer immediately with the requested facts.\n"
             f"{topic_line}\n"
             "-----------------------------------------------------------\n"

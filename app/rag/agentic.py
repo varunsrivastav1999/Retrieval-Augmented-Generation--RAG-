@@ -16,10 +16,11 @@ OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "1024"))
 
 class AgenticRAGPipeline:
-    def __init__(self, db_session, tenant_id: str, original_top_k: int):
+    def __init__(self, db_session, tenant_id: str, original_top_k: int, strategy=None):
         self.db = db_session
         self.tenant_id = tenant_id
         self.original_top_k = original_top_k
+        self.strategy = strategy
         self.ollama_url = get_ollama_generate_url()
         self.model = OLLAMA_MODEL
 
@@ -136,8 +137,10 @@ class AgenticRAGPipeline:
         
         for i, task in enumerate(task_results):
             context_text += f"Sub-Task {i+1} Output for '{task['sub_question']}':\n{task['answer']}\n\n"
-            
-        prompt = build_strict_grounding_prompt(query, context_text, broad_query=True)
+        # v6.0 Use strategy-specific prompt
+        prompt_style = "comprehensive" if (self.strategy and getattr(self.strategy, 'map_reduce', False)) else "standard"
+        query_type = self.strategy.query_type.value if self.strategy else None
+        prompt = build_strict_grounding_prompt(query, context_text, broad_query=True, query_type=query_type)
         
         return await self._async_ollama_generate(prompt, system="")
 
@@ -166,14 +169,29 @@ class AgenticRAGPipeline:
         # Stage 1: Initial Retrieval (multi-query + dynamic filters)
         loop = asyncio.get_event_loop()
         def _initial_retrieval():
-            return perform_multi_query_search(
-                self.db, query_variants, self.tenant_id,
-                top_k=self.original_top_k,
-                metadata_filters=auto_filters if auto_filters else None,
-                fast_path=False,
-            )
+            if self.strategy and (self.strategy.section_search or self.strategy.chapter_retrieval):
+                from app.rag.section_retriever import retrieve_by_topic
+                # We take the best sections for the core query, not all variants to avoid explosion
+                return retrieve_by_topic(
+                    query, self.tenant_id, self.db,
+                    top_sections=3, max_chunks_per_section=self.strategy.max_section_chunks
+                )
+            else:
+                return perform_multi_query_search(
+                    self.db, query_variants, self.tenant_id,
+                    top_k=self.original_top_k,
+                    metadata_filters=auto_filters if auto_filters else None,
+                    fast_path=False,
+                )
         
-        initial_context = await loop.run_in_executor(None, _initial_retrieval)
+        raw_initial_context = await loop.run_in_executor(None, _initial_retrieval)
+        
+        # v6.0 Context Optimization
+        from app.rag.context_optimizer import ContextOptimizer
+        optimizer = ContextOptimizer()
+        ordering = self.strategy.context_ordering if self.strategy else "relevance"
+        initial_context, needs_map_reduce = optimizer.optimize(raw_initial_context, query, ordering=ordering)
+        
         initial_context_text = "\n".join([f"{c.get('citation', 'Source: Unknown')}\n{c.get('text', '')}" for c in initial_context])
         
         # Stage 2: Planner

@@ -340,6 +340,91 @@ def ingest_file(
         total_pages = len(parse_result.pages)
         doc_title = os.path.basename(file_path)
 
+        # ─── v6.0: Build Hierarchical Document Structure ─────────────────
+        doc_tree = None
+        section_lookup = {}  # page_num → best matching section node
+        try:
+            from app.rag.document_structure import build_document_tree, DocumentStructureBuilder
+            from app.database import DocumentSection
+
+            doc_tree = build_document_tree(
+                parse_result.pages,
+                document_name=doc_title,
+                document_id=file_path,
+            )
+            builder = DocumentStructureBuilder()
+            flat_sections = builder.flatten_sections(doc_tree)
+
+            # Store DocumentSection records in PostgreSQL
+            if flat_sections:
+                # Clean old sections for this document
+                db.query(DocumentSection).filter(
+                    DocumentSection.document_id == file_path,
+                    DocumentSection.tenant_id == tenant_id,
+                ).delete(synchronize_session=False)
+                db.commit()
+
+                section_embeddings_batch = []  # For Qdrant upsert
+                for sec_node in flat_sections:
+                    section_summary = builder.get_section_summary(sec_node, max_chars=500)
+                    doc_section = DocumentSection(
+                        id=sec_node.node_id,
+                        document_id=file_path,
+                        tenant_id=tenant_id,
+                        level=sec_node.level,
+                        title=sec_node.title,
+                        content_summary=section_summary[:500],
+                        full_text=sec_node.content[:50000] if sec_node.content else "",
+                        page_start=sec_node.page_start,
+                        page_end=sec_node.page_end,
+                        parent_id=sec_node.parent_id,
+                        heading_path=sec_node.heading_path,
+                        chunk_count=0,
+                        embedding_model=embedding_model,
+                    )
+                    db.add(doc_section)
+
+                    # Build page→section lookup for chunk enrichment
+                    for pg in range(sec_node.page_start, sec_node.page_end + 1):
+                        # Keep the most specific (deepest) section for each page
+                        if pg not in section_lookup or _level_depth(sec_node.level) > _level_depth(section_lookup[pg].level):
+                            section_lookup[pg] = sec_node
+
+                    # Prepare section embedding
+                    if section_summary.strip():
+                        section_embeddings_batch.append({
+                            "id": sec_node.node_id,
+                            "text": section_summary,
+                            "payload": {
+                                "tenant_id": tenant_id,
+                                "embedding_model": embedding_model,
+                                "section_id": sec_node.node_id,
+                                "document_id": file_path,
+                                "document_name": doc_title,
+                                "title": sec_node.title,
+                                "level": sec_node.level,
+                                "heading_path": sec_node.heading_path,
+                                "page_start": sec_node.page_start,
+                                "page_end": sec_node.page_end,
+                                "parent_id": sec_node.parent_id,
+                            },
+                        })
+
+                db.commit()
+
+                # Generate and store section embeddings in Qdrant
+                if section_embeddings_batch:
+                    _upsert_section_embeddings(section_embeddings_batch)
+
+                print(f"[Ingest/v6.0] Built hierarchy: {len(flat_sections)} sections, "
+                      f"{len(section_lookup)} page mappings")
+
+        except Exception as e:
+            print(f"[Ingest/v6.0] Document structure building failed (non-fatal): {e}")
+            import traceback
+            traceback.print_exc()
+        # ─── End v6.0 ────────────────────────────────────────────────────
+
         # --- OPTIMIZED CONTEXTUAL RETRIEVAL ---
         # Generate a global document context from the first few pages to prepend to chunks
         # This solves the "lost in the middle" problem with O(1) LLM calls.
@@ -543,7 +628,19 @@ def ingest_file(
                     "structured_data": detected_content.structured_data if detected_content else chunk_info.get("structured_data"),
                     "search_tags": detected_content.search_tags if detected_content else chunk_info.get("search_tags", []),
                     "format_confidence": detected_content.confidence if detected_content else 1.0,
+                    # --- v6.0 Section-aware fields ---
+                    "section_id": None,
+                    "heading_path": [],
+                    "chunk_index_in_section": None,
+                    "total_chunks_in_section": None,
                 })
+
+                # v6.0: Enrich chunk with section metadata from hierarchy
+                if section_lookup and page.page_num in section_lookup:
+                    sec_node = section_lookup[page.page_num]
+                    pending_chunks[-1]["section_id"] = sec_node.node_id
+                    pending_chunks[-1]["heading_path"] = sec_node.heading_path
+
                 section += 1
                 
                 # --- Layer 4: Batch Embedding (batch=32) ---
@@ -578,7 +675,11 @@ def ingest_file(
                 page_count, embedding_model, file_type,
             )
             chunks_inserted += inserted
-            
+
+        # v6.0: Update section chunk counts
+        if section_lookup:
+            _update_section_chunk_counts(db, tenant_id, file_path, embedding_model)
+
         # NOTE: RAPTOR tree build is NOT run per-file (too expensive).
         # Trigger via POST /raptor/build endpoint or on a schedule instead.
 
@@ -645,6 +746,9 @@ def _process_chunk_batch(
             "search_tags": c.get("search_tags", []),     # Boosted BM25 terms
             "format_confidence": c.get("format_confidence", 1.0),
             "nl_sentence": c.get("nl_text"),             # Embeddable NL sentence
+            # --- v6.0 Section-aware fields ---
+            "section_id": c.get("section_id"),
+            "heading_path": c.get("heading_path", []),
         }
         
         chunk_obj = DocumentChunk(
@@ -656,6 +760,11 @@ def _process_chunk_batch(
             doc_metadata=doc_metadata,
             embedding_model=embedding_model,
             file_type=file_type,
+            # v6.0 section-aware columns
+            section_id=c.get("section_id"),
+            heading_path_json=c.get("heading_path"),
+            chunk_index_in_section=c.get("chunk_index_in_section"),
+            total_chunks_in_section=c.get("total_chunks_in_section"),
         )
         
         try:
@@ -717,3 +826,87 @@ def ingest_pdf(
 ) -> Dict:
     """Legacy function — redirects to universal ingest_file()."""
     return ingest_file(pdf_path, tenant_id=tenant_id, job_id=job_id, force_reindex=force_reindex)
+
+
+# ---------------------------------------------------------------------------
+# v6.0: Section-aware helpers
+# ---------------------------------------------------------------------------
+
+def _level_depth(level: str) -> int:
+    """Convert section level name to numeric depth for comparison."""
+    return {"document": 0, "chapter": 1, "section": 2, "subsection": 3, "paragraph": 4}.get(level, 5)
+
+
+def _upsert_section_embeddings(section_batch: List[Dict]) -> None:
+    """Generate embeddings for sections and upsert into Qdrant section_embeddings collection."""
+    try:
+        from app.rag.qdrant_client import insert_qdrant_points
+        from qdrant_client.http import models
+
+        texts = [s["text"] for s in section_batch]
+        vectors = encode_texts(texts)
+
+        points = []
+        for i, sec in enumerate(section_batch):
+            points.append(
+                models.PointStruct(
+                    id=sec["id"],
+                    vector=vectors[i],
+                    payload=sec["payload"],
+                )
+            )
+
+        # Batch upsert
+        insert_qdrant_points("section_embeddings", points)
+        print(f"[Ingest/v6.0] Upserted {len(points)} section embeddings into Qdrant")
+
+    except Exception as e:
+        print(f"[Ingest/v6.0] Section embedding upsert failed (non-fatal): {e}")
+
+
+def _update_section_chunk_counts(
+    db,
+    tenant_id: str,
+    document_id: str,
+    embedding_model: str,
+) -> None:
+    """Update chunk_count on DocumentSection records after all chunks are ingested."""
+    try:
+        from app.database import DocumentSection
+        from sqlalchemy import func
+
+        # Count chunks per section_id
+        counts = (
+            db.query(
+                DocumentChunk.section_id,
+                func.count(DocumentChunk.id).label("cnt"),
+            )
+            .filter(
+                DocumentChunk.tenant_id == tenant_id,
+                DocumentChunk.doc_id == document_id,
+                DocumentChunk.embedding_model == embedding_model,
+                DocumentChunk.section_id.isnot(None),
+            )
+            .group_by(DocumentChunk.section_id)
+            .all()
+        )
+
+        for section_id, cnt in counts:
+            db.query(DocumentSection).filter(
+                DocumentSection.id == section_id
+            ).update({"chunk_count": cnt})
+
+            # Also update total_chunks_in_section on each chunk
+            db.query(DocumentChunk).filter(
+                DocumentChunk.section_id == section_id,
+                DocumentChunk.tenant_id == tenant_id,
+                DocumentChunk.doc_id == document_id,
+            ).update({"total_chunks_in_section": cnt})
+
+        db.commit()
+        if counts:
+            print(f"[Ingest/v6.0] Updated chunk counts for {len(counts)} sections")
+
+    except Exception as e:
+        print(f"[Ingest/v6.0] Section chunk count update failed (non-fatal): {e}")
+

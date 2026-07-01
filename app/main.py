@@ -80,6 +80,7 @@ from app.rag.grounding import (
     verify_answer_grounding,
     remediate_low_confidence_answer,
 )
+from app.rag.query_classifier import classify_query, QueryType, STRATEGIES
 from app.rag.parsers import SUPPORTED_EXTENSIONS
 from app.rag.query_intelligence import flare_mid_generation_retrieval
 
@@ -857,11 +858,14 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     print(f"[{'='*50}]")
     tenant_id = validate_tenant_id(request.tenant_id)
     embedding_model = get_embedding_model_id()
-    broad_query = _is_broad_query(request.query)
-    effective_top_k = request.top_k
+    
+    # V6.0: Two-tier Query Classification
+    query_type = classify_query(request.query)
+    strategy = STRATEGIES[query_type]
+    broad_query = strategy.expand_section or strategy.chapter_retrieval or strategy.map_reduce
+    
+    effective_top_k = strategy.top_k
     original_top_k = effective_top_k
-    if broad_query:
-        effective_top_k = min(MAX_TOP_K, max(effective_top_k, BROAD_QUERY_TOP_K))
 
     ingest_summary = None
     if request.sync_documents:
@@ -976,8 +980,17 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 effective_top_k = min(MAX_TOP_K, max(effective_top_k, BROAD_QUERY_TOP_K))
 
             if request.fast_path:
-                retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
-                final_context = retrieved_chunks[:effective_top_k]
+                if strategy.section_search or strategy.chapter_retrieval:
+                    from app.rag.section_retriever import retrieve_by_topic
+                    retrieved_chunks = retrieve_by_topic(search_query, tenant_id, db, top_sections=3, max_chunks_per_section=strategy.max_section_chunks)
+                else:
+                    retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
+                
+                # V6.0: Apply context optimization
+                from app.rag.context_optimizer import ContextOptimizer
+                optimizer = ContextOptimizer()
+                final_context, needs_map_reduce = optimizer.optimize(retrieved_chunks, search_query, ordering=strategy.context_ordering)
+                
                 for c in final_context:
                     c["rerank_score"] = c.get("dense_score", 0.0)
                 sources = _context_sources(final_context)
@@ -985,7 +998,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             else:
                 # Plan and Execute Pipeline (NVIDIA RAG Blueprint Style)
                 import asyncio
-                if broad_query:
+                if strategy.map_reduce:
                     from app.rag.summarization import run_map_reduce_summarize_sync
                     # Retrieve chunks for the summary (using fast_path to avoid secondary LLM calls during retrieval)
                     retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
@@ -999,7 +1012,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 else:
                     from app.rag.agentic import AgenticRAGPipeline
                     
-                    pipeline = AgenticRAGPipeline(db, tenant_id, effective_top_k)
+                    pipeline = AgenticRAGPipeline(db, tenant_id, effective_top_k, strategy=strategy)
                     try:
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
@@ -1086,7 +1099,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 text = re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', text)
                 context_texts.append(text.strip())
             context_text = "\n\n---\n\n".join(context_texts)
-            prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
+            prompt = build_strict_grounding_prompt(search_query, context_text, broad_query, query_type=query_type.value)
             
             db.commit()
             

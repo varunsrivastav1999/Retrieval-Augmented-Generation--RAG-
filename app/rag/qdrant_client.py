@@ -13,17 +13,47 @@ def init_qdrant_collections(dim: Optional[int] = None):
     if dim is None:
         dim = int(os.getenv("RAG_EMBEDDING_DIM", "1024"))
     client = get_qdrant_client()
-    collections = ["document_chunks", "image_chunks"]
-    for col in collections:
-        existing_collections = [c.name for c in client.get_collections().collections]
+    collections_config = {
+        "document_chunks": dim,
+        "image_chunks": 768,  # CLIP dimension
+        "section_embeddings": dim,  # v6.0: section-level search
+    }
+    existing_collections = [c.name for c in client.get_collections().collections]
+    for col, vec_dim in collections_config.items():
         if col not in existing_collections:
             client.create_collection(
                 collection_name=col,
                 vectors_config=models.VectorParams(
-                    size=dim if col == "document_chunks" else 768, # CLIP dimension is 768
+                    size=vec_dim,
                     distance=models.Distance.COSINE
                 )
             )
+            print(f"[Qdrant] Created collection '{col}' with dim={vec_dim}")
+
+    # Create payload indexes for section-aware retrieval (v6.0)
+    _ensure_payload_index(client, "document_chunks", "metadata.section_id", models.PayloadSchemaType.KEYWORD)
+    _ensure_payload_index(client, "section_embeddings", "tenant_id", models.PayloadSchemaType.KEYWORD)
+    _ensure_payload_index(client, "section_embeddings", "embedding_model", models.PayloadSchemaType.KEYWORD)
+    _ensure_payload_index(client, "section_embeddings", "section_id", models.PayloadSchemaType.KEYWORD)
+    _ensure_payload_index(client, "section_embeddings", "document_id", models.PayloadSchemaType.KEYWORD)
+    _ensure_payload_index(client, "section_embeddings", "level", models.PayloadSchemaType.KEYWORD)
+
+
+def _ensure_payload_index(
+    client,
+    collection_name: str,
+    field_name: str,
+    field_schema,
+):
+    """Create a payload index if the collection exists, ignoring errors."""
+    try:
+        client.create_payload_index(
+            collection_name=collection_name,
+            field_name=field_name,
+            field_schema=field_schema,
+        )
+    except Exception:
+        pass  # Index already exists or collection doesn't exist yet
 
 def insert_qdrant_points(collection_name: str, points: list):
     client = get_qdrant_client()

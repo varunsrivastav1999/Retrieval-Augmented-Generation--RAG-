@@ -72,6 +72,32 @@ class DocumentChunk(Base):
     section_title = Column(String, nullable=True, index=True)  # Owning document section
     nl_representation = Column(Text, nullable=True)            # NL sentence for the row
     # cell_values and header_path stored inside doc_metadata JSON (no ALTER TABLE needed)
+    # --- Section-aware columns (v6.0) ---
+    section_id = Column(String, nullable=True, index=True)             # FK to DocumentSection
+    heading_path_json = Column(JSON, nullable=True)                    # ["Ch3", "3.1", "3.1.2"]
+    chunk_index_in_section = Column(Integer, nullable=True)            # Position within section
+    total_chunks_in_section = Column(Integer, nullable=True)           # Total chunks in section
+
+
+class DocumentSection(Base):
+    """Hierarchical document structure: Document → Chapter → Section → Subsection.
+    Used for section-level search and parent-section retrieval (v6.0)."""
+    __tablename__ = "document_sections"
+
+    id = Column(String, primary_key=True)              # UUID
+    document_id = Column(String, index=True)            # Source file path
+    tenant_id = Column(String, index=True)
+    level = Column(String)                               # chapter / section / subsection
+    title = Column(String, index=True)
+    content_summary = Column(Text)                       # First 500 chars for quick lookup
+    full_text = Column(Text)                             # Complete section text
+    page_start = Column(Integer)
+    page_end = Column(Integer)
+    parent_id = Column(String, index=True)               # FK to parent section
+    heading_path = Column(JSON)                          # ["Ch3", "3.1", "3.1.2"]
+    chunk_count = Column(Integer, default=0)             # Number of chunks in this section
+    embedding_model = Column(String)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
 
 
 class IngestionJob(Base):
@@ -145,6 +171,16 @@ def _run_schema_migrations():
             "CREATE INDEX IF NOT EXISTS idx_chunks_metadata_gin ON document_chunks USING gin(doc_metadata)")
         _execute_best_effort(conn,
             "CREATE INDEX IF NOT EXISTS idx_chunks_structured_gin ON document_chunks USING gin(structured_content)")
+
+        # v6.0 — section-aware columns
+        _execute_best_effort(conn, "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS section_id VARCHAR")
+        _execute_best_effort(conn, "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS heading_path_json JSONB")
+        _execute_best_effort(conn, "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS chunk_index_in_section INTEGER")
+        _execute_best_effort(conn, "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS total_chunks_in_section INTEGER")
+        _execute_best_effort(conn,
+            "CREATE INDEX IF NOT EXISTS idx_chunks_section_id ON document_chunks(section_id)")
+        _execute_best_effort(conn,
+            "CREATE INDEX IF NOT EXISTS idx_chunks_heading_path ON document_chunks USING gin(heading_path_json)")
             
         # v6.0 - High Performance Sparse Retrieval
         _execute_best_effort(conn, "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS tsvector_content tsvector")
