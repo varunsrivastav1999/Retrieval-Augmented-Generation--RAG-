@@ -61,7 +61,9 @@ Optimized for a **16GB VRAM** GPU. Active VRAM: **~11GB** (LLM + embedding + rer
 - **🛡️ Layer 10b — Low-Confidence Remediation**: Post-generation verifier detects `confidence < 0.4` → silent re-generate with copy-paste-only extractive prompt. Closes the dead-end verification gap.
 - **🔍 Zero-Token Exact Catalogue Lookup**: SQL `ILIKE` bypasses LLM + vector search for part/model numbers.
 - **📦 NeMo-Style Parent-Child Chunking**: Child chunks in Qdrant; LLM receives full parent block.
-- **🏎️ Auto Mode**: Simple facts → verbatim text in 6–15ms; complex analysis → full LLM pipeline.
+- **v6.0 Complete Topic Retrieval**: Context optimizer seamlessly retrieves and orders entire document sections and chapters without truncating or exceeding LLM context windows.
+- **v6.0 Query Classifier**: 9-tier classification mapping (FACT, TOPIC, CHAPTER, PROCEDURE, TROUBLESHOOT, etc.) to distinct retrieval strategies.
+- **🏎️ Auto Mode**: Simple facts → verbatim text in 6–15ms; complex analysis → full LLM pipeline; broad topics → full section retrieval.
 - **🔒 100% Offline & Air-Gapped**: No API keys, no internet during inference.
 
 ---
@@ -129,8 +131,9 @@ graph TD
 7. **Reranking**: `bge-reranker-v2-m3` cross-encoder, top-8 chunks (raised from 5).
 8. **MMR**: Diversity pruning.
 9. **Citation-Aware Context Assembly**: `[Source: file, Page X, Section: Y]` prepended to each chunk text for LLM anchoring. Chunk compression limit 3500 chars (raised from 2500).
-10. **4-Tier Semantic Router**: Extractive / Vector / SQL / Agentic routing.
+10. **4-Tier Semantic Router & v6.0 Query Classifier**: Extractive / Vector / SQL / Agentic routing mapped to 9 distinct query types (Procedure, Troubleshoot, Topic, etc.).
 11. **Query Intelligence**: Multi-query expansion, Self-Query filter extraction, Industrial-aware HyDE.
+11b. **v6.0 Context Optimizer**: Semantic deduplication, section-based chunk clustering, and rigorous token budgeting for entire chapter retrievals.
 
 ### Phase 3: Generation & Anti-Hallucination
 12. **Grounding Guard**: Pre-gen block.
