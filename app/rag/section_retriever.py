@@ -165,13 +165,13 @@ def retrieve_section_chunks(
         candidates = []
 
         for sid in section_ids:
-            # First try the dedicated section_id column
+            # Use the dedicated section_id column (v6.0)
             rows = (
                 db.query(DocumentChunk)
                 .filter(
                     DocumentChunk.tenant_id == tenant_id,
                     DocumentChunk.embedding_model == embedding_model,
-                    DocumentChunk.doc_metadata["section_id"].astext == sid,
+                    DocumentChunk.section_id == sid,
                 )
                 .order_by(DocumentChunk.section)
                 .limit(max_chunks)
@@ -179,20 +179,23 @@ def retrieve_section_chunks(
             )
 
             if not rows:
-                # Fallback: search by heading_path in metadata
-                rows = (
-                    db.query(DocumentChunk)
-                    .filter(
-                        DocumentChunk.tenant_id == tenant_id,
-                        DocumentChunk.embedding_model == embedding_model,
+                # Fallback: search by section_id inside doc_metadata JSON using cast
+                try:
+                    rows = (
+                        db.query(DocumentChunk)
+                        .filter(
+                            DocumentChunk.tenant_id == tenant_id,
+                            DocumentChunk.embedding_model == embedding_model,
+                        )
+                        .filter(
+                            text("doc_metadata->>'section_id' = :sid")
+                        ).params(sid=sid)
+                        .order_by(DocumentChunk.section)
+                        .limit(max_chunks)
+                        .all()
                     )
-                    .filter(
-                        DocumentChunk.doc_metadata["section_id"].astext == sid,
-                    )
-                    .order_by(DocumentChunk.section)
-                    .limit(max_chunks)
-                    .all()
-                )
+                except Exception:
+                    rows = []
 
             for row in rows:
                 candidates.append(_chunk_from_db_row(row))
