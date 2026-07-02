@@ -80,7 +80,7 @@ from app.rag.grounding import (
     verify_answer_grounding,
     remediate_low_confidence_answer,
 )
-from app.rag.query_classifier import classify_query, QueryType, STRATEGIES
+from app.rag.query_classifier import classify_query, QueryType
 from app.rag.parsers import SUPPORTED_EXTENSIONS
 from app.rag.query_intelligence import flare_mid_generation_retrieval
 
@@ -860,8 +860,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     embedding_model = get_embedding_model_id()
     
     # V6.0: Two-tier Query Classification
-    query_type = classify_query(request.query)
-    strategy = STRATEGIES[query_type]
+    query_type, strategy = classify_query(request.query)
     broad_query = strategy.expand_section or strategy.chapter_retrieval or strategy.map_reduce
     
     effective_top_k = strategy.top_k
