@@ -20,11 +20,10 @@
 
 import re
 import json
-import requests
 import os
 from typing import Any, Dict, List, Optional
 
-from app.rag.model_loader import cosine_similarity, encode_text, encode_texts, get_ollama_generate_url, OLLAMA_MODEL
+from app.rag.model_loader import cosine_similarity, encode_text, encode_texts, generate_llm_text
 
 
 # ---------------------------------------------------------------------------
@@ -182,20 +181,14 @@ Format:
 }}
 """
 
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.0,
-            "num_predict": 300,
-        }
-    }
-
     try:
-        response = requests.post(get_ollama_generate_url(), json=payload, timeout=30)
-        if response.status_code == 200:
-            text = response.json().get("response", "").strip()
+        text = generate_llm_text(
+            prompt,
+            timeout=30,
+            num_predict=300,
+            temperature=0.0,
+        )
+        if text:
             # Clean JSON markdown if present
             if text.startswith("```json"):
                 text = text[7:]
@@ -393,22 +386,16 @@ def remediate_low_confidence_answer(
     Returns the corrected answer string, or None if re-generation fails.
     """
     prompt = build_extractive_remediation_prompt(question, context_text)
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.0,
-            "num_predict": 1024,
-        }
-    }
     try:
-        response = requests.post(get_ollama_generate_url(), json=payload, timeout=60)
-        if response.status_code == 200:
-            corrected = response.json().get("response", "").strip()
-            if corrected and len(corrected) > 20:
-                print(f"[Guardrail/10b] Remediation produced corrected answer ({len(corrected)} chars).")
-                return corrected
+        corrected = generate_llm_text(
+            prompt,
+            timeout=60,
+            num_predict=1024,
+            temperature=0.0,
+        )
+        if corrected and len(corrected) > 20:
+            print(f"[Guardrail/10b] Remediation produced corrected answer ({len(corrected)} chars).")
+            return corrected
     except Exception as e:
         print(f"[Guardrail/10b] Remediation failed: {e}")
     return None

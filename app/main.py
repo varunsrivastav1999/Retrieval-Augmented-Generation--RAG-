@@ -69,10 +69,19 @@ from app.rag.jobs import (
     get_ingestion_job,
     start_ingestion_worker,
 )
-from app.rag.model_loader import get_embedding_model_id, runtime_model_info
+from app.rag.model_loader import (
+    extract_llm_text,
+    generate_llm_text,
+    get_embedding_model_id,
+    get_openai_models_url,
+    iter_llm_tokens,
+    post_llm_generate,
+    runtime_model_info,
+    use_openai_compatible_llm,
+)
 from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search
 from app.rag.reranker import rerank_results
-from app.rag.context import _context_sources
+from app.rag.context import _context_sources, build_table_html_context
 from app.rag.grounding import (
     NOT_FOUND_RESPONSE,
     build_strict_grounding_prompt,
@@ -132,9 +141,16 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b") # Best for RAG — world
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "1024"))
 OLLAMA_CONTEXT_LENGTH = int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
+ALLOW_QUERY_TIME_SYNC = os.getenv("RAG_ALLOW_QUERY_TIME_SYNC", "false").lower() in {"1", "true", "yes", "on"}
+EXTRACTIVE_MAX_CHARS = int(os.getenv("RAG_EXTRACTIVE_MAX_CHARS", "20000"))
+MAINTENANCE_SAFE_MODE = os.getenv("RAG_MAINTENANCE_SAFE_MODE", "true").lower() in {"1", "true", "yes", "on"}
 RAG_ENV = os.getenv("RAG_ENV", "local").lower()
 PRELOAD_MODELS_ON_STARTUP = os.getenv(
     "RAG_PRELOAD_MODELS_ON_STARTUP",
+    "true" if RAG_ENV in {"prod", "production"} else "false",
+).lower() in {"1", "true", "yes", "on"}
+PREWARM_LLM_ON_STARTUP = os.getenv(
+    "RAG_PREWARM_LLM_ON_STARTUP",
     "true" if RAG_ENV in {"prod", "production"} else "false",
 ).lower() in {"1", "true", "yes", "on"}
 ENABLE_INGESTION_WORKER = os.getenv("RAG_ENABLE_INGESTION_WORKER", "true").lower() in {
@@ -173,6 +189,115 @@ def validate_tenant_id(tenant_id: str) -> str:
     if not TENANT_RE.fullmatch(tenant_id):
         raise HTTPException(status_code=400, detail="Invalid tenant_id.")
     return tenant_id
+
+
+def _is_table_chunk(chunk: Dict[str, Any]) -> bool:
+    metadata = chunk.get("metadata", {}) or {}
+    text = chunk.get("text", "") or ""
+    return bool(
+        chunk.get("table_group")
+        or metadata.get("table_group")
+        or metadata.get("table_id")
+        or metadata.get("type") == "table_row"
+        or "| " in text[:100]
+    )
+
+
+def _source_label(chunk: Dict[str, Any]) -> str:
+    metadata = chunk.get("metadata", {}) or {}
+    source = metadata.get("source") or chunk.get("doc_id") or "unknown"
+    source_name = os.path.basename(str(source))
+    page = metadata.get("page_num")
+    return f"{source_name}, Page {page}" if page else source_name
+
+
+def _preserve_table_expansion(chunks: List[Dict[str, Any]], top_k: int) -> List[Dict[str, Any]]:
+    """Keep complete table-row expansions; apply top_k only to ordinary text results."""
+    if any(_is_table_chunk(chunk) for chunk in chunks):
+        return chunks
+    return chunks[:top_k]
+
+
+def _build_prompt_context(chunks: List[Dict[str, Any]]) -> str:
+    """Build LLM context that preserves canonical table rows instead of raw row fragments."""
+    table_html = ""
+    try:
+        table_html, _ = build_table_html_context(chunks)
+    except Exception as exc:
+        print(f"[Context] Table context build failed: {exc}")
+
+    context_parts = []
+    if table_html:
+        table_sources = sorted({_source_label(chunk) for chunk in chunks if _is_table_chunk(chunk)})
+        source_line = f"Sources: {', '.join(table_sources)}\n" if table_sources else ""
+        context_parts.append(
+            "EXACT TABLE CONTEXT:\n"
+            "Use these rows and cells exactly when answering table questions.\n"
+            f"{source_line}"
+            f"{table_html}"
+        )
+
+    seen = set()
+    text_parts = []
+    for chunk in chunks:
+        if table_html and _is_table_chunk(chunk):
+            continue
+        text = (chunk.get("text", "") or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        text_parts.append(f"[{_source_label(chunk)}]\n{text}")
+
+    if text_parts:
+        context_parts.append("\n\n---\n\n".join(text_parts))
+
+    return "\n\n---\n\n".join(part for part in context_parts if part.strip())
+
+
+def _build_extractive_answer(chunks: List[Dict[str, Any]]) -> str:
+    """Return exact retrieved content without asking the LLM to rewrite it."""
+    if not chunks:
+        return ""
+
+    answer_parts = []
+    table_html = ""
+    try:
+        table_html, _ = build_table_html_context(chunks)
+    except Exception as exc:
+        print(f"[Extractive] Table answer assembly failed: {exc}")
+
+    if table_html:
+        table_sources = sorted({_source_label(chunk) for chunk in chunks if _is_table_chunk(chunk)})
+        source_suffix = f": {', '.join(table_sources)}" if table_sources else ""
+        answer_parts.append(f"[Exact table rows{source_suffix}]\n{table_html}")
+
+    seen = set()
+    for chunk in chunks:
+        if table_html and _is_table_chunk(chunk):
+            continue
+        text = (chunk.get("text", "") or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        answer_parts.append(f"[{_source_label(chunk)}]\n{text}")
+
+    answer = "\n\n---\n\n".join(answer_parts)
+    if len(answer) > EXTRACTIVE_MAX_CHARS:
+        answer = (
+            answer[:EXTRACTIVE_MAX_CHARS].rstrip()
+            + "\n\n[Truncated: increase RAG_EXTRACTIVE_MAX_CHARS to return more exact text.]"
+        )
+    return answer
+
+
+def _extractive_verification(answer: str) -> Dict[str, Any]:
+    if not answer:
+        return {"confidence": "low", "confidence_score": 0.0, "reasoning": "No answer provided"}
+    return {
+        "confidence": "high",
+        "confidence_score": 1.0,
+        "reasoning": "Exact extractive response copied from retrieved document/table chunks; LLM verification skipped for latency.",
+    }
 
 
 def _cache_key(
@@ -330,10 +455,11 @@ def on_startup():
                 get_embedding_model()
                 get_reranker_model()
                 
-                # Auto-Create/Update Custom Ollama Brain
+                # Auto-Create/Update Custom Ollama Brain. vLLM/OpenAI-compatible
+                # backends serve preloaded models, so there is no Modelfile API.
                 import httpx
                 modelfile_path = "/app/Modelfile"
-                if os.path.exists(modelfile_path):
+                if os.path.exists(modelfile_path) and not use_openai_compatible_llm():
                     print(f"[Plug&Play] Syncing custom brain '{OLLAMA_MODEL}' from Modelfile...")
                     with open(modelfile_path, "r") as f:
                         modelfile_content = f.read()
@@ -352,6 +478,20 @@ def on_startup():
                                 print(f"⚠️ Warning: Model creation returned {resp.status_code}: {resp.text}")
                         except Exception as conn_err:
                             print(f"❌ Connection Error: Could not reach Native Ollama at {ollama_base_url}. Make sure Ollama for Mac is RUNNING! ({conn_err})")
+                elif os.path.exists(modelfile_path):
+                    print("[Plug&Play] Skipping Ollama Modelfile sync for vLLM/OpenAI-compatible backend.")
+
+                if PREWARM_LLM_ON_STARTUP:
+                    print("[Plug&Play] Prewarming LLM backend...")
+                    warmup = generate_llm_text(
+                        "Reply with exactly: ready",
+                        timeout=min(OLLAMA_TIMEOUT_SECONDS, 120),
+                        num_predict=3,
+                        temperature=0.0,
+                        num_ctx=min(OLLAMA_CONTEXT_LENGTH, 2048),
+                    )
+                    if warmup:
+                        print("[Plug&Play] LLM backend warm.")
                 
                 print(f"RAG models ready: {runtime_model_info()}")
             except Exception as e:
@@ -804,12 +944,15 @@ def ready_health(db: Session = Depends(get_db)):
         checks["redis"] = f"degraded: {exc}"
 
     try:
-        ollama_base = OLLAMA_URL.split("/api/")[0]
-        response = requests.get(f"{ollama_base}/api/tags", timeout=5)
+        if use_openai_compatible_llm():
+            response = requests.get(get_openai_models_url(), timeout=5)
+        else:
+            ollama_base = OLLAMA_URL.split("/api/")[0]
+            response = requests.get(f"{ollama_base}/api/tags", timeout=5)
         response.raise_for_status()
-        checks["ollama"] = "ok"
+        checks["llm"] = "ok"
     except Exception as exc:
-        checks["ollama"] = f"degraded: {exc}"
+        checks["llm"] = f"degraded: {exc}"
 
     try:
         checks["models_info"] = runtime_model_info()
@@ -862,12 +1005,28 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     # V6.0: Two-tier Query Classification
     query_type, strategy = classify_query(request.query)
     broad_query = strategy.expand_section or strategy.chapter_retrieval or strategy.map_reduce
+
+    if (
+        MAINTENANCE_SAFE_MODE
+        and request.auto
+        and not request.extractive
+        and query_type in {QueryType.FACT, QueryType.PROCEDURE, QueryType.TABLE, QueryType.PARAMETER, QueryType.TROUBLESHOOT}
+    ):
+        request.extractive = True
+        request.fast_path = True
+        print(f"[MaintenanceSafeMode] {query_type.value} query -> fast exact extractive answer")
     
     effective_top_k = strategy.top_k
     original_top_k = effective_top_k
 
     ingest_summary = None
-    if request.sync_documents:
+    if request.sync_documents and not ALLOW_QUERY_TIME_SYNC:
+        ingest_summary = {
+            "disabled": True,
+            "reason": "Query-time document scan is disabled. Upload or ingestion jobs should update the corpus before querying.",
+        }
+        print("[Query] Ignoring sync_documents=true because RAG_ALLOW_QUERY_TIME_SYNC is disabled.")
+    elif request.sync_documents:
         all_files = find_all_supported_files(MEDIA_PATH, include_scan=request.include_scan)
         queue_result = _queue_file_ingestion(
             tenant_id,
@@ -985,10 +1144,15 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 else:
                     retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
                 
-                # V6.0: Apply context optimization
-                from app.rag.context_optimizer import ContextOptimizer
-                optimizer = ContextOptimizer()
-                final_context, needs_map_reduce = optimizer.optimize(retrieved_chunks, search_query, ordering=strategy.context_ordering)
+                # V6.0: Apply context optimization, but never deduplicate away
+                # sibling rows from a table expansion.
+                if any(_is_table_chunk(chunk) for chunk in retrieved_chunks):
+                    final_context = retrieved_chunks
+                    needs_map_reduce = False
+                else:
+                    from app.rag.context_optimizer import ContextOptimizer
+                    optimizer = ContextOptimizer()
+                    final_context, needs_map_reduce = optimizer.optimize(retrieved_chunks, search_query, ordering=strategy.context_ordering)
                 
                 for c in final_context:
                     c["rerank_score"] = c.get("dense_score", 0.0)
@@ -1070,21 +1234,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
 
 
             if request.extractive:
-                answer = ""
-                if final_context:
-                    best = final_context[0]
-                    text = best.get("text", "")
-                    source_name = "unknown"
-                    if best.get("metadata"):
-                        src = best["metadata"].get("source", "")
-                        if src:
-                            source_name = os.path.basename(str(src))
-                    page = best.get("metadata", {}).get("page_num")
-                    page_str = f", Page {page}" if page else ""
-                    if len(text) > 4000:
-                        text = text[:4000] + "..."
-                    answer = f"[{source_name}{page_str}]\n{text}"
-                verification = verify_answer_grounding(answer, final_context) if answer else {"confidence": "low", "confidence_score": 0.0, "reasoning": "No answer provided"}
+                answer = _build_extractive_answer(final_context)
+                verification = _extractive_verification(answer)
                 latency = int((time.time() - start_time) * 1000)
                 
                 db.commit()
@@ -1092,98 +1243,75 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 yield "data: " + json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency}) + "\n\n"
                 return
 
-            context_texts = []
-            for chunk in final_context:
-                text = chunk.get('text', '')
-                text = re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', text)
-                context_texts.append(text.strip())
-            context_text = "\n\n---\n\n".join(context_texts)
+            context_text = _build_prompt_context(final_context)
             prompt = build_strict_grounding_prompt(search_query, context_text, broad_query, query_type=query_type.value)
             
             db.commit()
             
-            payload = {
-                "model": OLLAMA_MODEL,
-                "system": "",
-                "prompt": prompt,
-                "stream": True,
-                "options": {
-                    "num_predict": OLLAMA_NUM_PREDICT,
-                    "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
-                    "temperature": 0.0,
-                    "num_gpu": 99,
-                }
-            }
             answer_acc = ""
             flare_retrieved_chunks = []
             
             try:
-                response = requests.post(OLLAMA_URL, json=payload, stream=True, timeout=OLLAMA_TIMEOUT_SECONDS)
+                response = post_llm_generate(
+                    prompt,
+                    stream=True,
+                    timeout=OLLAMA_TIMEOUT_SECONDS,
+                    num_predict=OLLAMA_NUM_PREDICT,
+                    temperature=0.0,
+                    num_ctx=int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
+                    extra_options={"num_gpu": 99},
+                )
                 if response.status_code == 200:
                     token_buffer = ""
-                    for line in response.iter_lines():
-                        if line:
-                            try:
-                                data = json.loads(line.decode("utf-8"))
-                            except json.JSONDecodeError:
-                                continue
-                            
-                            if "error" in data:
-                                err_msg = f"\n\n**Ollama Error:** {data['error']}"
-                                yield "data: " + json.dumps({'token': err_msg}) + "\n\n"
-                                break
-                                
-                            token = data.get("response", "")
-                            answer_acc += token
-                            yield "data: " + json.dumps({'token': token}) + "\n\n"
-                            
-                            token_buffer += token
-                            if len(token_buffer) >= 40 and (token.endswith('.') or token.endswith('!') or token.endswith('?')):
-                                flare_query = flare_mid_generation_retrieval(
-                                    partial_answer=answer_acc,
-                                    original_query=search_query,
-                                    existing_context=final_context + flare_retrieved_chunks,
+                    for token in iter_llm_tokens(response):
+                        answer_acc += token
+                        yield "data: " + json.dumps({'token': token}) + "\n\n"
+
+                        token_buffer += token
+                        if len(token_buffer) >= 40 and (token.endswith('.') or token.endswith('!') or token.endswith('?')):
+                            flare_query = flare_mid_generation_retrieval(
+                                partial_answer=answer_acc,
+                                original_query=search_query,
+                                existing_context=final_context + flare_retrieved_chunks,
+                            )
+                            if flare_query and flare_query.strip():
+                                new_chunks = perform_multi_query_search(
+                                    db, [flare_query], tenant_id,
+                                    top_k=effective_top_k,
+                                    metadata_filters=auto_filters or None,
                                 )
-                                if flare_query and flare_query.strip():
-                                    new_chunks = perform_multi_query_search(
-                                        db, [flare_query], tenant_id,
-                                        top_k=effective_top_k,
-                                        metadata_filters=auto_filters or None,
-                                    )
-                                    if new_chunks:
-                                        new_reranked = rerank_results(flare_query, new_chunks, top_n=3)
-                                        for nc in new_reranked:
-                                            if nc not in flare_retrieved_chunks:
-                                                flare_retrieved_chunks.append(nc)
-                                token_buffer = ""
+                                if new_chunks:
+                                    new_reranked = rerank_results(flare_query, new_chunks, top_n=3)
+                                    for nc in new_reranked:
+                                        if nc not in flare_retrieved_chunks:
+                                            flare_retrieved_chunks.append(nc)
+                            token_buffer = ""
                 else:
-                    err = f"Ollama Error: {response.text}"
+                    err = f"LLM Error: {response.text}"
                     yield "data: " + json.dumps({'token': err}) + "\n\n"
             except requests.exceptions.Timeout:
-                err = "Ollama Timeout. The model took too long to respond."
+                err = "LLM Timeout. The model took too long to respond."
                 yield "data: " + json.dumps({'token': err}) + "\n\n"
             except requests.exceptions.RequestException:
-                err = "Ollama Connection Error. The model service is unavailable."
+                err = "LLM Connection Error. The model service is unavailable."
                 yield "data: " + json.dumps({'token': err}) + "\n\n"
                 
             answer_acc = answer_acc.strip()
             
             if flare_retrieved_chunks:
                 enriched_context = final_context + flare_retrieved_chunks
-                enriched_texts = [re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', c.get('text', '')).strip() for c in enriched_context]
-                enriched_text = "\n\n---\n\n".join(enriched_texts)
+                enriched_text = _build_prompt_context(enriched_context)
                 flare_prompt = build_strict_grounding_prompt(search_query, enriched_text, broad_query)
                 try:
-                    final_payload = {
-                        "model": OLLAMA_MODEL,
-                        "system": "",
-                        "prompt": flare_prompt,
-                        "stream": False,
-                        "options": {"num_predict": OLLAMA_NUM_PREDICT, "temperature": 0.0, "num_gpu": 99}
-                    }
-                    final_resp = requests.post(OLLAMA_URL, json=final_payload, timeout=OLLAMA_TIMEOUT_SECONDS)
+                    final_resp = post_llm_generate(
+                        flare_prompt,
+                        timeout=OLLAMA_TIMEOUT_SECONDS,
+                        num_predict=OLLAMA_NUM_PREDICT,
+                        temperature=0.0,
+                        extra_options={"num_gpu": 99},
+                    )
                     if final_resp.status_code == 200:
-                        corrected_answer = final_resp.json().get("response", "").strip()
+                        corrected_answer = extract_llm_text(final_resp)
                         if corrected_answer:
                             answer_acc = corrected_answer
                 except Exception as flare_err:
@@ -1243,8 +1371,26 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
     else:
         # NON-STREAMING FALLBACK (Agentic RAG / Fast Path)
         if request.fast_path:
-            retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
-            final_context = retrieved_chunks[:effective_top_k]
+            if strategy.section_search or strategy.chapter_retrieval:
+                from app.rag.section_retriever import retrieve_by_topic
+                retrieved_chunks = retrieve_by_topic(
+                    search_query,
+                    tenant_id,
+                    db,
+                    top_sections=3,
+                    max_chunks_per_section=strategy.max_section_chunks,
+                )
+            else:
+                retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
+
+            if any(_is_table_chunk(chunk) for chunk in retrieved_chunks):
+                final_context = retrieved_chunks
+            else:
+                from app.rag.context_optimizer import ContextOptimizer
+                optimizer = ContextOptimizer()
+                final_context, _ = optimizer.optimize(retrieved_chunks, search_query, ordering=strategy.context_ordering)
+                if not (strategy.section_search or strategy.chapter_retrieval):
+                    final_context = _preserve_table_expansion(final_context, effective_top_k)
             for c in final_context:
                 c["rerank_score"] = c.get("dense_score", 0.0)
             sources = _context_sources(final_context)
@@ -1346,21 +1492,8 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             }
 
         if request.extractive:
-            answer = ""
-            if final_context:
-                best = final_context[0]
-                text = best.get("text", "")
-                source_name = "unknown"
-                if best.get("metadata"):
-                    src = best["metadata"].get("source", "")
-                    if src:
-                        source_name = os.path.basename(str(src))
-                page = best.get("metadata", {}).get("page_num")
-                page_str = f", Page {page}" if page else ""
-                if len(text) > 4000:
-                    text = text[:4000] + "..."
-                answer = f"[{source_name}{page_str}]\n{text}"
-            verification = verify_answer_grounding(answer, final_context) if answer else {"confidence": "low", "confidence_score": 0.0, "reasoning": "No answer provided"}
+            answer = _build_extractive_answer(final_context)
+            verification = _extractive_verification(answer)
             latency = int((time.time() - start_time) * 1000)
             
             evaluation_data = None
@@ -1388,32 +1521,22 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 )
             return response_data
 
-        context_texts = []
-        for chunk in final_context:
-            text = chunk.get('text', '')
-            text = re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', text)
-            context_texts.append(text.strip())
-        context_text = "\n\n---\n\n".join(context_texts)
-        prompt = build_strict_grounding_prompt(search_query, context_text, broad_query)
+        context_text = _build_prompt_context(final_context)
+        prompt = build_strict_grounding_prompt(search_query, context_text, broad_query, query_type=query_type.value)
         
         flare_retrieved_chunks = []
         answer = ""
         try:
-            payload = {
-                "model": OLLAMA_MODEL,
-                "system": "",
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "num_predict": OLLAMA_NUM_PREDICT,
-                    "temperature": 0.0,
-                    "num_gpu": 99,
-                    "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
-                }
-            }
-            response = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT_SECONDS)
+            response = post_llm_generate(
+                prompt,
+                timeout=OLLAMA_TIMEOUT_SECONDS,
+                num_predict=OLLAMA_NUM_PREDICT,
+                temperature=0.0,
+                num_ctx=int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
+                extra_options={"num_gpu": 99},
+            )
             if response.status_code == 200:
-                answer = response.json().get("response", "").strip()
+                answer = extract_llm_text(response)
                 
                 flare_query = flare_mid_generation_retrieval(
                     partial_answer=answer,
@@ -1435,25 +1558,23 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
                 
                 if flare_retrieved_chunks:
                     enriched_context = final_context + flare_retrieved_chunks
-                    enriched_texts = [re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', c.get('text', '')).strip() for c in enriched_context]
-                    enriched_text = "\n\n---\n\n".join(enriched_texts)
+                    enriched_text = _build_prompt_context(enriched_context)
                     flare_prompt = build_strict_grounding_prompt(search_query, enriched_text, broad_query)
-                    final_payload = {
-                        "model": OLLAMA_MODEL,
-                        "system": "",
-                        "prompt": flare_prompt,
-                        "stream": False,
-                        "options": {"num_predict": OLLAMA_NUM_PREDICT, "temperature": 0.0, "num_gpu": 99}
-                    }
-                    final_resp = requests.post(OLLAMA_URL, json=final_payload, timeout=OLLAMA_TIMEOUT_SECONDS)
+                    final_resp = post_llm_generate(
+                        flare_prompt,
+                        timeout=OLLAMA_TIMEOUT_SECONDS,
+                        num_predict=OLLAMA_NUM_PREDICT,
+                        temperature=0.0,
+                        extra_options={"num_gpu": 99},
+                    )
                     if final_resp.status_code == 200:
-                        answer = final_resp.json().get("response", "").strip()
+                        answer = extract_llm_text(final_resp)
                     final_context = enriched_context
                     sources = _context_sources(enriched_context)
             else:
-                answer = "Ollama Error: The model service returned an error."
+                answer = "LLM Error: The model service returned an error."
         except Exception:
-            answer = "Ollama Error: An unexpected error occurred."
+            answer = "LLM Error: An unexpected error occurred."
             
         verification = verify_answer_grounding(answer, final_context)
 
@@ -1463,7 +1584,7 @@ def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
             and grounding_result
             and grounding_result.get("is_grounded")
             and final_context
-            and not answer.startswith("Ollama Error")
+            and not answer.startswith("LLM Error")
         ):
             print(f"[Guardrail/10b] Low confidence ({verification['confidence_score']:.2f}) "
                   "— triggering extractive remediation (non-streaming).")

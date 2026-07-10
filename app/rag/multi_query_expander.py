@@ -24,10 +24,9 @@
 import os
 import re
 import json
-import requests
 from typing import Any, Dict, List, Optional
 
-from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
+from app.rag.model_loader import generate_llm_text
 
 
 # ---------------------------------------------------------------------------
@@ -146,36 +145,28 @@ def expand_with_llm(
         f"Topic: {query}"
     )
 
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "keep_alive": "30m",
-        "options": {
-            "num_predict": 120,
-            "temperature": 0.3,
-            "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
-        },
-    }
-
     try:
-        resp = requests.post(get_ollama_generate_url(), json=payload, timeout=10.0)
-        if resp.status_code == 200:
-            raw = resp.json().get("response", "").strip()
-            # Extract JSON array
-            if "```" in raw:
-                match = re.search(r'\[.*?\]', raw, re.DOTALL)
-                raw = match.group(0) if match else "[]"
-            else:
-                match = re.search(r'\[.*?\]', raw, re.DOTALL)
-                if match:
-                    raw = match.group(0)
+        raw = generate_llm_text(
+            prompt,
+            timeout=10.0,
+            num_predict=120,
+            temperature=0.3,
+            num_ctx=int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
+        )
+        # Extract JSON array
+        if "```" in raw:
+            match = re.search(r'\[.*?\]', raw, re.DOTALL)
+            raw = match.group(0) if match else "[]"
+        else:
+            match = re.search(r'\[.*?\]', raw, re.DOTALL)
+            if match:
+                raw = match.group(0)
 
-            sub_queries = json.loads(raw)
-            if isinstance(sub_queries, list) and all(isinstance(q, str) for q in sub_queries):
-                result = [query] + [sq.strip() for sq in sub_queries if sq.strip()]
-                print(f"[MultiQuery/LLM] '{query}' → {len(result)} sub-queries")
-                return result[:max_queries + 1]
+        sub_queries = json.loads(raw)
+        if isinstance(sub_queries, list) and all(isinstance(q, str) for q in sub_queries):
+            result = [query] + [sq.strip() for sq in sub_queries if sq.strip()]
+            print(f"[MultiQuery/LLM] '{query}' → {len(result)} sub-queries")
+            return result[:max_queries + 1]
 
     except Exception as e:
         print(f"[MultiQuery/LLM] LLM expansion failed: {e}")

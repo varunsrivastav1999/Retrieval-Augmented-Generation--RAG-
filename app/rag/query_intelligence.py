@@ -15,10 +15,9 @@
 import re
 import json
 import os
-import requests
 from typing import Dict, List, Optional
 
-from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
+from app.rag.model_loader import generate_llm_text
 
 # ---------------------------------------------------------------------------
 # FLARE: Mid-Generation Retrieval Monitor
@@ -163,30 +162,23 @@ def _llm_decompose(query: str) -> List[str]:
         f"Output a JSON array of strings ONLY, no explanation.\n\n"
         f"Question: {query}"
     )
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "keep_alive": "30m",
-        "options": {
-            "num_predict": 80,
-            "temperature": 0.0,
-            "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
-        },
-    }
     try:
-        resp = requests.post(get_ollama_generate_url(), json=payload, timeout=8.0)
-        if resp.status_code == 200:
-            raw = resp.json().get("response", "").strip()
-            # Extract JSON array (may be wrapped in ```json ... ```)
-            if "```" in raw:
-                raw = re.search(r'\[.*?\]', raw, re.DOTALL)
-                raw = raw.group(0) if raw else "[]"
-            sub_qs = json.loads(raw)
-            if isinstance(sub_qs, list) and all(isinstance(q, str) for q in sub_qs):
-                result = [query] + [sq.strip() for sq in sub_qs if sq.strip()]
-                print(f"[QueryDecomp/LLM] '{query}' → {len(result)} sub-questions")
-                return result
+        raw = generate_llm_text(
+            prompt,
+            timeout=8.0,
+            num_predict=80,
+            temperature=0.0,
+            num_ctx=int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
+        )
+        # Extract JSON array (may be wrapped in ```json ... ```)
+        if "```" in raw:
+            raw = re.search(r'\[.*?\]', raw, re.DOTALL)
+            raw = raw.group(0) if raw else "[]"
+        sub_qs = json.loads(raw)
+        if isinstance(sub_qs, list) and all(isinstance(q, str) for q in sub_qs):
+            result = [query] + [sq.strip() for sq in sub_qs if sq.strip()]
+            print(f"[QueryDecomp/LLM] '{query}' → {len(result)} sub-questions")
+            return result
     except Exception as e:
         print(f"[QueryDecomp/LLM] Failed, using original query: {e}")
     return [query]
@@ -340,37 +332,30 @@ def _llm_extract_filters(query: str) -> Dict:
         f"If nothing to extract, output {{}}.\n\n"
         f"Question: {query}"
     )
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "keep_alive": "30m",
-        "options": {
-            "num_predict": 40,
-            "temperature": 0.0,
-            "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
-        },
-    }
     try:
-        resp = requests.post(get_ollama_generate_url(), json=payload, timeout=6.0)
-        if resp.status_code == 200:
-            raw = resp.json().get("response", "").strip()
-            # Extract JSON object from response
-            m = re.search(r'\{[^}]*\}', raw, re.DOTALL)
-            if m:
-                result = json.loads(m.group(0))
-                if isinstance(result, dict):
-                    # Sanitize — keep only expected keys with valid types
-                    clean: Dict = {}
-                    if isinstance(result.get("target_file"), str) and result["target_file"]:
-                        clean["target_file"] = result["target_file"].lower().strip()
-                    if isinstance(result.get("page"), int):
-                        clean["page"] = result["page"]
-                    if isinstance(result.get("section"), (str, int)) and result["section"]:
-                        clean["section"] = str(result["section"])
-                    if clean:
-                        print(f"[MetaFilter/LLM] Extracted: {clean}")
-                    return clean
+        raw = generate_llm_text(
+            prompt,
+            timeout=6.0,
+            num_predict=40,
+            temperature=0.0,
+            num_ctx=int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
+        )
+        # Extract JSON object from response
+        m = re.search(r'\{[^}]*\}', raw, re.DOTALL)
+        if m:
+            result = json.loads(m.group(0))
+            if isinstance(result, dict):
+                # Sanitize — keep only expected keys with valid types
+                clean: Dict = {}
+                if isinstance(result.get("target_file"), str) and result["target_file"]:
+                    clean["target_file"] = result["target_file"].lower().strip()
+                if isinstance(result.get("page"), int):
+                    clean["page"] = result["page"]
+                if isinstance(result.get("section"), (str, int)) and result["section"]:
+                    clean["section"] = str(result["section"])
+                if clean:
+                    print(f"[MetaFilter/LLM] Extracted: {clean}")
+                return clean
     except Exception as e:
         print(f"[MetaFilter/LLM] Failed: {e}")
     return {}

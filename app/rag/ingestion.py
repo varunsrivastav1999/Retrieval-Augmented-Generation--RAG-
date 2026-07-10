@@ -26,7 +26,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.database import DocumentChunk, SessionLocal
 from app.rag.jobs import complete_ingestion_job, fail_ingestion_job, update_ingestion_job
-from app.rag.model_loader import encode_texts, get_embedding_model_id, get_ollama_generate_url, OLLAMA_MODEL
+from app.rag.model_loader import encode_texts, generate_llm_text, get_embedding_model_id
 from app.rag.parsers import get_file_type, parse_file
 from app.rag.vision_extractor import looks_like_extractable_page, format_structured_data_for_embedding
 try:
@@ -437,18 +437,13 @@ def ingest_file(
         if intro_text:
             prompt = f"Write a 1-sentence summary of what this document is about, focusing on main entities and topics. Document start:\n{intro_text}"
             try:
-                import requests
-                res = requests.post(get_ollama_generate_url(), json={
-                    "model": OLLAMA_MODEL,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.0,
-                        "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
-                    }
-                }, timeout=30)
-                if res.status_code == 200:
-                    doc_context_summary = res.json().get("response", "").strip()
+                doc_context_summary = generate_llm_text(
+                    prompt,
+                    timeout=30,
+                    temperature=0.0,
+                    num_ctx=int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
+                )
+                if doc_context_summary:
                     print(f"[Contextual Retrieval] Generated Context: {doc_context_summary}")
             except Exception as e:
                 print(f"[Contextual Retrieval] Failed to generate context: {e}")
@@ -715,12 +710,36 @@ def _process_chunk_batch(
     """Encode and save a batch of chunks. Returns count of inserted chunks."""
     texts = [c["text"] for c in pending_chunks]
     vectors = encode_texts(texts)
-    inserted = 0
 
     from app.rag.qdrant_client import insert_qdrant_points
     from qdrant_client.http import models
 
+    hashes = [c["hash"] for c in pending_chunks]
+    existing_hashes = set()
+    if hashes:
+        existing_hashes = {
+            row[0]
+            for row in db.query(DocumentChunk.chunk_hash)
+            .filter(
+                DocumentChunk.tenant_id == tenant_id,
+                DocumentChunk.doc_id == doc_id,
+                DocumentChunk.embedding_model == embedding_model,
+                DocumentChunk.chunk_hash.in_(hashes),
+            )
+            .all()
+        }
+
+    seen_hashes = set(existing_hashes)
+    chunk_objs = []
+    chunk_vectors = []
+    source_chunks = []
+
     for i, c in enumerate(pending_chunks):
+        if c["hash"] in seen_hashes:
+            print("[Ingest] Duplicate chunk skipped (hash exists)")
+            continue
+        seen_hashes.add(c["hash"])
+
         doc_metadata = {
             "type": c["type"],
             "page_count": page_count,
@@ -766,54 +785,72 @@ def _process_chunk_batch(
             chunk_index_in_section=c.get("chunk_index_in_section"),
             total_chunks_in_section=c.get("total_chunks_in_section"),
         )
-        
-        try:
-            db.add(chunk_obj)
-            db.flush()
 
-            insert_qdrant_points(
-                "document_chunks",
-                [
-                    models.PointStruct(
-                        id=chunk_obj.id,
-                        vector=vectors[i],
-                        payload={
-                            "tenant_id": tenant_id,
-                            "doc_id": doc_id,
-                            "file_type": file_type,
-                            "text_content": c["text"],
-                            "section": c["section"],
-                            "table_group": c.get("table_group"),
-                            # NEW table-aware payload fields (enables Qdrant metadata filters)
-                            "table_id": c.get("table_id") or c.get("table_group"),
-                            "section_title": c.get("section_title", ""),
-                            "cell_values": c.get("cell_values"),
-                            "header_path": c.get("header_path", []),
-                            "row_index": c.get("row_index"),
-                            "metadata": doc_metadata
-                        }
-                    )
-                ]
+        db.add(chunk_obj)
+        chunk_objs.append(chunk_obj)
+        chunk_vectors.append(vectors[i])
+        source_chunks.append(c)
+
+    if not chunk_objs:
+        return 0
+
+    qdrant_point_ids = []
+    try:
+        db.flush()
+        points = []
+        for chunk_obj, vector, c in zip(chunk_objs, chunk_vectors, source_chunks):
+            qdrant_point_ids.append(chunk_obj.id)
+            points.append(
+                models.PointStruct(
+                    id=chunk_obj.id,
+                    vector=vector,
+                    payload={
+                        "tenant_id": tenant_id,
+                        "doc_id": doc_id,
+                        "file_type": file_type,
+                        "text_content": c["text"],
+                        "section": c["section"],
+                        "table_group": c.get("table_group"),
+                        # NEW table-aware payload fields (enables Qdrant metadata filters)
+                        "table_id": c.get("table_id") or c.get("table_group"),
+                        "section_title": c.get("section_title", ""),
+                        "cell_values": c.get("cell_values"),
+                        "header_path": c.get("header_path", []),
+                        "row_index": c.get("row_index"),
+                        "metadata": chunk_obj.doc_metadata,
+                    },
+                )
             )
-            db.commit()
-            inserted += 1
-        except IntegrityError:
-            qdrant_point_id = str(chunk_obj.id)
+
+        insert_qdrant_points("document_chunks", points)
+        db.commit()
+        return len(chunk_objs)
+    except IntegrityError:
+        db.rollback()
+        if qdrant_point_ids:
             try:
                 from app.rag.qdrant_client import get_qdrant_client
                 get_qdrant_client().delete(
                     collection_name="document_chunks",
-                    points_selector=models.PointIdsList(points=[qdrant_point_id]),
+                    points_selector=models.PointIdsList(points=qdrant_point_ids),
                 )
             except Exception:
                 pass
-            db.rollback()
-            print(f"[Ingest] Duplicate chunk skipped (hash exists)")
-        except Exception as e:
-            db.rollback()
-            print(f"[Ingest] Single chunk error: {e}")
+        print("[Ingest] Batch insert hit duplicate chunk; skipped batch to preserve consistency.")
+    except Exception as e:
+        db.rollback()
+        if qdrant_point_ids:
+            try:
+                from app.rag.qdrant_client import get_qdrant_client
+                get_qdrant_client().delete(
+                    collection_name="document_chunks",
+                    points_selector=models.PointIdsList(points=qdrant_point_ids),
+                )
+            except Exception:
+                pass
+        print(f"[Ingest] Chunk batch error: {e}")
 
-    return inserted
+    return 0
 
 # ---------------------------------------------------------------------------
 # Legacy compatibility — redirect PDF ingestion to universal pipeline
@@ -909,4 +946,3 @@ def _update_section_chunk_counts(
 
     except Exception as e:
         print(f"[Ingest/v6.0] Section chunk count update failed (non-fatal): {e}")
-

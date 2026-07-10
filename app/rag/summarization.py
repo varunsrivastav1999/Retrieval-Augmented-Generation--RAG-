@@ -8,34 +8,27 @@
 """
 
 import os
-import requests
 import asyncio
 from typing import List, Dict, Any
 
-from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
+from app.rag.model_loader import generate_llm_text
 
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
 
 async def _async_ollama_generate(prompt: str, system: str = "") -> str:
     loop = asyncio.get_running_loop()
     def _call():
-        payload = {
-            "model": OLLAMA_MODEL,
-            "system": system,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "num_predict": 2048,
-                "temperature": 0.2,
-                "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "8192")),
-            }
-        }
         try:
-            resp = requests.post(get_ollama_generate_url(), json=payload, timeout=OLLAMA_TIMEOUT_SECONDS)
-            if resp.status_code == 200:
-                return resp.json().get("response", "").strip()
+            return generate_llm_text(
+                prompt,
+                system=system,
+                timeout=OLLAMA_TIMEOUT_SECONDS,
+                num_predict=2048,
+                temperature=0.2,
+                num_ctx=int(os.getenv("OLLAMA_CONTEXT_LENGTH", "8192")),
+            )
         except Exception as e:
-            print(f"[Summarization] Ollama generation failed: {e}")
+            print(f"[Summarization] LLM generation failed: {e}")
         return ""
     return await loop.run_in_executor(None, _call)
 

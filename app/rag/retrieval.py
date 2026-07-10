@@ -1,4 +1,3 @@
-import requests
 import os
 import re
 from sqlalchemy.orm import Session
@@ -8,9 +7,8 @@ from qdrant_client.http import models
 from app.rag.qdrant_client import get_qdrant_client
 from app.rag.model_loader import (
     encode_text,
+    generate_llm_text,
     get_embedding_model_id,
-    get_ollama_generate_url,
-    OLLAMA_MODEL,
 )
 try:
     from app.rag.table_engine import extract_catalogue_patterns
@@ -23,6 +21,7 @@ RRF_K = 60
 DENSE_WEIGHT = 0.5
 HYDE_WEIGHT = 0.3
 BM25_WEIGHT = 0.4
+TABLE_SIBLING_LIMIT = int(os.getenv("RAG_TABLE_SIBLING_LIMIT", "500"))
 
 def _candidate_from_payload(point_id: str, payload: dict, distance: float) -> dict:
     metadata = payload.get("metadata", {})
@@ -77,21 +76,14 @@ def _generate_hyde(query: str) -> str:
         "section references, or safety warnings that would typically appear in such a manual. "
         f"Answer the following question in 1-3 sentences: {query}"
     )
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "keep_alive": "30m",
-        "options": {
-            "num_predict": 60,
-            "temperature": 0.2,
-            "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
-        }
-    }
     try:
-        response = requests.post(get_ollama_generate_url(), json=payload, timeout=45.0)
-        if response.status_code == 200:
-            return response.json().get("response", "").strip()
+        return generate_llm_text(
+            prompt,
+            timeout=45.0,
+            num_predict=60,
+            temperature=0.2,
+            num_ctx=int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
+        )
     except Exception as e:
         print(f"[HyDE] Failed to generate: {e}")
     return ""
@@ -238,7 +230,7 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
     exact_results = []  # Catalogue number exact matches
 
     # --- Exact catalogue lookup (fast, zero-latency SQL path) ---
-    if TABLE_ENGINE_AVAILABLE and not fast_path:
+    if TABLE_ENGINE_AVAILABLE:
         exact_results = exact_catalogue_lookup(db, query, tenant_id)
 
     if fast_path:
@@ -379,7 +371,9 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
             table_groups.add(tg)
 
     if table_groups:
-        seen_ids = {item["id"] for item in top_results}
+        expanded_results = list(top_results)
+        table_siblings = []
+        seen_ids = {item["id"] for item in expanded_results}
         # Table sibling expansion uses only tenant+model filters (not user's page/file_type filter)
         base_conditions = [
             models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id)),
@@ -397,18 +391,30 @@ def perform_hybrid_search(db: Session, query: str, tenant_id: str, top_k: int = 
                             )
                         ]
                     ),
-                    limit=200,
+                    limit=TABLE_SIBLING_LIMIT,
                 )[0]
                 for point in sibling_results:
                     if point.id not in seen_ids:
                         seen_ids.add(point.id)
                         candidate = _candidate_from_payload(point.id, point.payload, 0.0)
                         candidate["hybrid_score"] = 0.01  # low but non-zero to include
-                        ranked.append(candidate)
+                        candidate["score"] = candidate["hybrid_score"]
+                        table_siblings.append(candidate)
             except Exception as e:
                 print(f"[Retrieval] Table sibling expansion failed for group {tg}: {e}")
 
-    return ranked[:top_k]
+        table_siblings.sort(
+            key=lambda item: (
+                str(item.get("metadata", {}).get("table_id") or item.get("metadata", {}).get("table_group") or ""),
+                item.get("metadata", {}).get("row_index")
+                if item.get("metadata", {}).get("row_index") is not None
+                else 10**9,
+            )
+        )
+        expanded_results.extend(table_siblings)
+        return expanded_results
+
+    return dedup_ranked[:top_k]
 
 def perform_multi_query_search(db: Session, queries: list, tenant_id: str, top_k: int = 20, metadata_filters: dict = None, fast_path: bool = False) -> list:
     if not queries:
@@ -440,6 +446,21 @@ def perform_multi_query_search(db: Session, queries: list, tenant_id: str, top_k
     )
     for item in ranked:
         item["score"] = item["fused_score"]
-        
-    return ranked[:top_k]
 
+    top_results = ranked[:top_k]
+    table_groups = {
+        item.get("table_group") or item.get("metadata", {}).get("table_group")
+        for item in top_results
+        if item.get("table_group") or item.get("metadata", {}).get("table_group")
+    }
+    if table_groups:
+        seen_ids = {item["id"] for item in top_results}
+        expanded = list(top_results)
+        for item in ranked[top_k:]:
+            tg = item.get("table_group") or item.get("metadata", {}).get("table_group")
+            if tg in table_groups and item["id"] not in seen_ids:
+                seen_ids.add(item["id"])
+                expanded.append(item)
+        return expanded
+
+    return ranked[:top_k]

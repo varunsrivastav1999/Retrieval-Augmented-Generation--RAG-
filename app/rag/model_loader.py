@@ -1,11 +1,14 @@
 import hashlib
+import json
 import math
 import os
 import re
 import threading
 from glob import glob
 from functools import lru_cache
-from typing import Any, Iterable, List, Sequence, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Sequence, Optional
+
+import requests
 
 
 EMBEDDING_DIM = int(os.getenv("RAG_EMBEDDING_DIM", "1024"))
@@ -19,6 +22,9 @@ RERANKER_MODEL = os.getenv(
     "BAAI/bge-reranker-base",
 )
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+LLM_BACKEND = os.getenv("RAG_LLM_BACKEND", os.getenv("LLM_BACKEND", "ollama")).lower()
+VLLM_BASE_URL = os.getenv("VLLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or os.getenv("LLM_BASE_URL")
+VLLM_API_KEY = os.getenv("VLLM_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY"))
 MODEL_CACHE_DIR = os.getenv("HF_HOME")
 ST_CACHE_DIR = os.getenv("SENTENCE_TRANSFORMERS_HOME")
 HF_OFFLINE = os.getenv("RAG_HF_OFFLINE", "false").lower() in {"1", "true", "yes", "on"}
@@ -200,6 +206,206 @@ def _model_appears_cached(model_name: str) -> bool:
 def get_ollama_generate_url() -> str:
     base_url = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
     return base_url
+
+
+def use_openai_compatible_llm() -> bool:
+    configured_url = VLLM_BASE_URL or os.getenv("OLLAMA_URL", "")
+    return (
+        LLM_BACKEND in {"vllm", "openai", "openai-compatible", "openai_compatible"}
+        or bool(VLLM_BASE_URL)
+        or "/v1/" in configured_url
+        or configured_url.rstrip("/").endswith("/v1")
+    )
+
+
+def get_openai_completion_url() -> str:
+    base_url = VLLM_BASE_URL or os.getenv("OLLAMA_URL", "http://vllm:8000/v1")
+    base_url = base_url.rstrip("/")
+    if base_url.endswith("/completions") or base_url.endswith("/chat/completions"):
+        return base_url
+    if base_url.endswith("/v1"):
+        return f"{base_url}/completions"
+    return f"{base_url}/v1/completions"
+
+
+def get_openai_models_url() -> str:
+    completion_url = get_openai_completion_url()
+    if completion_url.endswith("/chat/completions"):
+        return completion_url[: -len("/chat/completions")] + "/models"
+    if completion_url.endswith("/completions"):
+        return completion_url[: -len("/completions")] + "/models"
+    return completion_url.rstrip("/") + "/models"
+
+
+def use_chat_completions() -> bool:
+    return get_openai_completion_url().endswith("/chat/completions")
+
+
+def build_llm_payload(
+    prompt: str,
+    *,
+    system: str = "",
+    stream: bool = False,
+    num_predict: Optional[int] = None,
+    temperature: float = 0.0,
+    num_ctx: Optional[int] = None,
+    extra_options: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    max_tokens = num_predict or int(os.getenv("OLLAMA_NUM_PREDICT", "1024"))
+    if use_openai_compatible_llm():
+        if use_chat_completions():
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
+            payload = {
+                "model": OLLAMA_MODEL,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stream": stream,
+            }
+        else:
+            full_prompt = f"{system}\n\n{prompt}" if system else prompt
+            payload = {
+                "model": OLLAMA_MODEL,
+                "prompt": full_prompt,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stream": stream,
+            }
+        if extra_options:
+            payload.update({k: v for k, v in extra_options.items() if k not in {"num_ctx", "num_gpu"}})
+        return payload
+
+    options = {
+        "num_predict": max_tokens,
+        "temperature": temperature,
+    }
+    if num_ctx is not None:
+        options["num_ctx"] = num_ctx
+    if extra_options:
+        options.update(extra_options)
+    return {
+        "model": OLLAMA_MODEL,
+        "system": system,
+        "prompt": prompt,
+        "stream": stream,
+        "options": options,
+    }
+
+
+def post_llm_generate(
+    prompt: str,
+    *,
+    system: str = "",
+    stream: bool = False,
+    timeout: Optional[float] = None,
+    num_predict: Optional[int] = None,
+    temperature: float = 0.0,
+    num_ctx: Optional[int] = None,
+    extra_options: Optional[Dict[str, Any]] = None,
+):
+    payload = build_llm_payload(
+        prompt,
+        system=system,
+        stream=stream,
+        num_predict=num_predict,
+        temperature=temperature,
+        num_ctx=num_ctx,
+        extra_options=extra_options,
+    )
+    if use_openai_compatible_llm():
+        headers = {"Content-Type": "application/json"}
+        if VLLM_API_KEY:
+            headers["Authorization"] = f"Bearer {VLLM_API_KEY}"
+        return requests.post(
+            get_openai_completion_url(),
+            json=payload,
+            headers=headers,
+            stream=stream,
+            timeout=timeout,
+        )
+    return requests.post(
+        get_ollama_generate_url(),
+        json=payload,
+        stream=stream,
+        timeout=timeout,
+    )
+
+
+def extract_llm_text(response) -> str:
+    data = response.json()
+    if "response" in data:
+        return str(data.get("response") or "").strip()
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    choice = choices[0]
+    if "text" in choice:
+        return str(choice.get("text") or "").strip()
+    message = choice.get("message") or {}
+    return str(message.get("content") or "").strip()
+
+
+def iter_llm_tokens(response) -> Iterator[str]:
+    for line in response.iter_lines():
+        if not line:
+            continue
+        decoded = line.decode("utf-8").strip()
+        if not decoded:
+            continue
+        if decoded.startswith("data:"):
+            decoded = decoded[len("data:"):].strip()
+        if decoded == "[DONE]":
+            break
+        try:
+            data = json.loads(decoded)
+        except json.JSONDecodeError:
+            continue
+
+        if "response" in data:
+            token = data.get("response", "")
+            if token:
+                yield token
+            continue
+
+        choices = data.get("choices") or []
+        if not choices:
+            continue
+        choice = choices[0]
+        token = choice.get("text")
+        if token is None:
+            delta = choice.get("delta") or choice.get("message") or {}
+            token = delta.get("content")
+        if token:
+            yield token
+
+
+def generate_llm_text(
+    prompt: str,
+    *,
+    system: str = "",
+    timeout: Optional[float] = None,
+    num_predict: Optional[int] = None,
+    temperature: float = 0.0,
+    num_ctx: Optional[int] = None,
+    extra_options: Optional[Dict[str, Any]] = None,
+) -> str:
+    response = post_llm_generate(
+        prompt,
+        system=system,
+        stream=False,
+        timeout=timeout,
+        num_predict=num_predict,
+        temperature=temperature,
+        num_ctx=num_ctx,
+        extra_options=extra_options,
+    )
+    if response.status_code == 200:
+        return extract_llm_text(response)
+    print(f"[LLM] Generation failed status={response.status_code}: {response.text[:500]}")
+    return ""
 
 _embedding_model = None
 _embedding_model_lock = threading.Lock()
@@ -459,5 +665,3 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("  PRE-LOADING COMPLETE. YOU CAN NOW START IN OFFLINE MODE.")
     print("="*60 + "\n")
-
-

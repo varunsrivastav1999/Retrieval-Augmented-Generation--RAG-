@@ -170,6 +170,38 @@ def get_file_type(file_path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Table helpers
+# ---------------------------------------------------------------------------
+def _pdfplumber_table_to_markdown(table: List[List[object]]) -> str:
+    if not table:
+        return ""
+
+    rows = []
+    for row in table:
+        if not row:
+            continue
+        rows.append([
+            str(cell).replace("\n", " ").strip() if cell is not None else ""
+            for cell in row
+        ])
+
+    if not rows:
+        return ""
+
+    width = max(len(row) for row in rows)
+    rows = [row + [""] * (width - len(row)) for row in rows]
+    header = rows[0] if any(rows[0]) else [f"Column {idx + 1}" for idx in range(width)]
+
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join(["---"] * width) + " |",
+    ]
+    for row in rows[1:]:
+        lines.append("| " + " | ".join(row) + " |")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Utility Functions
 # ---------------------------------------------------------------------------
 def _auto_rotate_image(img):
@@ -1039,8 +1071,24 @@ def _fallback_parse_pdf(file_path: str) -> ParseResult:
         with pdfplumber.open(file_path) as pdf:
             for i, page in enumerate(pdf.pages):
                 text = page.extract_text() or ""
-                tables = [str(t) for t in page.extract_tables()] if page.extract_tables() else []
-                pages.append(PageContent(page_num=i + 1, text=text, tables=tables))
+                raw_tables = page.extract_tables() or []
+                tables = []
+                rich_tables = []
+                for table_idx, raw_table in enumerate(raw_tables):
+                    table_md = _pdfplumber_table_to_markdown(raw_table)
+                    if not table_md:
+                        continue
+                    tables.append(f"[TABLE - Page {i + 1}]\n{table_md}")
+                    if TABLE_ENGINE_AVAILABLE:
+                        rich = markdown_to_rich_table(
+                            table_md,
+                            table_id=f"p{i + 1}_fallback_t{table_idx}",
+                            section_title="",
+                            page_no=i + 1,
+                        )
+                        if rich:
+                            rich_tables.append(rich)
+                pages.append(PageContent(page_num=i + 1, text=text, tables=tables, rich_tables=rich_tables))
         return ParseResult(
             pages=pages,
             metadata={"format": "pdf", "page_count": len(pages), "source": file_path, "parser": "fallback_pdfplumber"},

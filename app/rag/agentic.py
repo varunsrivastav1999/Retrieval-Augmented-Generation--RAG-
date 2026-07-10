@@ -4,12 +4,11 @@ import time
 import asyncio
 from typing import List, Dict, Any
 
-import requests
 from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search
 from app.rag.context import assemble_context, _context_sources
 from app.rag.reranker import rerank_results
 from app.rag.grounding import compute_grounding_score, build_strict_grounding_prompt
-from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
+from app.rag.model_loader import generate_llm_text
 from app.rag.query_intelligence import decompose_query, extract_metadata_filters
 
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
@@ -21,32 +20,24 @@ class AgenticRAGPipeline:
         self.tenant_id = tenant_id
         self.original_top_k = original_top_k
         self.strategy = strategy
-        self.ollama_url = get_ollama_generate_url()
-        self.model = OLLAMA_MODEL
 
     async def _async_ollama_generate(self, prompt: str, system: str = "") -> str:
-        """Call Ollama locally but asynchronously so we don't block the event loop."""
+        """Call the configured local LLM asynchronously so we don't block the event loop."""
         # Using aiohttp or run_in_executor
         loop = asyncio.get_event_loop()
         
         def _call():
-            payload = {
-                "model": self.model,
-                "system": system,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "num_predict": OLLAMA_NUM_PREDICT,
-                    "temperature": 0.0,
-                    "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "8192")),
-                }
-            }
             try:
-                resp = requests.post(self.ollama_url, json=payload, timeout=OLLAMA_TIMEOUT_SECONDS)
-                if resp.status_code == 200:
-                    return resp.json().get("response", "").strip()
+                return generate_llm_text(
+                    prompt,
+                    system=system,
+                    timeout=OLLAMA_TIMEOUT_SECONDS,
+                    num_predict=OLLAMA_NUM_PREDICT,
+                    temperature=0.0,
+                    num_ctx=int(os.getenv("OLLAMA_CONTEXT_LENGTH", "8192")),
+                )
             except Exception as e:
-                print(f"[AgenticRAG] Ollama generation failed: {e}")
+                print(f"[AgenticRAG] LLM generation failed: {e}")
             return ""
             
         return await loop.run_in_executor(None, _call)

@@ -27,7 +27,6 @@
 import os
 import re
 import json
-import requests
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -294,10 +293,7 @@ def _llm_classify(query: str) -> QueryType:
     Uses ultra-fast settings: num_predict=20, temperature=0.0.
     Falls back to FACT on any failure.
     """
-    try:
-        from app.rag.model_loader import get_ollama_generate_url, OLLAMA_MODEL
-    except ImportError:
-        return QueryType.FACT
+    from app.rag.model_loader import generate_llm_text
 
     prompt = (
         "Classify this question into exactly ONE category. "
@@ -316,27 +312,18 @@ def _llm_classify(query: str) -> QueryType:
         "Category:"
     )
 
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "keep_alive": "30m",
-        "options": {
-            "num_predict": 20,
-            "temperature": 0.0,
-            "num_ctx": int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
-        },
-    }
-
     try:
-        resp = requests.post(get_ollama_generate_url(), json=payload, timeout=6.0)
-        if resp.status_code == 200:
-            raw = resp.json().get("response", "").strip().lower()
-            # Extract category name
-            for qt in QueryType:
-                if qt.value in raw:
-                    print(f"[QueryClassifier/LLM] '{query}' → {qt.value}")
-                    return qt
+        raw = generate_llm_text(
+            prompt,
+            timeout=6.0,
+            num_predict=20,
+            temperature=0.0,
+            num_ctx=int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
+        ).lower()
+        for qt in QueryType:
+            if qt.value in raw:
+                print(f"[QueryClassifier/LLM] '{query}' → {qt.value}")
+                return qt
     except Exception as e:
         print(f"[QueryClassifier/LLM] Failed: {e}")
 
