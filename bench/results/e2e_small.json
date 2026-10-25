@@ -1,0 +1,299 @@
+{
+  "url": "http://localhost:1000",
+  "status": {
+    "status": "ok",
+    "services": {
+      "api": {
+        "status": "ok"
+      },
+      "database": {
+        "status": "ok"
+      },
+      "vector_store": {
+        "status": "ok"
+      },
+      "cache": {
+        "status": "ok"
+      },
+      "llm": {
+        "status": "ok",
+        "model": "qwen2.5:3b",
+        "backend": "ollama"
+      },
+      "models": {
+        "embedding_model": "BAAI/bge-small-en-v1.5",
+        "embedding_dim": 384,
+        "sparse_model": "Qdrant/bm25",
+        "reranker_model": "Xenova/ms-marco-MiniLM-L-6-v2",
+        "full_rerank": false,
+        "loaded": true,
+        "error": null
+      }
+    },
+    "index": {
+      "documents": {
+        "indexed": 44
+      },
+      "chunks": 11547,
+      "vectors": 11547,
+      "queue": {}
+    },
+    "config": {
+      "llm_model": "qwen2.5:3b",
+      "top_k": 6,
+      "rerank": "top-3 relevance gate",
+      "auth": false
+    },
+    "elapsed_ms": 3.5
+  },
+  "retrieval": {
+    "metrics": {
+      "alarm_code": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "alarm_context": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "history_wo": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "plc_address": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "pm_procedure": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "process_semantic": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "root_cause": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "tag_limit": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "ALL": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      }
+    },
+    "http_latency_ms": {
+      "n": 278,
+      "p50": 90.5,
+      "p95": 147.1,
+      "p99": 173.4,
+      "mean": 95.7
+    },
+    "stage_ms": {
+      "embed_ms": {
+        "n": 278,
+        "p50": 15.0,
+        "p95": 28.2,
+        "p99": 38.0,
+        "mean": 17.0
+      },
+      "search_ms": {
+        "n": 278,
+        "p50": 7.6,
+        "p95": 13.4,
+        "p99": 20.6,
+        "mean": 8.6
+      },
+      "fetch_ms": {
+        "n": 278,
+        "p50": 1.2,
+        "p95": 2.1,
+        "p99": 3.0,
+        "mean": 1.3
+      },
+      "rerank_ms": {
+        "n": 278,
+        "p50": 60.9,
+        "p95": 106.0,
+        "p99": 130.4,
+        "mean": 64.4
+      },
+      "total_ms": {
+        "n": 278,
+        "p50": 86.8,
+        "p95": 140.5,
+        "p99": 164.0,
+        "mean": 91.2
+      }
+    }
+  },
+  "retrieval_no_rerank": {
+    "metrics": {
+      "alarm_code": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "alarm_context": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "history_wo": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "plc_address": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "pm_procedure": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "process_semantic": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "root_cause": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "tag_limit": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      },
+      "ALL": {
+        "hit1": 1.0,
+        "hit5": 1.0,
+        "ans5": 1.0,
+        "mrr": 1.0
+      }
+    },
+    "http_latency_ms": {
+      "n": 278,
+      "p50": 91.2,
+      "p95": 140.5,
+      "p99": 210.6,
+      "mean": 96.3
+    },
+    "stage_ms": {
+      "embed_ms": {
+        "n": 278,
+        "p50": 15.4,
+        "p95": 28.0,
+        "p99": 42.0,
+        "mean": 17.0
+      },
+      "search_ms": {
+        "n": 278,
+        "p50": 7.8,
+        "p95": 14.4,
+        "p99": 18.9,
+        "mean": 8.5
+      },
+      "fetch_ms": {
+        "n": 278,
+        "p50": 1.3,
+        "p95": 2.4,
+        "p99": 4.4,
+        "mean": 1.4
+      },
+      "rerank_ms": {
+        "n": 278,
+        "p50": 61.0,
+        "p95": 110.4,
+        "p99": 151.1,
+        "mean": 64.8
+      },
+      "total_ms": {
+        "n": 278,
+        "p50": 86.9,
+        "p95": 136.7,
+        "p99": 203.1,
+        "mean": 91.7
+      }
+    }
+  },
+  "evidence": {
+    "http_latency_ms": {
+      "n": 286,
+      "p50": 90.6,
+      "p95": 152.5,
+      "p99": 210.9,
+      "mean": 98.1
+    },
+    "server_latency_ms": {
+      "n": 286,
+      "p50": 84.1,
+      "p95": 146.4,
+      "p99": 197.0,
+      "mean": 91.9
+    },
+    "correct_refusal_rate": 1.0,
+    "false_refusal_rate": 0.007,
+    "flagged_partial_in_scope": 2,
+    "flagged_partial_out_of_scope": 0
+  },
+  "docker_stats": {
+    "industrial-rag-api-1": {
+      "mem": "394.6MiB / 1.5GiB",
+      "cpu": "0.13%"
+    },
+    "industrial-rag-worker-1": {
+      "mem": "664.2MiB / 2GiB",
+      "cpu": "0.16%"
+    },
+    "industrial-rag-postgres-1": {
+      "mem": "159.2MiB / 1GiB",
+      "cpu": "1.72%"
+    },
+    "industrial-rag-redis-1": {
+      "mem": "8.078MiB / 320MiB",
+      "cpu": "0.39%"
+    },
+    "industrial-rag-qdrant-1": {
+      "mem": "586.9MiB / 2GiB",
+      "cpu": "0.64%"
+    },
+    "industrial-rag-ollama-1": {
+      "mem": "2.175GiB / 4GiB",
+      "cpu": "0.00%"
+    }
+  }
+}

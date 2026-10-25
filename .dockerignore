@@ -1,40 +1,23 @@
-# Version control
-.git/
+.git
 .gitignore
-.gitattributes
-
-# Environment files (secrets)
-.envs/
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
 .env
-.env.example
-
-# Python cache
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.mypy_cache/
-.ruff_cache/
-
-# IDE / OS files
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-.DS_Store
-Thumbs.db
-
-# Project-specific
-scratch/
-memory.md
+.env.*
+!.env.example
+bench/data
+bench/results
+media
+data
+backups
+*.tar
+*.tar.gz
+docs
+tests
 README.md
-Modelfile
-docker-compose.yml
-
-# Docker
-.dockerignore
+CONTRIBUTING.md
+.DS_Store

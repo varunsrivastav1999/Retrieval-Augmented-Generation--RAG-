@@ -1,1654 +1,438 @@
-"""
-=============================================================================
- Enterprise Level RAG: 17-Layer Production Microservice — v4.0
-=============================================================================
- World's Best Retrieval-Augmented Generation engine.
- Open Source (MIT) | Zero Hallucination | Sub-5ms Exact Text | 30+ Formats
- 
- 17 Layers:
-   1. Universal Document Parser (PDF/DOCX/XLSX/PPTX/CSV/TXT/IMG/VIDEO)
-   2. Smart OCR & Table/Image Extraction
-   3. Semantic Parent-Child Chunking
-   4. Batch Embedding (offline, GPU-accelerated)
-   4. Vector DB: Qdrant
-   5. Agentic RAG: Multi-hop Query Resolution
-   6. Hybrid Search (HNSW + BM25 + Trigram)
-   7. ColBERT Late-Interaction Reranking
-   8. Max Marginal Relevance (MMR)
-   9. Contextual Window Expansion
-  10. Agentic Router (Keyword + LLM multi-tool)
-  11. Query Intelligence (Spelling, Expansion, Decomposition)
-  12. Hallucination Guard (ZERO general answers)
-  13. Extractive Fast-Path (< 5ms exact document text)
-  14. Semantic Query Cache (Redis)
-  15. Active RAG (FLARE self-reflection)
-  16. GraphRAG (Neo4j)
-  17. Real-Time Token Streaming
-   
- Microservice design — no file limit, zero error, 100% offline.
-=============================================================================
-"""
+"""HTTP API + UI for the offline industrial maintenance RAG system."""
 
+from __future__ import annotations
+
+import json
+import logging
 import os
-import requests
 import re
 import threading
 import time
-import json
-import hashlib
-import warnings
+import uuid
+from contextlib import asynccontextmanager
+from typing import List, Optional
 
-# Suppress Pydantic v2 protected namespace warnings caused by third-party packages
-warnings.filterwarnings("ignore", message='Field "model_.*" has conflict with protected namespace "model_"', category=UserWarning, module="pydantic")
-
-# Suppress noisy third-party deprecation warnings (e.g., pynvml, huggingface_hub)
-warnings.filterwarnings("ignore", category=FutureWarning)
-
-from fastapi import Body, HTTPException, Depends, File, Query, UploadFile
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-from sqlalchemy import text
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
-import redis
-import json
-import hashlib
-import warnings
+from sqlalchemy import delete, func, select, text as sql
 
-# Suppress noisy third-party deprecation warnings (e.g., pynvml, huggingface_hub)
-warnings.filterwarnings("ignore", category=FutureWarning)
+from app.config import get_settings
+from app.db import Chunk, Conversation, Document, Message, SessionLocal, db_ping, init_db
+from app.logging_setup import setup_logging
+from app.metrics import INDEXED_CHUNKS
+from app.rag import cache, jobs, llm, models, relations, vector_store
+from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported_file
+from app.rag.pipeline import QueryOptions, run, run_to_completion
 
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
-from app.database import DocumentChunk, IngestionJob, SessionLocal, init_db, get_db
-from app.rag.jobs import (
-    create_ingestion_job,
-    find_all_supported_files,
-    get_ingestion_job,
-    start_ingestion_worker,
-)
-from app.rag.model_loader import (
-    extract_llm_text,
-    generate_llm_text,
-    get_embedding_model_id,
-    get_openai_models_url,
-    iter_llm_tokens,
-    post_llm_generate,
-    runtime_model_info,
-    use_openai_compatible_llm,
-)
-from app.rag.retrieval import perform_hybrid_search, perform_multi_query_search
-from app.rag.reranker import rerank_results
-from app.rag.context import _context_sources, build_table_html_context
-from app.rag.grounding import (
-    NOT_FOUND_RESPONSE,
-    build_strict_grounding_prompt,
-    compute_grounding_score,
-    verify_answer_grounding,
-    remediate_low_confidence_answer,
-)
-from app.rag.query_classifier import classify_query, QueryType
-from app.rag.parsers import SUPPORTED_EXTENSIONS
-from app.rag.query_intelligence import flare_mid_generation_retrieval
+settings = get_settings()
+setup_logging(settings.log_level, settings.log_json)
+log = logging.getLogger("api")
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+TENANT_RE = r"^[A-Za-z0-9_-]{1,80}$"
+_retrieval_slots = threading.BoundedSemaphore(max(2, (os.cpu_count() or 2)))
 
 
-app = FastAPI(
-    title="Enterprise Level RAG 17-Layer Microservice",
-    description="World's best zero-hallucination Agentic RAG with unlimited file support, sub-5ms exact extraction, ColBERT reranking, and NVIDIA AI Blueprint Plan-and-Execute Architecture.",
-    version="4.0.0",
-)
-
-# ── Prometheus Metrics ────────────────────────────────────────────────────────
-RAG_QUERY_TOTAL = Counter("rag_queries_total", "Total queries processed", ["status"])
-RAG_QUERY_LATENCY = Histogram("rag_query_latency_seconds", "Query latency in seconds",
-    ["fast_path"], buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0))
-RAG_INGESTION_TOTAL = Counter("rag_ingestion_total", "Total files ingested", ["file_type"])
-RAG_CACHE_HITS = Counter("rag_cache_hits_total", "Total cache hits")
-RAG_GROUNDING_BLOCKED = Counter("rag_grounding_blocked_total", "Queries blocked by grounding guard")
-RAG_LLM_CALLS = Counter("rag_llm_calls_total", "Total Ollama LLM calls", ["operation"])
-
-# Serve local JS libraries (Chart.js, marked.js) for offline use
-_static_dir = os.path.join(os.path.dirname(__file__), "static")
-if os.path.isdir(_static_dir):
-    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
-
-TENANT_PATTERN = r"^[a-zA-Z0-9_-]{1,80}$"
-TENANT_RE = re.compile(TENANT_PATTERN)
+def _wait_for(name: str, fn, attempts: int = 60, delay: float = 2.0) -> None:
+    for i in range(1, attempts + 1):
+        try:
+            fn()
+            return
+        except Exception as exc:
+            if i == attempts:
+                raise
+            log.warning("%s not ready (%d/%d): %s", name, i, attempts, exc)
+            time.sleep(delay)
 
 
-def _cors_origins() -> List[str]:
-    raw = os.getenv("RAG_CORS_ORIGINS", "*")
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    _wait_for("qdrant", vector_store.ensure_collection)
+    models.load_models()
+    os.makedirs(os.path.join(settings.media_path, "uploads"), exist_ok=True)
+    threading.Thread(target=llm.warmup, name="llm-warmup", daemon=True).start()
+    log.info("api ready", extra={"llm": settings.llm_model, "embedding": settings.embedding_model})
+    yield
 
 
-CORS_ORIGINS = _cors_origins()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
-    allow_credentials="*" not in CORS_ORIGINS,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-MEDIA_PATH = os.getenv("MEDIA_PATH", "/media")
-
-# Connecting directly to the independent Ollama container inside this repository
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b") # Best for RAG — world-class reasoning, 128K context
-OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
-OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "1024"))
-OLLAMA_CONTEXT_LENGTH = int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768"))
-ALLOW_QUERY_TIME_SYNC = os.getenv("RAG_ALLOW_QUERY_TIME_SYNC", "false").lower() in {"1", "true", "yes", "on"}
-EXTRACTIVE_MAX_CHARS = int(os.getenv("RAG_EXTRACTIVE_MAX_CHARS", "20000"))
-MAINTENANCE_SAFE_MODE = os.getenv("RAG_MAINTENANCE_SAFE_MODE", "true").lower() in {"1", "true", "yes", "on"}
-RAG_ENV = os.getenv("RAG_ENV", "local").lower()
-PRELOAD_MODELS_ON_STARTUP = os.getenv(
-    "RAG_PRELOAD_MODELS_ON_STARTUP",
-    "true" if RAG_ENV in {"prod", "production"} else "false",
-).lower() in {"1", "true", "yes", "on"}
-PREWARM_LLM_ON_STARTUP = os.getenv(
-    "RAG_PREWARM_LLM_ON_STARTUP",
-    "true" if RAG_ENV in {"prod", "production"} else "false",
-).lower() in {"1", "true", "yes", "on"}
-ENABLE_INGESTION_WORKER = os.getenv("RAG_ENABLE_INGESTION_WORKER", "true").lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-INGESTION_WORKER_POLL_SECONDS = float(os.getenv("RAG_INGESTION_WORKER_POLL_SECONDS", "5"))
-INGESTION_STALE_TIMEOUT_SECONDS = int(os.getenv("RAG_INGESTION_STALE_TIMEOUT_SECONDS", "1800"))
-DEFAULT_TOP_K = int(os.getenv("RAG_DEFAULT_TOP_K", "24"))
-MAX_TOP_K = int(os.getenv("RAG_MAX_TOP_K", "100"))
-BROAD_QUERY_TOP_K = int(os.getenv("RAG_BROAD_QUERY_TOP_K", "48"))
-SOURCE_LIMIT = int(os.getenv("RAG_SOURCE_LIMIT", "24"))
-# File size limit — prevents zip bombs and OOM
-MAX_UPLOAD_SIZE_BYTES = int(os.getenv("RAG_MAX_UPLOAD_SIZE_BYTES", str(5000 * 1024 * 1024)))  # 5000MB default
-
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = os.getenv("REDIS_PORT", "6379")
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
-if REDIS_PASSWORD:
-    REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
-else:
-    REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
-try:
-    redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-except Exception as e:
-    redis_client = None
-    print(f"Warning: Redis cache not available - {e}")
-
-ingestion_worker_stop = threading.Event()
-ingestion_worker_thread = None
+app = FastAPI(title="Industrial Maintenance RAG", version="7.0.0", lifespan=lifespan,
+              docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
+if settings.cors_origins:
+    app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-def validate_tenant_id(tenant_id: str) -> str:
-    if not TENANT_RE.fullmatch(tenant_id):
-        raise HTTPException(status_code=400, detail="Invalid tenant_id.")
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    if request.url.path.startswith("/static"):
+        # Revalidate (ETag) on every load so an upgraded UI is never mixed with cached old files.
+        response.headers["Cache-Control"] = "no-cache"
+    if request.url.path == "/" or request.url.path.startswith("/static"):
+        response.headers.setdefault("Content-Security-Policy",
+                                    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'")
+    return response
+
+
+def require_key(request: Request) -> None:
+    if settings.api_key and request.headers.get("x-api-key") != settings.api_key:
+        raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key")
+
+
+def tenant_param(tenant_id: str = Query("default", pattern=TENANT_RE)) -> str:
     return tenant_id
 
 
-def _is_table_chunk(chunk: Dict[str, Any]) -> bool:
-    metadata = chunk.get("metadata", {}) or {}
-    text = chunk.get("text", "") or ""
-    return bool(
-        chunk.get("table_group")
-        or metadata.get("table_group")
-        or metadata.get("table_id")
-        or metadata.get("type") == "table_row"
-        or "| " in text[:100]
-    )
-
-
-def _source_label(chunk: Dict[str, Any]) -> str:
-    metadata = chunk.get("metadata", {}) or {}
-    source = metadata.get("source") or chunk.get("doc_id") or "unknown"
-    source_name = os.path.basename(str(source))
-    page = metadata.get("page_num")
-    return f"{source_name}, Page {page}" if page else source_name
-
-
-def _preserve_table_expansion(chunks: List[Dict[str, Any]], top_k: int) -> List[Dict[str, Any]]:
-    """Keep complete table-row expansions; apply top_k only to ordinary text results."""
-    if any(_is_table_chunk(chunk) for chunk in chunks):
-        return chunks
-    return chunks[:top_k]
-
-
-def _build_prompt_context(chunks: List[Dict[str, Any]]) -> str:
-    """Build LLM context that preserves canonical table rows instead of raw row fragments."""
-    table_html = ""
-    try:
-        table_html, _ = build_table_html_context(chunks)
-    except Exception as exc:
-        print(f"[Context] Table context build failed: {exc}")
-
-    context_parts = []
-    if table_html:
-        table_sources = sorted({_source_label(chunk) for chunk in chunks if _is_table_chunk(chunk)})
-        source_line = f"Sources: {', '.join(table_sources)}\n" if table_sources else ""
-        context_parts.append(
-            "EXACT TABLE CONTEXT:\n"
-            "Use these rows and cells exactly when answering table questions.\n"
-            f"{source_line}"
-            f"{table_html}"
-        )
-
-    seen = set()
-    text_parts = []
-    for chunk in chunks:
-        if table_html and _is_table_chunk(chunk):
-            continue
-        text = (chunk.get("text", "") or "").strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        text_parts.append(f"[{_source_label(chunk)}]\n{text}")
-
-    if text_parts:
-        context_parts.append("\n\n---\n\n".join(text_parts))
-
-    return "\n\n---\n\n".join(part for part in context_parts if part.strip())
-
-
-def _build_extractive_answer(chunks: List[Dict[str, Any]]) -> str:
-    """Return exact retrieved content without asking the LLM to rewrite it."""
-    if not chunks:
-        return ""
-
-    answer_parts = []
-    table_html = ""
-    try:
-        table_html, _ = build_table_html_context(chunks)
-    except Exception as exc:
-        print(f"[Extractive] Table answer assembly failed: {exc}")
-
-    if table_html:
-        table_sources = sorted({_source_label(chunk) for chunk in chunks if _is_table_chunk(chunk)})
-        source_suffix = f": {', '.join(table_sources)}" if table_sources else ""
-        answer_parts.append(f"[Exact table rows{source_suffix}]\n{table_html}")
-
-    seen = set()
-    for chunk in chunks:
-        if table_html and _is_table_chunk(chunk):
-            continue
-        text = (chunk.get("text", "") or "").strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        answer_parts.append(f"[{_source_label(chunk)}]\n{text}")
-
-    answer = "\n\n---\n\n".join(answer_parts)
-    if len(answer) > EXTRACTIVE_MAX_CHARS:
-        answer = (
-            answer[:EXTRACTIVE_MAX_CHARS].rstrip()
-            + "\n\n[Truncated: increase RAG_EXTRACTIVE_MAX_CHARS to return more exact text.]"
-        )
-    return answer
-
-
-def _extractive_verification(answer: str) -> Dict[str, Any]:
-    if not answer:
-        return {"confidence": "low", "confidence_score": 0.0, "reasoning": "No answer provided"}
-    return {
-        "confidence": "high",
-        "confidence_score": 1.0,
-        "reasoning": "Exact extractive response copied from retrieved document/table chunks; LLM verification skipped for latency.",
-    }
-
-
-def _cache_key(
-    query: str,
-    tenant_id: str,
-    user_id: str,
-    top_k: int,
-    embedding_model: str,
-    corpus_version: str,
-    scope: Optional[Dict[str, Any]] = None,
-) -> str:
-    payload = {
-        "tenant_id": tenant_id,
-        "user_id": user_id,
-        "query": query,
-        "top_k": top_k,
-        "embedding_model": embedding_model,
-        "corpus_version": corpus_version,
-        "scope": scope or {},
-    }
-    query_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
-    return f"rag_cache:{query_hash}"
-
-
-from app.rag.model_loader import cosine_similarity, encode_text
-
-CACHE_SEMANTIC_THRESHOLD = float(os.getenv("RAG_CACHE_SEMANTIC_THRESHOLD", "0.95"))
-
-def get_cached_response(
-    query: str,
-    tenant_id: str,
-    user_id: str,
-    top_k: int,
-    embedding_model: str,
-    corpus_version: str,
-    scope: Optional[Dict[str, Any]] = None,
-):
-    if not redis_client: return None
-    try:
-        # Layer 11: Semantic Query Cache — aggressive matching (0.95 threshold)
-        query_vector = encode_text(query)
-        index_key = f"semantic_index:{tenant_id}:{user_id}:{embedding_model}:{corpus_version}"
-        
-        raw_entries = redis_client.lrange(index_key, 0, -1)
-        if raw_entries:
-            index = [json.loads(e) for e in raw_entries]
-            
-            # 1. Exact Match Check
-            query_normalized = re.sub(r'\s+', ' ', query.strip().lower())
-            for item in index:
-                item_query = item.get("query", "")
-                if re.sub(r'\s+', ' ', item_query.strip().lower()) == query_normalized:
-                    print(f"[Cache] EXACT HIT for query={query!r}")
-                    cached = redis_client.get(item["cache_key"])
-                    if cached:
-                        return json.loads(cached)
-
-            # 2. Semantic Match with Entity Verification
-            # Extract alphanumeric sequences that contain at least one digit (product IDs, part numbers)
-            def extract_ids(text):
-                return set(re.findall(r'\b[a-zA-Z0-9]*[0-9][a-zA-Z0-9]*\b', text.lower()))
-            
-            query_ids = extract_ids(query)
-
-            best_match = None
-            best_sim = 0.0
-            
-            for item in index:
-                sim = cosine_similarity(query_vector, item["embedding"])
-                if sim > best_sim:
-                    item_query = item.get("query", "")
-                    item_ids = extract_ids(item_query)
-                    
-                    # Entity verification: if both queries have IDs, they must match exactly.
-                    # If neither has IDs, skip the check (e.g., "What is torque?").
-                    # If one has IDs and the other doesn't, no match.
-                    if query_ids and item_ids:
-                        if query_ids != item_ids:
-                            continue
-                    elif query_ids or item_ids:
-                        continue
-                    
-                    best_sim = sim
-                    best_match = item
-                    
-            if best_match and best_sim > CACHE_SEMANTIC_THRESHOLD:
-                print(f"[Cache] Semantic HIT (sim={best_sim:.3f}) for query={query!r}")
-                cached = redis_client.get(best_match["cache_key"])
-                if cached:
-                    return json.loads(cached)
-    except Exception as e:
-        print(f"Redis get error: {e}")
-    return None
-
-def set_cached_response(
-    query: str,
-    tenant_id: str,
-    user_id: str,
-    top_k: int,
-    embedding_model: str,
-    corpus_version: str,
-    response: dict,
-    scope: Optional[Dict[str, Any]] = None,
-):
-    if not redis_client: return
-    try:
-        cache_key = _cache_key(query, tenant_id, user_id, top_k, embedding_model, corpus_version, scope)
-        redis_client.setex(cache_key, 86400, json.dumps(response))
-        
-        # Update semantic index atomically with Redis list
-        query_vector = encode_text(query)
-        index_key = f"semantic_index:{tenant_id}:{user_id}:{embedding_model}:{corpus_version}"
-        entry = json.dumps({"cache_key": cache_key, "embedding": query_vector, "query": query})
-        
-        pipe = redis_client.pipeline()
-        pipe.lpush(index_key, entry)
-        pipe.ltrim(index_key, 0, 999)
-        pipe.expire(index_key, 86400)
-        pipe.execute()
-        
-    except Exception as e:
-        print(f"Redis set error: {e}")
-
-
-def get_corpus_version(db: Session, tenant_id: str, embedding_model: str) -> str:
-    latest = db.execute(
-        text(
-            "SELECT max(created_at)::text AS corpus_version "
-            "FROM document_chunks "
-            "WHERE tenant_id = :tenant_id "
-            "AND embedding_model = :embedding_model"
-        ),
-        {"tenant_id": tenant_id, "embedding_model": embedding_model},
-    ).scalar()
-    return latest or "empty"
-
-@app.on_event("startup")
-def on_startup():
-    print("🚀 [STARTUP] Enterprise Level RAG 17-Layer Microservice starting...")
-    global ingestion_worker_thread
-    try:
-        init_db()
-        from app.rag.qdrant_client import init_qdrant_collections
-        init_qdrant_collections()
-        print("✅ Database initialized and Qdrant collections created successfully.")
-    except Exception as e:
-        print(f"❌ Failed to initialize database: {e}")
-        raise
-
-    def run_background_sync():
-        if PRELOAD_MODELS_ON_STARTUP:
-            print("[Plug&Play] Ensuring AI models are ready in background...")
-            try:
-                from app.rag.model_loader import get_embedding_model, get_reranker_model
-                get_embedding_model()
-                get_reranker_model()
-                
-                # Auto-Create/Update Custom Ollama Brain. vLLM/OpenAI-compatible
-                # backends serve preloaded models, so there is no Modelfile API.
-                import httpx
-                modelfile_path = "/app/Modelfile"
-                if os.path.exists(modelfile_path) and not use_openai_compatible_llm():
-                    print(f"[Plug&Play] Syncing custom brain '{OLLAMA_MODEL}' from Modelfile...")
-                    with open(modelfile_path, "r") as f:
-                        modelfile_content = f.read()
-                    
-                    ollama_base_url = OLLAMA_URL.replace("/api/generate", "")
-                    with httpx.Client(timeout=300.0) as client:
-                        try:
-                            # Trigger the create API
-                            resp = client.post(
-                                f"{ollama_base_url}/api/create",
-                                json={"model": OLLAMA_MODEL, "modelfile": modelfile_content, "stream": False},
-                            )
-                            if resp.status_code == 200:
-                                print(f"✅ SUCCESS: Custom brain '{OLLAMA_MODEL}' is ready.")
-                            else:
-                                print(f"⚠️ Warning: Model creation returned {resp.status_code}: {resp.text}")
-                        except Exception as conn_err:
-                            print(f"❌ Connection Error: Could not reach Native Ollama at {ollama_base_url}. Make sure Ollama for Mac is RUNNING! ({conn_err})")
-                elif os.path.exists(modelfile_path):
-                    print("[Plug&Play] Skipping Ollama Modelfile sync for vLLM/OpenAI-compatible backend.")
-
-                if PREWARM_LLM_ON_STARTUP:
-                    print("[Plug&Play] Prewarming LLM backend...")
-                    warmup = generate_llm_text(
-                        "Reply with exactly: ready",
-                        timeout=min(OLLAMA_TIMEOUT_SECONDS, 120),
-                        num_predict=3,
-                        temperature=0.0,
-                        num_ctx=min(OLLAMA_CONTEXT_LENGTH, 2048),
-                    )
-                    if warmup:
-                        print("[Plug&Play] LLM backend warm.")
-                
-                print(f"RAG models ready: {runtime_model_info()}")
-            except Exception as e:
-                print(f"[Plug&Play] Warning: Background sync issue: {e}")
-
-    # Run the heavy sync in a background thread to prevent health check 503s
-    sync_thread = threading.Thread(target=run_background_sync, name="rag-sync-worker", daemon=True)
-    sync_thread.start()
-
-    if ENABLE_INGESTION_WORKER:
-        ingestion_worker_thread = start_ingestion_worker(
-            ingestion_worker_stop,
-            poll_seconds=INGESTION_WORKER_POLL_SECONDS,
-            stale_timeout_seconds=INGESTION_STALE_TIMEOUT_SECONDS,
-        )
-        print("✅ Ingestion worker started.")
-
-    # Auto-scan /media for ALL supported file types and queue them
-    def auto_scan_media():
-        sync_thread.join(timeout=600)
-        try:
-            all_files = find_all_supported_files(MEDIA_PATH, include_scan=True)
-            if not all_files:
-                print("[AutoScan] No supported files found in media path, skipping.")
-                return
-
-            db = SessionLocal()
-            try:
-                result = _queue_file_ingestion("default", all_files, db)
-                queued = result["queued"]
-                skipped = result["skipped"]
-                if queued:
-                    print(f"[AutoScan] ✅ Queued {queued} new file(s) for ingestion ({skipped} already indexed).")
-                else:
-                    print(f"[AutoScan] All {len(all_files)} file(s) already indexed. Nothing to do.")
-            finally:
-                db.close()
-        except Exception as e:
-            print(f"[AutoScan] Warning: Auto-scan failed: {e}")
-
-    scan_thread = threading.Thread(target=auto_scan_media, name="rag-auto-scan", daemon=True)
-    scan_thread.start()
-
-
-@app.on_event("shutdown")
-def on_shutdown():
-    ingestion_worker_stop.set()
-    if ingestion_worker_thread:
-        ingestion_worker_thread.join(timeout=5)
-    try:
-        pass
-    except Exception:
-        pass
-
-class QueryRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=4000)
-    tenant_id: str = Field("default", pattern=TENANT_PATTERN)
-    user_id: str = Field("default", pattern=TENANT_PATTERN)
-    top_k: int = Field(DEFAULT_TOP_K, ge=1, le=MAX_TOP_K)
-    parent: Optional[str] = None
-    child: Optional[str] = None
-    sync_documents: bool = False
-    include_scan: bool = True
-    force_reindex: bool = False
-    stream: bool = False
-    fast_path: bool = Field(False, description="Sub-5ms fast path: skip HyDE, BM25, Vision, Cross-encoder reranker")
-    extractive: bool = Field(False, description="Exact mode: skip LLM, return verbatim text from top chunk instead of generated answer")
-    auto: bool = Field(True, description="Auto-mode: simple facts get 10ms extractive, complex analysis gets full LLM pipeline")
-    evaluate: bool = Field(False, description="Run RAGAS evaluation on the final answer and context")
-
-
-class IngestRequest(BaseModel):
-    tenant_id: Optional[str] = Field(None, pattern=TENANT_PATTERN)
-    force_reindex: bool = False
-
-
-class IngestionJobResponse(BaseModel):
-    id: str
-    tenant_id: str
-    source_name: str
-    status: str
-    attempts: int
-    chunks_total: int
-    chunks_inserted: int
-    error: Optional[str] = None
-    file_type: Optional[str] = None
-    progress_pct: Optional[float] = None
-
-class IngestResponse(BaseModel):
-    status: str
-    message: str
-    files_processed: int
-    files_queued: int = 0
-    files_skipped: int = 0
-    jobs: List[IngestionJobResponse] = Field(default_factory=list)
-
-class QueryResponse(BaseModel):
-    answer: str
-    context: List[Dict[str, Any]]
-    sources: List[Dict[str, Any]] = Field(default_factory=list)
-    latency_ms: int
-    ingest: Optional[Dict[str, Any]] = None
-    grounding: Optional[Dict[str, Any]] = None
-    verification: Optional[Dict[str, Any]] = None
-    evaluation: Optional[Dict[str, Any]] = None
-
-
-def _job_response(job: IngestionJob) -> IngestionJobResponse:
-    return IngestionJobResponse(
-        id=job.id,
-        tenant_id=job.tenant_id,
-        source_name=job.source_name,
-        status=job.status,
-        attempts=job.attempts,
-        chunks_total=job.chunks_total,
-        chunks_inserted=job.chunks_inserted,
-        error=job.error,
-        file_type=getattr(job, 'file_type', None),
-        progress_pct=getattr(job, 'progress_pct', None),
-    )
-
-
-def _queue_file_ingestion(
-    tenant_id: str,
-    files: List[str],
-    db: Session,
-    force_reindex: bool = False,
-) -> Dict[str, Any]:
-    """Queue ingestion jobs for any supported file type."""
-    embedding_model = get_embedding_model_id()
-    unique_files = sorted(set(files))
-
-    if force_reindex and unique_files:
-        try:
-            from app.rag.qdrant_client import delete_qdrant_points_by_source
-            delete_qdrant_points_by_source(tenant_id, unique_files)
-            print(f"[Ingest] Cleared Qdrant vectors for {len(unique_files)} source file(s).")
-        except Exception as exc:
-            print(f"[Ingest] Warning: Qdrant source cleanup failed before reindex: {exc}")
-
-        db.query(DocumentChunk).filter(
-            DocumentChunk.tenant_id == tenant_id,
-            DocumentChunk.embedding_model == embedding_model,
-            DocumentChunk.doc_id.in_(unique_files),
-        ).delete(synchronize_session=False)
-        db.commit()
-        if redis_client:
-            try:
-                for k in redis_client.scan_iter(match=f"semantic_index:{tenant_id}:*", count=100):
-                    redis_client.delete(k)
-                print(f"[Cache] Cleared semantic cache indices for tenant {tenant_id}")
-            except Exception as e:
-                print(f"[Cache] Failed to clear semantic cache: {e}")
-
-    indexed_sources = {
-        row[0]
-        for row in (
-            db.query(DocumentChunk.doc_id)
-            .filter(
-                DocumentChunk.tenant_id == tenant_id,
-                DocumentChunk.embedding_model == embedding_model,
-                DocumentChunk.doc_id.in_(unique_files),
-            )
-            .distinct()
-            .all()
-        )
-    }
-    active_job_sources = {
-        row[0]
-        for row in (
-            db.query(IngestionJob.source_path)
-            .filter(
-                IngestionJob.tenant_id == tenant_id,
-                IngestionJob.source_path.in_(unique_files),
-                IngestionJob.status.in_(["queued", "running", "retry"]),
-            )
-            .distinct()
-            .all()
-        )
-    }
-
-    jobs = []
-    skipped = 0
-    for f in unique_files:
-        if not force_reindex and (f in indexed_sources or f in active_job_sources):
-            skipped += 1
-            continue
-        jobs.append(create_ingestion_job(tenant_id, f, force_reindex=force_reindex))
-
-    return {
-        "total_candidates": len(unique_files),
-        "queued": len(jobs),
-        "skipped": skipped,
-        "jobs": jobs,
-    }
-
-
-def _is_broad_query(query: str) -> bool:
-    normalized = f" {query.lower()} "
-    broad_phrases = [
-        " all ",
-        " every ",
-        " each ",
-        " topics",
-        " topic ",
-        " complete",
-        " full ",
-        " final ",
-        " summarize",
-        " summary",
-        " overview",
-    ]
-    return any(phrase in normalized for phrase in broad_phrases)
-
-
-def _retrieval_query(request: QueryRequest) -> str:
-    topic_bits = [value.strip() for value in [request.parent, request.child] if value and value.strip()]
-    if not topic_bits:
-        return request.query
-
-    topic_hint = " ".join(topic_bits)
-    if _is_broad_query(request.query) or len(request.query.split()) <= 5:
-        return f"{request.query} {topic_hint}"
-    return request.query
-
-
-
-# =========================================================================
-# API Endpoints
-# =========================================================================
-
-@app.post("/api/v1/ingest", response_model=IngestResponse)
-def ingest_media(
-    payload: Optional[IngestRequest] = Body(None),
-    tenant_id: str = Query("default", pattern=TENANT_PATTERN),
-    force_reindex: bool = Query(False),
-    db: Session = Depends(get_db),
-):
-    """
-    Scan the shared media volume for ALL supported files and ingest them.
-    Supports: PDF, DOCX, XLSX, PPTX, CSV, TXT, Images, Video subtitles.
-    Auto-detects format. Background chunking starts automatically.
-    """
-    if payload and payload.tenant_id:
-        tenant_id = payload.tenant_id
-    tenant_id = validate_tenant_id(tenant_id)
-    if payload and payload.force_reindex:
-        force_reindex = True
-
-    all_files = find_all_supported_files(MEDIA_PATH, include_scan=True)
-    if not all_files:
-        return {
-            "status": "success",
-            "message": f"No supported files found in {MEDIA_PATH}.",
-            "files_processed": 0,
-            "files_queued": 0,
-            "files_skipped": 0,
-            "jobs": [],
-        }
-
-    queue_result = _queue_file_ingestion(
-        tenant_id,
-        all_files,
-        db,
-        force_reindex=force_reindex,
-    )
-    jobs = queue_result["jobs"]
-    return {
-        "status": "queued" if jobs else "success",
-        "message": (
-            f"Found {len(all_files)} files: {len(jobs)} queued, {queue_result['skipped']} skipped."
-            if jobs
-            else f"All {len(all_files)} files are already indexed or queued."
-        ),
-        "files_processed": len(all_files),
-        "files_queued": len(jobs),
-        "files_skipped": queue_result["skipped"],
-        "jobs": [_job_response(job) for job in jobs],
-    }
-
-@app.post("/api/v1/upload")
-async def upload_file(
-    tenant_id: str = Query("default", pattern=TENANT_PATTERN),
-    file: UploadFile = File(...),
-):
-    """
-    Upload ANY supported file for ingestion.
-    No file size limit. Supports: PDF, DOCX, XLSX, PPTX, CSV, TXT, Images, Video.
-    Background chunking starts automatically after upload.
-    """
-    tenant_id = validate_tenant_id(tenant_id)
-    filename = os.path.basename(file.filename or "")
-    
-    # Check if format is supported
-    ext = os.path.splitext(filename)[1].lower()
-    if not ext or ext not in SUPPORTED_EXTENSIONS:
-        supported_list = ", ".join(sorted(SUPPORTED_EXTENSIONS))
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file format '{ext}'. Supported: {supported_list}",
-        )
-
-    # Stream file to disk with size limit
-    tenant_media_path = os.path.join(MEDIA_PATH, tenant_id)
-    os.makedirs(tenant_media_path, exist_ok=True)
-    file_path = os.path.join(tenant_media_path, filename)
-
-    total_bytes = 0
-    try:
-        with open(file_path, "wb") as buffer:
-            while True:
-                chunk = await file.read(4 * 1024 * 1024)
-                if not chunk:
-                    break
-                total_bytes += len(chunk)
-                if MAX_UPLOAD_SIZE_BYTES and total_bytes > MAX_UPLOAD_SIZE_BYTES:
-                    raise HTTPException(status_code=413, detail=f"File exceeds maximum upload size of {MAX_UPLOAD_SIZE_BYTES / (1024*1024):.0f}MB")
-                buffer.write(chunk)
-    except HTTPException:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise
-    except Exception as e:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise HTTPException(status_code=500, detail="Upload failed. Check server logs.")
-
-    file_size_mb = round(total_bytes / (1024 * 1024), 2)
-    from app.rag.parsers import get_file_type
-    file_type = get_file_type(file_path)
-    job = create_ingestion_job(tenant_id, file_path, file_type=file_type)
-    return {
-        "message": f"Saved {filename} ({file_size_mb}MB) and queued background ingestion.",
-        "file_type": file_type,
-        "job": _job_response(job),
-    }
-
-
-@app.get("/api/v1/ingest/jobs/{job_id}", response_model=IngestionJobResponse)
-def get_ingestion_status(
-    job_id: str,
-    tenant_id: str = Query("default", pattern=TENANT_PATTERN),
-):
-    tenant_id = validate_tenant_id(tenant_id)
-    job = get_ingestion_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Ingestion job not found.")
-    if job.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Ingestion job not found.")
-    return _job_response(job)
-
-
-@app.get("/api/v1/ingest/jobs", response_model=List[IngestionJobResponse])
-def list_ingestion_jobs(
-    tenant_id: str = Query("default", pattern=TENANT_PATTERN),
-    limit: int = Query(25, ge=1, le=100),
-    db: Session = Depends(get_db),
-):
-    tenant_id = validate_tenant_id(tenant_id)
-    jobs = (
-        db.query(IngestionJob)
-        .filter(IngestionJob.tenant_id == tenant_id)
-        .order_by(IngestionJob.created_at.desc())
-        .limit(limit)
-        .all()
-    )
-    return [_job_response(job) for job in jobs]
-
-
-@app.get("/api/v1/formats")
-def list_supported_formats():
-    """List all supported file formats for ingestion."""
-    return {
-        "supported_extensions": sorted(SUPPORTED_EXTENSIONS),
-        "categories": {
-            "documents": [".pdf", ".docx", ".doc", ".pptx", ".ppt"],
-            "spreadsheets": [".xlsx", ".xls", ".csv"],
-            "text": [".txt", ".text", ".md", ".log", ".json", ".xml"],
-            "images": [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".gif", ".webp"],
-            "video": [".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv"],
-            "subtitles": [".srt", ".ass", ".ssa", ".vtt"],
-        },
-        "file_size_limit": "unlimited",
-    }
-
-
-@app.get("/health/live")
-def live_health():
+# ---------------------------------------------------------------------------
+# Health, status, metrics
+# ---------------------------------------------------------------------------
+@app.get("/health/live", include_in_schema=False)
+def live():
     return {"status": "ok"}
 
 
-@app.get("/metrics")
-def prometheus_metrics():
-    """Prometheus metrics endpoint for monitoring and auto-scaling."""
-    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+@app.get("/health/ready", include_in_schema=False)
+def ready():
+    checks = {"database": db_ping(), "vector_store": vector_store.ping(), "models": models.models_ready()}
+    ok = all(checks.values())
+    return JSONResponse({"status": "ready" if ok else "not_ready", "checks": checks}, status_code=200 if ok else 503)
 
-@app.get("/health/ready")
-def ready_health(db: Session = Depends(get_db)):
-    checks = {}
-    status_code = 200
 
+@app.get("/metrics", include_in_schema=False)
+def metrics():
     try:
-        db.execute(text("SELECT 1"))
-        checks["database"] = "ok"
-        
-        stats_query = db.execute(text(
-            "SELECT COUNT(*) as chunks, COUNT(DISTINCT doc_id) as docs, "
-            "COUNT(DISTINCT file_type) as file_types "
-            "FROM document_chunks"
-        )).mappings().first()
-        checks["stats"] = {
-            "chunks": stats_query["chunks"] if stats_query else 0,
-            "docs": stats_query["docs"] if stats_query else 0,
-            "file_types": stats_query["file_types"] if stats_query else 0,
-        }
-        
-        # Get file type breakdown
-        try:
-            type_rows = db.execute(text(
-                "SELECT file_type, COUNT(DISTINCT doc_id) as doc_count, COUNT(*) as chunk_count "
-                "FROM document_chunks WHERE file_type IS NOT NULL "
-                "GROUP BY file_type ORDER BY chunk_count DESC"
-            )).mappings().all()
-            checks["stats"]["by_type"] = {
-                row["file_type"]: {"docs": row["doc_count"], "chunks": row["chunk_count"]}
-                for row in type_rows
-            }
-        except Exception:
-            pass
-            
-        # Active ingestion jobs
-        try:
-            active_jobs = db.execute(text(
-                "SELECT COUNT(*) as cnt FROM ingestion_jobs WHERE status IN ('queued', 'running')"
-            )).scalar()
-            checks["stats"]["active_jobs"] = active_jobs or 0
-        except Exception:
-            pass
-            
-    except Exception as exc:
-        checks["database"] = f"error: {exc}"
-        status_code = 503
-
-    try:
-        if not redis_client:
-            raise RuntimeError("redis client not configured")
-        redis_client.ping()
-        checks["redis"] = "ok"
-    except Exception as exc:
-        checks["redis"] = f"degraded: {exc}"
-
-    try:
-        if use_openai_compatible_llm():
-            response = requests.get(get_openai_models_url(), timeout=5)
-        else:
-            ollama_base = OLLAMA_URL.split("/api/")[0]
-            response = requests.get(f"{ollama_base}/api/tags", timeout=5)
-        response.raise_for_status()
-        checks["llm"] = "ok"
-    except Exception as exc:
-        checks["llm"] = f"degraded: {exc}"
-
-    try:
-        checks["models_info"] = runtime_model_info()
-        checks["models"] = "ready"
-    except Exception as exc:
-        checks["models"] = f"info_error: {exc}"
-
-    payload = {"status": "ok" if status_code == 200 else "unready", "checks": checks}
-    if status_code != 200:
-        raise HTTPException(status_code=status_code, detail=payload)
-    return payload
+        INDEXED_CHUNKS.set(vector_store.count())
+    except Exception:
+        pass
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-# =========================================================================
-# Production Dashboard — Home Page
-# =========================================================================
-@app.get("/", response_class=HTMLResponse)
-def root_ui():
-    with open("app/templates/index.html", "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
-
-
-# =========================================================================
-# Query Pipeline — 12 Layers
-# =========================================================================
-@app.post("/api/v1/query")
-def query_rag(request: QueryRequest, db: Session = Depends(get_db)):
-    """
-    17-Layer RAG Query Pipeline (Strict Document Grounding):
-    
-    Layer 5:  Hybrid Retrieval (ANN via pgvector + BM25)
-    Layer 6:  Cross-Encoder Reranking
-    Layer 7:  MMR Diversity
-    Layer 8:  Contextual Window Expansion
-    Layer 9:  🛡️ Hallucination Guard
-    Layer 10: ✅ Answer Verification
-    Layer 11: Semantic Cache
-    Layer 12: Token Streaming
-    
-    If information is NOT in documents → returns "not available" (ZERO hallucination).
-    """
-    start_time = time.time()
-    request_start = start_time
-    print(f"\n[{'='*50}]")
-    print(f"[API: IN] Query: {request.query}")
-    print(f"[{'='*50}]")
-    tenant_id = validate_tenant_id(request.tenant_id)
-    embedding_model = get_embedding_model_id()
-    
-    # V6.0: Two-tier Query Classification
-    query_type, strategy = classify_query(request.query)
-    broad_query = strategy.expand_section or strategy.chapter_retrieval or strategy.map_reduce
-
-    if (
-        MAINTENANCE_SAFE_MODE
-        and request.auto
-        and not request.extractive
-        and query_type in {QueryType.FACT, QueryType.PROCEDURE, QueryType.TABLE, QueryType.PARAMETER, QueryType.TROUBLESHOOT}
-    ):
-        request.extractive = True
-        request.fast_path = True
-        print(f"[MaintenanceSafeMode] {query_type.value} query -> fast exact extractive answer")
-    
-    effective_top_k = strategy.top_k
-    original_top_k = effective_top_k
-
-    ingest_summary = None
-    if request.sync_documents and not ALLOW_QUERY_TIME_SYNC:
-        ingest_summary = {
-            "disabled": True,
-            "reason": "Query-time document scan is disabled. Upload or ingestion jobs should update the corpus before querying.",
-        }
-        print("[Query] Ignoring sync_documents=true because RAG_ALLOW_QUERY_TIME_SYNC is disabled.")
-    elif request.sync_documents:
-        all_files = find_all_supported_files(MEDIA_PATH, include_scan=request.include_scan)
-        queue_result = _queue_file_ingestion(
-            tenant_id,
-            all_files,
-            db,
-            force_reindex=request.force_reindex,
-        )
-        ingest_summary = {
-            "total_candidates": queue_result["total_candidates"],
-            "queued": queue_result["queued"],
-            "skipped": queue_result["skipped"],
-        }
-
-    # --- Auto mode: simple fact → 10ms extractive, complex analysis → full LLM ---
-    if request.auto and not request.fast_path and not request.extractive:
-        q_lower = request.query.strip().lower()
-        is_analysis = bool(re.search(
-            r"(?:compare|contrast|difference|analysis|analyze|predict|trend|pattern|"
-            r"relationship|correlation|impact|effect|cause|explain|why\s+|"
-            r"how\s+(?:does|do|can|would|to|is|are)|summarize|overview|troubleshoot|"
-            r"diagnos(?:e|is|tic)|list\s+all|\ball\s+the\b|"
-            r"\bevery\b|\beach\b)", q_lower
-        ))
-        if is_analysis:
-            print("[Auto] Complex analysis → full LLM pipeline")
-        else:
-            is_simple = (
-                bool(re.search(r"(?:(?:^|\s)what\s+is|(?:^|\s)who\s+is|(?:^|\s)when\s+|"
-                               r"(?:^|\s)where\s+|(?:^|\s)which\s+|"
-                               r"(?:^|\s)how\s+to|(?:^|\s)define\s+|(?:^|\s)meaning\s+|"
-                               r"(?:^|\s)list\s+|(?:^|\s)show\s+)", q_lower))
-                or (len(q_lower.split()) <= 5)
-            )
-            if is_simple:
-                request.fast_path = True
-                print("[Auto] Simple fact → fast retrieval + LLM stream")
-
-        # Conversational Bypass
-        is_greeting = bool(re.match(r"^(hi|hello|hey|greetings|how are you|good morning|good afternoon)(?:\s+|$|[!.,?])", q_lower))
-        if is_greeting:
-            answer = "Hello! I'm your Enterprise Q&A Assistant. Please ask me a question about your uploaded documents!"
-            print(f"[API: OUT] Response: {answer}")
-            grounding_result = {"is_grounded": True, "score": 1.0, "detail": "Conversational Greeting"}
-            latency_ms = int((time.time() - start_time) * 1000)
-            response_data = {
-                "answer": answer,
-                "context": [],
-                "sources": [],
-                "latency_ms": latency_ms,
-                "ingest": ingest_summary,
-                "grounding": grounding_result,
-                "verification": {"confidence": "high", "confidence_score": 1.0, "grounded_sentences": 1, "total_sentences": 1, "evidence": []},
-            }
-            RAG_QUERY_TOTAL.labels(status="greeting").inc()
-            RAG_QUERY_LATENCY.labels(fast_path="false").observe(latency_ms / 1000.0)
-            if request.stream:
-                def stream_greeting():
-                    yield "data: " + json.dumps({'token': answer}) + "\n\n"
-                    yield "data: " + json.dumps({'done': True, 'sources': [], 'grounding': grounding_result, 'verification': response_data['verification'], 'latency_ms': response_data.get('latency_ms', 0)}) + "\n\n"
-                return StreamingResponse(stream_greeting(), media_type="text/event-stream")
-            return response_data
-
-    corpus_version = get_corpus_version(db, tenant_id, embedding_model)
-    search_query = _retrieval_query(request)
-    cache_scope = {
-        "parent": request.parent,
-        "child": request.child,
-        "search_query": search_query,
-        "fast_path": request.fast_path,
-        "extractive": request.extractive,
-        "auto": request.auto,
+@app.get("/api/v1/status", dependencies=[Depends(require_key)])
+def status(tenant_id: str = Depends(tenant_param)):
+    started = time.perf_counter()
+    services = {
+        "api": {"status": "ok"},
+        "database": {"status": "ok" if db_ping() else "down"},
+        "vector_store": {"status": "ok" if vector_store.ping() else "down"},
+        "cache": {"status": "ok" if cache.ping() else "down"},
+        "llm": llm.health(),
+        "models": models.model_info(),
     }
-    
-    # Layer 11: Semantic Query Cache
-    cached = get_cached_response(
-        request.query,
-        tenant_id,
-        request.user_id,
-        effective_top_k,
-        embedding_model,
-        corpus_version,
-        scope=cache_scope,
-    )
-    if cached:
-        RAG_CACHE_HITS.inc()
-        print(f"[Cache] HIT for tenant={tenant_id!r}, query={request.query!r}")
-        print(f"[API: OUT] Response: {cached.get('answer', '')}")
-        cached["latency_ms"] = int((time.time() - start_time) * 1000)
-        cached.setdefault("sources", _context_sources(cached.get("context", [])))
-        cached["ingest"] = ingest_summary
-
-        if request.stream:
-            def stream_cache():
-                yield "data: " + json.dumps({'token': cached.get('answer', '')}) + "\n\n"
-                yield "data: " + json.dumps({'done': True, 'sources': cached.get('sources', []), 'grounding': cached.get('grounding'), 'verification': cached.get('verification'), 'latency_ms': cached.get('latency_ms', 0)}) + "\n\n"
-            return StreamingResponse(stream_cache(), media_type="text/event-stream")
-
-        return cached
-
-    if request.stream:
-        def stream_llm():
-            final_context = []
-            sources = []
-            grounding_result = None
-            force_general = False
-            effective_top_k = request.top_k
-            original_top_k = effective_top_k
-            if broad_query:
-                effective_top_k = min(MAX_TOP_K, max(effective_top_k, BROAD_QUERY_TOP_K))
-
-            if request.fast_path:
-                if strategy.section_search or strategy.chapter_retrieval:
-                    from app.rag.section_retriever import retrieve_by_topic
-                    retrieved_chunks = retrieve_by_topic(search_query, tenant_id, db, top_sections=3, max_chunks_per_section=strategy.max_section_chunks)
-                else:
-                    retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
-                
-                # V6.0: Apply context optimization, but never deduplicate away
-                # sibling rows from a table expansion.
-                if any(_is_table_chunk(chunk) for chunk in retrieved_chunks):
-                    final_context = retrieved_chunks
-                    needs_map_reduce = False
-                else:
-                    from app.rag.context_optimizer import ContextOptimizer
-                    optimizer = ContextOptimizer()
-                    final_context, needs_map_reduce = optimizer.optimize(retrieved_chunks, search_query, ordering=strategy.context_ordering)
-                
-                for c in final_context:
-                    c["rerank_score"] = c.get("dense_score", 0.0)
-                sources = _context_sources(final_context)
-                grounding_result = compute_grounding_score(search_query, final_context)
-            else:
-                # Plan and Execute Pipeline (NVIDIA RAG Blueprint Style)
-                import asyncio
-                if strategy.map_reduce:
-                    from app.rag.summarization import run_map_reduce_summarize_sync
-                    # Retrieve chunks for the summary (using fast_path to avoid secondary LLM calls during retrieval)
-                    retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
-                    summary = run_map_reduce_summarize_sync(search_query, retrieved_chunks)
-                    agentic_result = {
-                        "answer": summary,
-                        "context": retrieved_chunks,
-                        "sources": _context_sources(retrieved_chunks),
-                        "grounding": {"is_grounded": True, "score": 1.0, "detail": "Map-Reduce Summary"}
-                    }
-                else:
-                    from app.rag.agentic import AgenticRAGPipeline
-                    
-                    pipeline = AgenticRAGPipeline(db, tenant_id, effective_top_k, strategy=strategy)
-                    try:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        agentic_result = loop.run_until_complete(pipeline.run(search_query))
-                        loop.close()
-                    except RuntimeError:
-                        agentic_result = asyncio.run(pipeline.run(search_query))
-                    
-                final_context = agentic_result["context"]
-                sources = agentic_result["sources"]
-                grounding_result = agentic_result["grounding"]
-                
-            auto_filters = None
-            if not request.fast_path:
-                auto_filters = agentic_result.get("auto_filters")
-                
-                if agentic_result.get("answer"):
-                    # The agentic pipeline synthesized the answer directly, so we stream the final answer in one block (since it's already generated)
-                    # A true async stream of synthesis tokens requires async generator support across the pipeline.
-                    yield "data: " + json.dumps({'token': agentic_result["answer"]}) + "\n\n"
-                    latency = int((time.time() - start_time) * 1000)
-                    verification = verify_answer_grounding(agentic_result["answer"], final_context)
-                    
-                    db.commit()
-                    status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
-                    RAG_QUERY_TOTAL.labels(status=status).inc()
-                    RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency / 1000.0)
-                    
-                    try:
-                        set_cached_response(
-                            request.query, tenant_id, request.user_id, effective_top_k,
-                            embedding_model, corpus_version,
-                            {"answer": agentic_result["answer"], "context": final_context, "sources": sources,
-                             "grounding": grounding_result, "verification": verification},
-                            scope=cache_scope,
-                        )
-                    except Exception as cache_err:
-                        print(f"[Cache] Error saving agentic response: {cache_err}")
-
-                    yield "data: " + json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency}) + "\n\n"
-                    return
-
-            if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
-                if not grounding_result:
-                    grounding_result = {"is_grounded": False, "score": 0.0, "detail": "Ungrounded: No context found."}
-                latency = int((time.time() - start_time) * 1000)
-                db.commit()
-                status = "blocked"
-                RAG_QUERY_TOTAL.labels(status=status).inc()
-                RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency / 1000.0)
-                RAG_GROUNDING_BLOCKED.inc()
-                yield "data: " + json.dumps({'token': NOT_FOUND_RESPONSE}) + "\n\n"
-                yield "data: " + json.dumps({'done': True, 'sources': [], 'grounding': grounding_result, 'verification': {"confidence": "high", "confidence_score": 1.0, "grounded_sentences": 1, "total_sentences": 1, "evidence": []}, 'latency_ms': latency}) + "\n\n"
-                return
-            
+    index = {}
+    try:
+        with SessionLocal() as db:
+            rows = db.execute(sql("""SELECT status, count(*) AS docs, coalesce(sum(chunk_count),0) AS chunks
+                                     FROM documents WHERE tenant_id=:t GROUP BY status"""), {"t": tenant_id}).all()
+        index["documents"] = {r.status: r.docs for r in rows}
+        index["chunks"] = int(sum(r.chunks for r in rows))
+        index["vectors"] = vector_store.count(tenant_id)
+        index["queue"] = jobs.queue_depth()
+    except Exception as exc:
+        index["error"] = str(exc)[:200]
+    overall = "ok"
+    if any(services[k]["status"] != "ok" for k in ("database", "vector_store")) or not services["models"]["loaded"]:
+        overall = "down"
+    elif services["llm"]["status"] != "ok" or services["cache"]["status"] != "ok":
+        overall = "degraded"
+    return {"status": overall, "services": services, "index": index,
+            "config": {"llm_model": settings.llm_model, "top_k": settings.top_k, "rerank": "full" if settings.rerank_enabled else f"top-{settings.rerank_gate_n} relevance gate",
+                       "auth": bool(settings.api_key)},
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 1)}
 
 
-            if request.extractive:
-                answer = _build_extractive_answer(final_context)
-                verification = _extractive_verification(answer)
-                latency = int((time.time() - start_time) * 1000)
-                
-                db.commit()
-                yield "data: " + json.dumps({'token': answer}) + "\n\n"
-                yield "data: " + json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency}) + "\n\n"
-                return
-
-            context_text = _build_prompt_context(final_context)
-            prompt = build_strict_grounding_prompt(search_query, context_text, broad_query, query_type=query_type.value)
-            
-            db.commit()
-            
-            answer_acc = ""
-            flare_retrieved_chunks = []
-            
-            try:
-                response = post_llm_generate(
-                    prompt,
-                    stream=True,
-                    timeout=OLLAMA_TIMEOUT_SECONDS,
-                    num_predict=OLLAMA_NUM_PREDICT,
-                    temperature=0.0,
-                    num_ctx=int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
-                    extra_options={"num_gpu": 99},
-                )
-                if response.status_code == 200:
-                    token_buffer = ""
-                    for token in iter_llm_tokens(response):
-                        answer_acc += token
-                        yield "data: " + json.dumps({'token': token}) + "\n\n"
-
-                        token_buffer += token
-                        if len(token_buffer) >= 40 and (token.endswith('.') or token.endswith('!') or token.endswith('?')):
-                            flare_query = flare_mid_generation_retrieval(
-                                partial_answer=answer_acc,
-                                original_query=search_query,
-                                existing_context=final_context + flare_retrieved_chunks,
-                            )
-                            if flare_query and flare_query.strip():
-                                new_chunks = perform_multi_query_search(
-                                    db, [flare_query], tenant_id,
-                                    top_k=effective_top_k,
-                                    metadata_filters=auto_filters or None,
-                                )
-                                if new_chunks:
-                                    new_reranked = rerank_results(flare_query, new_chunks, top_n=3)
-                                    for nc in new_reranked:
-                                        if nc not in flare_retrieved_chunks:
-                                            flare_retrieved_chunks.append(nc)
-                            token_buffer = ""
-                else:
-                    err = f"LLM Error: {response.text}"
-                    yield "data: " + json.dumps({'token': err}) + "\n\n"
-            except requests.exceptions.Timeout:
-                err = "LLM Timeout. The model took too long to respond."
-                yield "data: " + json.dumps({'token': err}) + "\n\n"
-            except requests.exceptions.RequestException:
-                err = "LLM Connection Error. The model service is unavailable."
-                yield "data: " + json.dumps({'token': err}) + "\n\n"
-                
-            answer_acc = answer_acc.strip()
-            
-            if flare_retrieved_chunks:
-                enriched_context = final_context + flare_retrieved_chunks
-                enriched_text = _build_prompt_context(enriched_context)
-                flare_prompt = build_strict_grounding_prompt(search_query, enriched_text, broad_query)
-                try:
-                    final_resp = post_llm_generate(
-                        flare_prompt,
-                        timeout=OLLAMA_TIMEOUT_SECONDS,
-                        num_predict=OLLAMA_NUM_PREDICT,
-                        temperature=0.0,
-                        extra_options={"num_gpu": 99},
-                    )
-                    if final_resp.status_code == 200:
-                        corrected_answer = extract_llm_text(final_resp)
-                        if corrected_answer:
-                            answer_acc = corrected_answer
-                except Exception as flare_err:
-                    print(f"[FLARE] Final pass failed: {flare_err}")
-                final_context = enriched_context
-                sources = _context_sources(enriched_context)
-            
-            clean_answer = re.sub(r'\[FLARE re-retrieved:.*?\]', '', answer_acc).strip()
-            verification = verify_answer_grounding(clean_answer, final_context)
-
-            # Layer 10b: Low-confidence remediation (streaming path)
-            # If verifier detects the answer diverged from the source, silently
-            # re-generate using an ultra-strict extractive prompt (1 retry max).
-            if (
-                verification.get("confidence_score", 1.0) < 0.4
-                and grounding_result
-                and grounding_result.get("is_grounded")
-                and final_context
-            ):
-                print(f"[Guardrail/10b] Low confidence ({verification['confidence_score']:.2f}) "
-                      "— triggering extractive remediation.")
-                context_texts_rem = [
-                    re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', c.get('text', '')).strip()
-                    for c in final_context
-                ]
-                context_text_rem = "\n\n---\n\n".join(context_texts_rem)
-                remediated = remediate_low_confidence_answer(
-                    search_query, context_text_rem, broad_query
-                )
-                if remediated:
-                    clean_answer = remediated
-                    verification = verify_answer_grounding(clean_answer, final_context)
-
-            latency_ms = int((time.time() - start_time) * 1000)
-            
-            yield "data: " + json.dumps({'done': True, 'sources': sources, 'grounding': grounding_result, 'verification': verification, 'latency_ms': latency_ms}) + "\n\n"
-            
-            status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
-            RAG_QUERY_TOTAL.labels(status=status).inc()
-            RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency_ms / 1000.0)
-            if grounding_result and not grounding_result.get("is_grounded"):
-                RAG_GROUNDING_BLOCKED.inc()
-            
-            try:
-                set_cached_response(
-                    request.query, tenant_id, request.user_id, effective_top_k,
-                    embedding_model, corpus_version,
-                    {"answer": clean_answer, "context": final_context, "sources": sources,
-                     "grounding": grounding_result, "verification": verification},
-                    scope=cache_scope,
-                )
-            except Exception as cache_err:
-                print(f"[Cache] Error saving streamed response: {cache_err}")
-
-        return StreamingResponse(stream_llm(), media_type="text/event-stream")
-        
-    else:
-        # NON-STREAMING FALLBACK (Agentic RAG / Fast Path)
-        if request.fast_path:
-            if strategy.section_search or strategy.chapter_retrieval:
-                from app.rag.section_retriever import retrieve_by_topic
-                retrieved_chunks = retrieve_by_topic(
-                    search_query,
-                    tenant_id,
-                    db,
-                    top_sections=3,
-                    max_chunks_per_section=strategy.max_section_chunks,
-                )
-            else:
-                retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
-
-            if any(_is_table_chunk(chunk) for chunk in retrieved_chunks):
-                final_context = retrieved_chunks
-            else:
-                from app.rag.context_optimizer import ContextOptimizer
-                optimizer = ContextOptimizer()
-                final_context, _ = optimizer.optimize(retrieved_chunks, search_query, ordering=strategy.context_ordering)
-                if not (strategy.section_search or strategy.chapter_retrieval):
-                    final_context = _preserve_table_expansion(final_context, effective_top_k)
-            for c in final_context:
-                c["rerank_score"] = c.get("dense_score", 0.0)
-            sources = _context_sources(final_context)
-            grounding_result = compute_grounding_score(search_query, final_context)
-        else:
-            # Plan and Execute Pipeline (NVIDIA RAG Blueprint Style)
-            import asyncio
-            if broad_query:
-                from app.rag.summarization import run_map_reduce_summarize_sync
-                retrieved_chunks = perform_hybrid_search(db, search_query, tenant_id, top_k=effective_top_k, fast_path=True)
-                summary = run_map_reduce_summarize_sync(search_query, retrieved_chunks)
-                agentic_result = {
-                    "answer": summary,
-                    "context": retrieved_chunks,
-                    "sources": _context_sources(retrieved_chunks),
-                    "grounding": {"is_grounded": True, "score": 1.0, "detail": "Map-Reduce Summary"}
-                }
-            else:
-                from app.rag.agentic import AgenticRAGPipeline
-                
-                pipeline = AgenticRAGPipeline(db, tenant_id, effective_top_k)
-                try:
-                    # FastAPI runs sync defs in a threadpool, so asyncio.run is safe here.
-                    # If an event loop is already running, we create a new one.
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    agentic_result = loop.run_until_complete(pipeline.run(search_query))
-                    loop.close()
-                except RuntimeError:
-                    # Fallback if somehow already in an async context
-                    agentic_result = asyncio.run(pipeline.run(search_query))
-                
-            final_context = agentic_result["context"]
-            sources = agentic_result["sources"]
-            grounding_result = agentic_result["grounding"]
-            
-        auto_filters = None
-        if not request.fast_path:
-            auto_filters = agentic_result.get("auto_filters")
-            
-            if agentic_result.get("answer"):
-                # The agentic pipeline synthesized the answer directly!
-                latency = int((time.time() - start_time) * 1000)
-                verification = verify_answer_grounding(agentic_result["answer"], final_context)
-                
-                db.commit()
-                status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
-                RAG_QUERY_TOTAL.labels(status=status).inc()
-                RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency / 1000.0)
-                
-                try:
-                    set_cached_response(
-                        request.query, tenant_id, request.user_id, effective_top_k,
-                        embedding_model, corpus_version,
-                        {"answer": agentic_result["answer"], "context": final_context, "sources": sources,
-                         "grounding": grounding_result, "verification": verification},
-                        scope=cache_scope,
-                    )
-                except Exception as cache_err:
-                    print(f"[Cache] Error saving agentic response: {cache_err}")
-
-                evaluation_data = None
-                if request.evaluate:
-                    from app.rag.evaluation import evaluate_rag_response
-                    context_strings = [c.get("text", "") for c in final_context]
-                    evaluation_data = evaluate_rag_response(search_query, agentic_result["answer"], context_strings)
-
-                return {
-                    "answer": agentic_result["answer"],
-                    "context": final_context,
-                    "sources": sources,
-                    "latency_ms": latency,
-                    "ingest": ingest_summary,
-                    "grounding": grounding_result,
-                    "verification": verification,
-                    "evaluation": evaluation_data,
-                }
-            
-            # If agentic_result["answer"] is empty, it means empty_plan was selected.
-            # We will fall through to standard generation below using the retrieved final_context.
+# ---------------------------------------------------------------------------
+# Query
+# ---------------------------------------------------------------------------
+class QueryRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=2000)
+    tenant_id: str = Field("default", pattern=TENANT_RE)
+    mode: str = Field("auto", pattern="^(auto|evidence|answer)$")
+    top_k: Optional[int] = Field(None, ge=1, le=50)
+    collections: List[str] = Field(default_factory=list, max_length=20)
+    file_types: List[str] = Field(default_factory=list, max_length=20)
+    document_ids: List[str] = Field(default_factory=list, max_length=50)
+    conversation_id: Optional[str] = Field(None, max_length=36)
+    stream: bool = False
+    use_cache: bool = True
 
 
-        if not grounding_result or not grounding_result.get("is_grounded") or not final_context:
-            if not grounding_result:
-                grounding_result = {"is_grounded": False, "score": 0.0, "detail": "Ungrounded: No context found."}
-            latency = int((time.time() - start_time) * 1000)
-            status = "blocked"
-            RAG_QUERY_TOTAL.labels(status=status).inc()
-            RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(latency / 1000.0)
-            RAG_GROUNDING_BLOCKED.inc()
-            return {
-                "answer": NOT_FOUND_RESPONSE,
-                "context": [],
-                "sources": [],
-                "latency_ms": latency,
-                "ingest": ingest_summary,
-                "grounding": grounding_result,
-                "verification": {"confidence": "high", "confidence_score": 1.0, "reasoning": "Grounding blocked; correct refusal"},
-            }
+def _options(req: QueryRequest) -> QueryOptions:
+    return QueryOptions(query=req.query, tenant_id=req.tenant_id, mode=req.mode, top_k=req.top_k,
+                        collections=req.collections, file_types=req.file_types, document_ids=req.document_ids,
+                        conversation_id=req.conversation_id, use_cache=req.use_cache)
 
-        if request.extractive:
-            answer = _build_extractive_answer(final_context)
-            verification = _extractive_verification(answer)
-            latency = int((time.time() - start_time) * 1000)
-            
-            evaluation_data = None
-            if request.evaluate and answer:
-                from app.rag.evaluation import evaluate_rag_response
-                context_strings = [c.get("text", "") for c in final_context]
-                evaluation_data = evaluate_rag_response(search_query, answer, context_strings)
-                
-            response_data = {
-                "answer": answer,
-                "context": final_context,
-                "sources": sources,
-                "latency_ms": latency,
-                "ingest": ingest_summary,
-                "grounding": grounding_result,
-                "verification": verification,
-                "evaluation": evaluation_data,
-            }
-            if not request.fast_path:
-                set_cached_response(
-                    request.query, tenant_id, request.user_id, effective_top_k,
-                    embedding_model, corpus_version,
-                    {key: value for key, value in response_data.items() if key != "ingest"},
-                    scope=cache_scope,
-                )
-            return response_data
 
-        context_text = _build_prompt_context(final_context)
-        prompt = build_strict_grounding_prompt(search_query, context_text, broad_query, query_type=query_type.value)
-        
-        flare_retrieved_chunks = []
-        answer = ""
+@app.post("/api/v1/query", dependencies=[Depends(require_key)])
+def query(req: QueryRequest):
+    opts = _options(req)
+    if req.stream:
+        def events():
+            with _retrieval_slots:
+                for event in run(opts):
+                    yield f"data: {json.dumps(event, default=str)}\n\n"
+        return StreamingResponse(events(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    with _retrieval_slots:
+        result = run_to_completion(opts)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=503, detail=result.get("message", "service unavailable"))
+    return result
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=2000)
+    tenant_id: str = Field("default", pattern=TENANT_RE)
+    top_k: int = Field(10, ge=1, le=50)
+    collections: List[str] = Field(default_factory=list)
+    file_types: List[str] = Field(default_factory=list)
+    rerank: bool = True
+
+
+@app.post("/api/v1/search", dependencies=[Depends(require_key)])
+def search_only(req: SearchRequest):
+    """Retrieval only (no answer generation) — for integrations and benchmarks."""
+    from app.rag.search import retrieve
+    with _retrieval_slots:
         try:
-            response = post_llm_generate(
-                prompt,
-                timeout=OLLAMA_TIMEOUT_SECONDS,
-                num_predict=OLLAMA_NUM_PREDICT,
-                temperature=0.0,
-                num_ctx=int(os.getenv("OLLAMA_CONTEXT_LENGTH", "32768")),
-                extra_options={"num_gpu": 99},
-            )
-            if response.status_code == 200:
-                answer = extract_llm_text(response)
-                
-                flare_query = flare_mid_generation_retrieval(
-                    partial_answer=answer,
-                    original_query=search_query,
-                    existing_context=final_context,
-                    is_full_answer=True,
-                )
-                if flare_query and flare_query.strip():
-                    new_chunks = perform_multi_query_search(
-                        db, [flare_query], tenant_id,
-                        top_k=effective_top_k,
-                        metadata_filters=auto_filters or None,
-                    )
-                    if new_chunks:
-                        new_reranked = rerank_results(flare_query, new_chunks, top_n=3)
-                        for nc in new_reranked:
-                            if nc not in flare_retrieved_chunks:
-                                flare_retrieved_chunks.append(nc)
-                
-                if flare_retrieved_chunks:
-                    enriched_context = final_context + flare_retrieved_chunks
-                    enriched_text = _build_prompt_context(enriched_context)
-                    flare_prompt = build_strict_grounding_prompt(search_query, enriched_text, broad_query)
-                    final_resp = post_llm_generate(
-                        flare_prompt,
-                        timeout=OLLAMA_TIMEOUT_SECONDS,
-                        num_predict=OLLAMA_NUM_PREDICT,
-                        temperature=0.0,
-                        extra_options={"num_gpu": 99},
-                    )
-                    if final_resp.status_code == 200:
-                        answer = extract_llm_text(final_resp)
-                    final_context = enriched_context
-                    sources = _context_sources(enriched_context)
-            else:
-                answer = "LLM Error: The model service returned an error."
-        except Exception:
-            answer = "LLM Error: An unexpected error occurred."
-            
-        verification = verify_answer_grounding(answer, final_context)
-
-        # Layer 10b: Low-confidence remediation (non-streaming path)
-        if (
-            verification.get("confidence_score", 1.0) < 0.4
-            and grounding_result
-            and grounding_result.get("is_grounded")
-            and final_context
-            and not answer.startswith("LLM Error")
-        ):
-            print(f"[Guardrail/10b] Low confidence ({verification['confidence_score']:.2f}) "
-                  "— triggering extractive remediation (non-streaming).")
-            context_texts_rem = [
-                re.sub(r'\[.*?(?:Page|Part)\s*\d+\]\s*', '', c.get('text', '')).strip()
-                for c in final_context
-            ]
-            context_text_rem = "\n\n---\n\n".join(context_texts_rem)
-            remediated = remediate_low_confidence_answer(
-                search_query, context_text_rem, broad_query
-            )
-            if remediated:
-                answer = remediated
-                verification = verify_answer_grounding(answer, final_context)
-        evaluation = None
-        if request.evaluate and final_context and not answer.startswith("Ollama Error"):
-            from app.rag.evaluation import evaluate_rag_response
-            contexts_str = [c.get("text", "") for c in final_context]
-            evaluation = evaluate_rag_response(search_query, answer, contexts_str)
-            
-        latency = int((time.time() - start_time) * 1000)
-        
-        response_data = {
-            "answer": answer,
-            "context": final_context,
-            "sources": sources,
-            "latency_ms": latency,
-            "ingest": ingest_summary,
-            "grounding": grounding_result,
-            "verification": verification,
-            "evaluation": evaluation,
-        }
-        
-        if not answer.startswith("Ollama Error:"):
-            set_cached_response(
-                request.query,
-                tenant_id,
-                request.user_id,
-                effective_top_k,
-                embedding_model,
-                corpus_version,
-                {key: value for key, value in response_data.items() if key != "ingest"},
-                scope=cache_scope,
-            )
-
-        elapsed = time.time() - request_start
-        status = "grounded" if (grounding_result and grounding_result.get("is_grounded")) else "blocked"
-        RAG_QUERY_TOTAL.labels(status=status).inc()
-        RAG_QUERY_LATENCY.labels(fast_path=str(request.fast_path)).observe(elapsed)
-        if grounding_result and not grounding_result.get("is_grounded"):
-            RAG_GROUNDING_BLOCKED.inc()
-        
-        return response_data
+            r = retrieve(req.query, req.tenant_id, top_k=req.top_k, collections=req.collections,
+                         file_types=req.file_types, rerank=req.rerank)
+        except Exception as exc:
+            log.exception("search failed")
+            raise HTTPException(status_code=503, detail=f"search unavailable: {type(exc).__name__}") from exc
+    return {"hits": [h.public() for h in r.hits], "query_identifiers": r.query_ids,
+            "missing_identifiers": r.missing_ids, "timings": r.timings}
 
 
-if __name__ == "__main__":
-    import uvicorn
-    from dotenv import load_dotenv
-    
-    # Auto-load the local environment if running natively
-    env_path = os.path.join(os.path.dirname(__file__), "..", ".envs", ".local", ".rag")
-    if os.path.exists(env_path):
-        print(f"[RAG Native] Loading environment from {env_path}")
-        load_dotenv(env_path)
-    
-    print("[RAG Native] Starting Enterprise Level RAG 17-Layer Microservice natively...")
-    uvicorn.run(app, host="0.0.0.0", port=1000)
+@app.get("/api/v1/related", dependencies=[Depends(require_key)])
+def related(identifier: str = Query(..., min_length=2, max_length=80), tenant_id: str = Depends(tenant_param)):
+    return relations.related_identifiers(tenant_id, [identifier.strip().upper()], limit=25)
+
+
+# ---------------------------------------------------------------------------
+# Documents & ingestion
+# ---------------------------------------------------------------------------
+def _doc_dict(d: Document) -> dict:
+    return {k: getattr(d, k) for k in ("id", "name", "collection", "file_type", "status", "error", "pages",
+                                       "chunk_count", "size_bytes", "created_at", "indexed_at", "path")}
+
+
+@app.get("/api/v1/documents", dependencies=[Depends(require_key)])
+def list_documents(tenant_id: str = Depends(tenant_param), q: str = Query("", max_length=200),
+                   collection: str = Query("", max_length=128), status: str = Query("", max_length=16),
+                   limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
+    with SessionLocal() as db:
+        stmt = select(Document).where(Document.tenant_id == tenant_id)
+        if q:
+            stmt = stmt.where(Document.name.ilike(f"%{q}%"))
+        if collection:
+            stmt = stmt.where(Document.collection == collection)
+        if status:
+            stmt = stmt.where(Document.status == status)
+        total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar()
+        docs = db.execute(stmt.order_by(Document.updated_at.desc()).limit(limit).offset(offset)).scalars().all()
+    return {"total": total, "documents": [_doc_dict(d) for d in docs]}
+
+
+@app.get("/api/v1/collections", dependencies=[Depends(require_key)])
+def list_collections(tenant_id: str = Depends(tenant_param)):
+    with SessionLocal() as db:
+        rows = db.execute(sql("""SELECT collection, count(*) AS docs, coalesce(sum(chunk_count),0) AS chunks
+                                 FROM documents WHERE tenant_id=:t GROUP BY collection ORDER BY collection"""),
+                          {"t": tenant_id}).all()
+        types = db.execute(sql("SELECT DISTINCT file_type FROM documents WHERE tenant_id=:t ORDER BY 1"), {"t": tenant_id}).scalars().all()
+    return {"collections": [{"name": r.collection, "documents": r.docs, "chunks": int(r.chunks)} for r in rows],
+            "file_types": [t for t in types if t]}
+
+
+@app.get("/api/v1/chunks/{chunk_id}", dependencies=[Depends(require_key)])
+def get_chunk(chunk_id: int, tenant_id: str = Depends(tenant_param), context: int = Query(2, ge=0, le=10)):
+    """A chunk with its neighbours, for 'open source' in the UI."""
+    with SessionLocal() as db:
+        c = db.get(Chunk, chunk_id)
+        if c is None or c.tenant_id != tenant_id:
+            raise HTTPException(404, "chunk not found")
+        doc = db.get(Document, c.document_id)
+        rows = db.execute(select(Chunk).where(Chunk.document_id == c.document_id,
+                                              Chunk.ord.between(c.ord - context, c.ord + context)).order_by(Chunk.ord)).scalars().all()
+    return {"document": _doc_dict(doc) if doc else None, "chunk_id": chunk_id,
+            "chunks": [{"id": r.id, "ord": r.ord, "page": r.page, "section": r.section_title, "content_type": r.content_type,
+                        "text": r.text, "identifiers": r.identifiers} for r in rows]}
+
+
+_MEDIA_TYPES = {".pdf": "application/pdf", ".txt": "text/plain; charset=utf-8", ".md": "text/plain; charset=utf-8",
+                ".log": "text/plain; charset=utf-8", ".csv": "text/csv; charset=utf-8", ".png": "image/png",
+                ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+
+
+@app.get("/api/v1/documents/{document_id}/file")
+def document_file(document_id: str, request: Request, tenant_id: str = Depends(tenant_param),
+                  key: str = Query("", max_length=200)):
+    """The original file, so operators can check an answer word for word (PDFs open at #page=N).
+    Links cannot carry headers, so the API key may also be passed as ?key=."""
+    if settings.api_key and request.headers.get("x-api-key") != settings.api_key and key != settings.api_key:
+        raise HTTPException(status_code=401, detail="Missing or invalid API key")
+    with SessionLocal() as db:
+        doc = db.get(Document, document_id)
+    if doc is None or doc.tenant_id != tenant_id or not os.path.isfile(doc.path):
+        raise HTTPException(404, "document file not found")
+    ext = os.path.splitext(doc.path)[1].lower()
+    media = _MEDIA_TYPES.get(ext, "application/octet-stream")
+    disposition = "inline" if ext in _MEDIA_TYPES else "attachment"
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if ext != ".pdf":  # the browser PDF viewer does not run inside a sandboxed document
+        headers["Content-Security-Policy"] = "sandbox"
+    return FileResponse(doc.path, media_type=media, filename=doc.name, content_disposition_type=disposition,
+                        headers=headers)
+
+
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9._ ()-]+")
+
+
+@app.post("/api/v1/upload", dependencies=[Depends(require_key)])
+async def upload(file: UploadFile = File(...), tenant_id: str = Form("default", pattern=TENANT_RE),  # noqa: B008
+                 collection: str = Form("uploads", max_length=64)):
+    name = _SAFE_NAME.sub("_", os.path.basename(file.filename or "")).strip(" .")
+    if not name or not is_supported_file(name):
+        raise HTTPException(400, f"Unsupported file type. Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
+    coll = _SAFE_NAME.sub("_", collection).strip(" .") or "uploads"
+    target_dir = os.path.join(settings.media_path, "uploads", tenant_id, coll)
+    os.makedirs(target_dir, exist_ok=True)
+    target = os.path.join(target_dir, name)
+    tmp = target + f".part-{uuid.uuid4().hex[:8]}"
+    limit = settings.max_upload_mb * 1024 * 1024
+    size = 0
+    try:
+        with open(tmp, "wb") as out:
+            while chunk := await file.read(1 << 20):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(413, f"File larger than {settings.max_upload_mb} MB")
+                out.write(chunk)
+        os.replace(tmp, target)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    job = jobs.enqueue(tenant_id, target, force=True)
+    return {"message": f"Uploaded {name} ({size / 1048576:.1f} MB); indexing queued.", "job_id": job.id,
+            "collection": coll}
+
+
+@app.post("/api/v1/documents/{document_id}/reindex", dependencies=[Depends(require_key)])
+def reindex(document_id: str, tenant_id: str = Depends(tenant_param)):
+    with SessionLocal() as db:
+        doc = db.get(Document, document_id)
+    if doc is None or doc.tenant_id != tenant_id:
+        raise HTTPException(404, "document not found")
+    job = jobs.enqueue(tenant_id, doc.path, force=True)
+    return {"job_id": job.id}
+
+
+@app.delete("/api/v1/documents/{document_id}", dependencies=[Depends(require_key)])
+def delete_document(document_id: str, tenant_id: str = Depends(tenant_param)):
+    with SessionLocal() as db:
+        doc = db.get(Document, document_id)
+    if doc is None or doc.tenant_id != tenant_id:
+        raise HTTPException(404, "document not found")
+    uploads_root = os.path.realpath(os.path.join(settings.media_path, "uploads")) + os.sep
+    if not os.path.realpath(doc.path).startswith(uploads_root) and os.path.exists(doc.path):
+        raise HTTPException(409, "This file lives in a watched media folder; remove it there and it will be "
+                                 "dropped from the index automatically.")
+    from app.rag.ingestion import remove_document
+    remove_document(document_id)
+    if os.path.exists(doc.path):
+        os.remove(doc.path)
+    cache.bump_index_version(tenant_id)
+    return {"deleted": document_id}
+
+
+@app.post("/api/v1/ingest/scan", dependencies=[Depends(require_key)])
+def rescan():
+    from app.worker import scan_media
+    return scan_media()
+
+
+@app.get("/api/v1/ingest/jobs", dependencies=[Depends(require_key)])
+def list_jobs(tenant_id: str = Depends(tenant_param), limit: int = Query(50, ge=1, le=200)):
+    return [{k: getattr(j, k) for k in ("id", "source_name", "file_type", "status", "attempts", "chunks_total",
+                                         "error", "created_at", "completed_at", "document_id")}
+            for j in jobs.recent(tenant_id, limit)]
+
+
+@app.get("/api/v1/formats")
+def formats():
+    return {"supported_extensions": sorted(SUPPORTED_EXTENSIONS)}
+
+
+# ---------------------------------------------------------------------------
+# Conversations
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/conversations", dependencies=[Depends(require_key)])
+def list_conversations(tenant_id: str = Depends(tenant_param), limit: int = Query(50, ge=1, le=200)):
+    with SessionLocal() as db:
+        rows = db.execute(select(Conversation).where(Conversation.tenant_id == tenant_id)
+                          .order_by(Conversation.updated_at.desc()).limit(limit)).scalars().all()
+    return [{"id": c.id, "title": c.title, "updated_at": c.updated_at} for c in rows]
+
+
+@app.post("/api/v1/conversations", dependencies=[Depends(require_key)])
+def create_conversation(tenant_id: str = Depends(tenant_param)):
+    conv = Conversation(id=str(uuid.uuid4()), tenant_id=tenant_id)
+    with SessionLocal() as db:
+        db.add(conv)
+        db.commit()
+    return {"id": conv.id, "title": conv.title}
+
+
+@app.get("/api/v1/conversations/{conversation_id}", dependencies=[Depends(require_key)])
+def get_conversation(conversation_id: str, tenant_id: str = Depends(tenant_param)):
+    with SessionLocal() as db:
+        conv = db.get(Conversation, conversation_id)
+        if conv is None or conv.tenant_id != tenant_id:
+            raise HTTPException(404, "conversation not found")
+        msgs = db.execute(select(Message).where(Message.conversation_id == conversation_id).order_by(Message.id)).scalars().all()
+    return {"id": conv.id, "title": conv.title,
+            "messages": [{"role": m.role, "content": m.content, "payload": m.payload, "created_at": m.created_at} for m in msgs]}
+
+
+class Rename(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+
+
+@app.patch("/api/v1/conversations/{conversation_id}", dependencies=[Depends(require_key)])
+def rename_conversation(conversation_id: str, body: Rename, tenant_id: str = Depends(tenant_param)):
+    with SessionLocal() as db:
+        conv = db.get(Conversation, conversation_id)
+        if conv is None or conv.tenant_id != tenant_id:
+            raise HTTPException(404, "conversation not found")
+        conv.title = body.title
+        db.commit()
+    return {"id": conversation_id, "title": body.title}
+
+
+@app.delete("/api/v1/conversations/{conversation_id}", dependencies=[Depends(require_key)])
+def delete_conversation(conversation_id: str, tenant_id: str = Depends(tenant_param)):
+    with SessionLocal() as db:
+        db.execute(delete(Conversation).where(Conversation.id == conversation_id, Conversation.tenant_id == tenant_id))
+        db.commit()
+    return {"deleted": conversation_id}
+
+
+# ---------------------------------------------------------------------------
+# UI
+# ---------------------------------------------------------------------------
+@app.get("/", include_in_schema=False)
+def ui():
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"), headers={"Cache-Control": "no-cache"})
+
+
+@app.exception_handler(Exception)
+async def unhandled(_request: Request, exc: Exception):
+    log.exception("unhandled error")
+    return JSONResponse({"detail": "Internal error. See server logs."}, status_code=500)

@@ -1,85 +1,33 @@
-# =============================================================================
-# i-Tips RAG — .gitignore
-# =============================================================================
-
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-*.egg
 *.egg-info/
-dist/
-build/
-eggs/
-*.whl
-
-# Virtual Environments
-.env
-.venv
+.venv/
 venv/
-ENV/
-env/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# IDE
+# Local config / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data (never commit)
+media/
+data/
+backups/
+industrial-rag-images.tar*
+*.log
+
+# Benchmarks: generated corpora are reproducible (bench/corpus.py); results are kept
+bench/data/
+bench/data_*/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
 .idea/
 .vscode/
 *.swp
-*.swo
-*~
-.project
-.classpath
-
-# OS
-.DS_Store
-Thumbs.db
-Desktop.ini
-*.lnk
-
-# Docker
-*.log
-
-# Models (large binary files)
-*.bin
-*.onnx
-*.safetensors
-models/
-
-# Media files (user data — never commit)
-/media/
-external_media/
-
-# Scratch / test files
-scratch/
-tmp/
-temp/
-
-# Secrets — NEVER commit real credentials
-.envs/.production/*.local
-.envs/.local/*.local
-.envs/.production/.rag
-.envs/.production/.postgres
-.envs/.production/.redis
-.envs/.production/.neo4j
-!*.example
-
-# Backup files
-backups/
-.backups/
-*.backup
-*.dump
-
-# Database initialization (sensitive vars)
-scripts/db/init/*.local
-
-# Coverage & Testing
-.coverage
-htmlcov/
-.pytest_cache/
-.tox/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# Redis dump
-dump.rdb

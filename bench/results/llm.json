@@ -1,0 +1,95 @@
+{
+  "qwen2.5:3b | 3k chars evidence, ctx 4096": {
+    "median": {
+      "wall_s": 14.01,
+      "load_s": 0.02,
+      "prompt_tokens": 761.0,
+      "prompt_tok_s": 7908.15,
+      "time_to_first_token_s": 5.8,
+      "gen_tokens": 117.5,
+      "gen_tok_s": 14.3
+    },
+    "runs": [
+      {
+        "wall_s": 19.35,
+        "load_s": 0.02,
+        "prompt_tokens": 761,
+        "prompt_tok_s": 66.0,
+        "time_to_first_token_s": 11.54,
+        "gen_tokens": 101,
+        "gen_tok_s": 13.0
+      },
+      {
+        "wall_s": 8.66,
+        "load_s": 0.02,
+        "prompt_tokens": 761,
+        "prompt_tok_s": 15750.3,
+        "time_to_first_token_s": 0.07,
+        "gen_tokens": 134,
+        "gen_tok_s": 15.6
+      }
+    ]
+  },
+  "qwen2.5:3b | 6k chars evidence, ctx 4096": {
+    "median": {
+      "wall_s": 21.02,
+      "load_s": 0.02,
+      "prompt_tokens": 1471.0,
+      "prompt_tok_s": 19048.7,
+      "time_to_first_token_s": 13.64,
+      "gen_tokens": 130.0,
+      "gen_tok_s": 17.5
+    },
+    "runs": [
+      {
+        "wall_s": 32.73,
+        "load_s": 0.02,
+        "prompt_tokens": 1471,
+        "prompt_tok_s": 54.1,
+        "time_to_first_token_s": 27.22,
+        "gen_tokens": 92,
+        "gen_tok_s": 16.8
+      },
+      {
+        "wall_s": 9.31,
+        "load_s": 0.02,
+        "prompt_tokens": 1471,
+        "prompt_tok_s": 38043.3,
+        "time_to_first_token_s": 0.06,
+        "gen_tokens": 168,
+        "gen_tok_s": 18.2
+      }
+    ]
+  },
+  "qwen2.5:3b | old-style 30k chars context, ctx 16384": {
+    "median": {
+      "wall_s": 87.72,
+      "load_s": 0.02,
+      "prompt_tokens": 7044.0,
+      "prompt_tok_s": 22573.45,
+      "time_to_first_token_s": 75.74,
+      "gen_tokens": 164.0,
+      "gen_tok_s": 13.7
+    },
+    "runs": [
+      {
+        "wall_s": 164.31,
+        "load_s": 0.02,
+        "prompt_tokens": 7044,
+        "prompt_tok_s": 46.6,
+        "time_to_first_token_s": 151.3,
+        "gen_tokens": 178,
+        "gen_tok_s": 13.7
+      },
+      {
+        "wall_s": 11.12,
+        "load_s": 0.02,
+        "prompt_tokens": 7044,
+        "prompt_tok_s": 45100.3,
+        "time_to_first_token_s": 0.18,
+        "gen_tokens": 150,
+        "gen_tok_s": 13.7
+      }
+    ]
+  }
+}

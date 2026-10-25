@@ -1,0 +1,164 @@
+# =============================================================================
+# Industrial Maintenance RAG — complete offline stack
+#
+#   docker compose up --build        (first build needs internet; then fully offline)
+#   open http://localhost:1000
+#
+# Optional overlays:
+#   NVIDIA GPU for the LLM : docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+#   vLLM instead of Ollama : docker compose -f docker-compose.yml -f docker-compose.vllm.yml up --build
+#
+# All settings have safe defaults; override them in a `.env` file (see .env.example).
+# Only the web/API port is published. Databases stay on the internal network.
+# =============================================================================
+name: industrial-rag
+
+x-app-env: &app-env
+  RAG_ENV: production
+  RAG_LOG_LEVEL: ${RAG_LOG_LEVEL:-INFO}
+  POSTGRES_HOST: postgres
+  POSTGRES_DB: ${POSTGRES_DB:-rag}
+  POSTGRES_USER: ${POSTGRES_USER:-rag}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-rag}
+  REDIS_URL: redis://redis:6379/0
+  QDRANT_URL: http://qdrant:6333
+  OLLAMA_BASE_URL: http://ollama:11434
+  RAG_LLM_MODEL: ${RAG_LLM_MODEL:-qwen2.5:3b}
+  RAG_LLM_NUM_CTX: ${RAG_LLM_NUM_CTX:-4096}
+  RAG_LLM_MAX_TOKENS: ${RAG_LLM_MAX_TOKENS:-300}
+  RAG_API_KEY: ${RAG_API_KEY:-}
+  RAG_MODEL_THREADS: ${RAG_MODEL_THREADS:-0}
+  RAG_TOP_K: ${RAG_TOP_K:-6}
+  RAG_MIN_RELEVANCE: ${RAG_MIN_RELEVANCE:--4.0}
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "20m", max-file: "5" }
+
+services:
+  postgres:
+    image: postgres:16.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rag}
+      POSTGRES_USER: ${POSTGRES_USER:-rag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-rag}
+    command: >
+      postgres -c shared_buffers=256MB -c effective_cache_size=768MB -c work_mem=16MB
+      -c maintenance_work_mem=128MB -c max_connections=100 -c wal_compression=on
+      -c checkpoint_completion_target=0.9 -c random_page_cost=1.1
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits: { memory: "${PG_MEMORY:-1g}" }
+    logging: *logging
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.6
+    restart: unless-stopped
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"         # offline: never phone home
+      QDRANT__STORAGE__ON_DISK_PAYLOAD: "true"
+      QDRANT__SERVICE__MAX_REQUEST_SIZE_MB: "64"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits: { memory: "${QDRANT_MEMORY:-2g}" }
+    logging: *logging
+
+  redis:
+    image: redis:7.4.1-alpine
+    restart: unless-stopped
+    # Pure cache: bounded memory, no persistence needed (answers are re-derivable).
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits: { memory: 320m }
+    logging: *logging
+
+  ollama:
+    build:
+      context: .
+      dockerfile: docker/ollama.Dockerfile
+      args:
+        LLM_MODEL: ${RAG_LLM_MODEL:-qwen2.5:3b}
+    image: industrial-rag/ollama:${RAG_LLM_TAG:-qwen2.5-3b}
+    restart: unless-stopped
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_KEEP_ALIVE: "24h"
+      OLLAMA_MAX_QUEUE: "32"
+    deploy:
+      resources:
+        limits: { memory: "${OLLAMA_MEMORY:-4g}" }
+    logging: *logging
+
+  api:
+    build:
+      context: .
+      target: api
+    image: industrial-rag/api:latest
+    restart: unless-stopped
+    environment: *app-env
+    ports:
+      - "${RAG_PORT:-1000}:8000"
+    volumes:
+      - media:/media
+    depends_on:
+      postgres: { condition: service_healthy }
+      qdrant: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      ollama: { condition: service_started }   # optional: answers fall back to evidence mode without it
+    deploy:
+      resources:
+        limits: { memory: "${API_MEMORY:-1536m}" }
+    logging: *logging
+
+  worker:
+    build:
+      context: .
+      target: worker
+      args:
+        WITH_DOCLING: ${WITH_DOCLING:-false}
+    image: industrial-rag/worker:latest
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      RAG_AUTO_SCAN_SECONDS: ${RAG_AUTO_SCAN_SECONDS:-60}
+      RAG_INGEST_BATCH_SIZE: ${RAG_INGEST_BATCH_SIZE:-256}
+      RAG_MODEL_THREADS: ${WORKER_CPUS:-2}
+    volumes:
+      - media:/media
+    depends_on:
+      postgres: { condition: service_healthy }
+      qdrant: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    # Background indexing is capped and runs at low CPU priority (nice) so live
+    # questions and the LLM always get the CPU first. Raise WORKER_CPUS for bulk loads.
+    deploy:
+      resources:
+        limits: { memory: "${WORKER_MEMORY:-2g}", cpus: "${WORKER_CPUS:-2}" }
+    logging: *logging
+
+volumes:
+  pgdata:
+  qdrant_data:
+  media:

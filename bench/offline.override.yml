@@ -1,0 +1,8 @@
+# Offline verification: every service is attached to an internal network with no
+# route to the internet. Used by the production test cycle:
+#   docker compose -f docker-compose.yml -f bench/offline.override.yml up -d
+# (published ports do not work on internal networks; run checks from a container
+#  attached to the `default` network of the project.)
+networks:
+  default:
+    internal: true

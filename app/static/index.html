@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maintenance Assistant</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/app.css?v=7.1">
+  <script src="/static/vendor/marked.min.js?v=7.1" defer></script>
+  <script src="/static/vendor/purify.min.js?v=7.1" defer></script>
+  <script src="/static/app.js?v=7.1" defer></script>
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar" aria-label="Navigation">
+    <div class="brand">
+      <span class="brand-logo" data-icon="logo" aria-hidden="true"></span>
+      <div>
+        <div class="brand-name">Maintenance Assistant</div>
+        <div class="brand-sub">Paint shop · offline</div>
+      </div>
+    </div>
+
+    <button class="btn btn-primary btn-block" id="new-chat"><span data-icon="plus"></span> New question</button>
+
+    <nav class="nav" role="tablist" aria-label="Sections">
+      <button class="nav-btn active" data-view="ask" role="tab" aria-selected="true"><span data-icon="chat"></span>Ask</button>
+      <button class="nav-btn" data-view="docs" role="tab" aria-selected="false"><span data-icon="folder"></span>Documents</button>
+      <button class="nav-btn" data-view="system" role="tab" aria-selected="false"><span data-icon="pulse"></span>System</button>
+    </nav>
+
+    <div class="side-section">
+      <div class="side-label">History</div>
+      <input class="input input-sm" id="conv-filter" type="search" placeholder="Search history…" aria-label="Search history">
+    </div>
+    <ul class="conv-list" id="conv-list" aria-label="Conversations"></ul>
+
+    <div class="sidebar-foot">
+      <span class="status-pill" id="status-pill"><span class="dot"></span><span id="status-text">Checking…</span></span>
+      <button class="icon-btn" id="theme-toggle" title="Light / dark" aria-label="Toggle theme"><span data-icon="contrast"></span></button>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn mobile-only" id="menu-btn" aria-label="Open menu"><span data-icon="menu"></span></button>
+      <h1 class="topbar-title" id="view-title">Ask</h1>
+      <div class="topbar-meta" id="index-meta"></div>
+    </header>
+
+    <!-- Ask -------------------------------------------------------------- -->
+    <section class="view active" id="view-ask" aria-label="Ask">
+      <div class="messages" id="messages" aria-live="polite">
+        <div class="welcome" id="empty-state">
+          <div class="welcome-badge"><span data-icon="shield"></span> Answers quoted word for word from your documents</div>
+          <h2>What do you need to fix?</h2>
+          <p>Ask about an alarm, a fault, a procedure, a parameter or a past repair. Every answer shows the exact text, the document and the page.</p>
+          <div class="cat-grid" id="examples">
+            <div class="cat-card">
+              <div class="cat-head"><span class="cat-icon" data-icon="alarm"></span>Alarms &amp; faults</div>
+              <button class="ex">What is the remedy for a bell cup speed deviation alarm?</button>
+              <button class="ex">When is a communication timeout alarm raised?</button>
+            </div>
+            <div class="cat-card">
+              <div class="cat-head"><span class="cat-icon" data-icon="wrench"></span>Procedures</div>
+              <button class="ex">Procedure for replacing the bell cup</button>
+              <button class="ex">What torque do I use for the bell cup cover screws?</button>
+            </div>
+            <div class="cat-card">
+              <div class="cat-head"><span class="cat-icon" data-icon="gauge"></span>Parameters &amp; parts</div>
+              <button class="ex">Which O-ring kit part number is needed for the air turbine?</button>
+              <button class="ex">What is the default value and range of the turbine speed parameter?</button>
+            </div>
+            <div class="cat-card">
+              <div class="cat-head"><span class="cat-icon" data-icon="history"></span>Paint defects &amp; history</div>
+              <button class="ex">Paint is sagging on vertical panels — what are the causes?</button>
+              <button class="ex">Previous work orders for dump valve leakage</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <form class="composer" id="composer" autocomplete="off">
+        <div class="composer-tools">
+          <div class="segmented" role="radiogroup" aria-label="Answer type">
+            <button type="button" class="seg active" data-mode="evidence" role="radio" aria-checked="true" title="Exact text from the documents, instantly"><span data-icon="quote"></span>Exact answer</button>
+            <button type="button" class="seg" data-mode="auto" role="radio" aria-checked="false" title="Exact text plus a summary written by the local AI (slower on CPU)"><span data-icon="spark"></span>Exact + AI summary</button>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="filters-toggle" aria-expanded="false"><span data-icon="filter"></span>Filters<span class="filter-count" id="filter-count" hidden></span></button>
+        </div>
+        <div class="filters" id="filters" hidden>
+          <label class="field">Collection
+            <select id="filter-collection" class="select" aria-label="Collection filter"><option value="">All collections</option></select>
+          </label>
+          <label class="field">File type
+            <select id="filter-type" class="select" aria-label="File type filter"><option value="">All types</option></select>
+          </label>
+        </div>
+        <div class="composer-row">
+          <textarea id="query" class="textarea" rows="1" maxlength="2000" placeholder="Ask about an alarm code, fault, procedure, part or parameter…" aria-label="Question"></textarea>
+          <button class="btn btn-primary btn-send" id="send" type="submit" aria-label="Ask"><span data-icon="send"></span></button>
+          <button class="btn btn-stop" id="stop" type="button" hidden aria-label="Stop"><span data-icon="stop"></span></button>
+        </div>
+        <div class="hint">Enter to ask · Shift+Enter for a new line · Codes like SRVO-050 or P/N 1234-5678-90 are matched exactly</div>
+      </form>
+    </section>
+
+    <!-- Documents -------------------------------------------------------- -->
+    <section class="view" id="view-docs" aria-label="Documents">
+      <div class="panel">
+        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload documents">
+          <input type="file" id="file-input" multiple hidden>
+          <span class="drop-icon" data-icon="upload"></span>
+          <strong>Drop manuals here or click to upload</strong>
+          <span class="muted">PDF (incl. scanned) · DOCX · PPTX · HTML · TXT/MD · images · CSV/XLSX · ZIP</span>
+          <label class="field inline">Collection <input class="input input-sm" id="upload-collection" value="manuals" maxlength="64"></label>
+        </div>
+        <div class="upload-progress" id="upload-progress"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Indexed documents <span class="muted" id="doc-total"></span></h2>
+          <div class="panel-tools">
+            <input class="input input-sm" id="doc-search" type="search" placeholder="Filter by name…" aria-label="Filter documents">
+            <select class="select" id="doc-status" aria-label="Status filter">
+              <option value="">Any status</option><option>indexed</option><option>indexing</option><option>pending</option><option>failed</option>
+            </select>
+            <button class="btn btn-sm" id="rescan"><span data-icon="refresh"></span>Rescan folder</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table class="table" id="doc-table">
+          <thead><tr><th>Document</th><th>Collection</th><th>Status</th><th class="num">Pages</th><th class="num">Chunks</th><th>Indexed</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div class="pager"><button class="btn btn-sm" id="doc-prev">‹ Prev</button><span id="doc-page"></span><button class="btn btn-sm" id="doc-next">Next ›</button></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Recent indexing jobs</h2></div>
+        <div class="table-wrap"><table class="table" id="job-table">
+          <thead><tr><th>File</th><th>Status</th><th class="num">Chunks</th><th>Attempts</th><th>Started</th><th>Message</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- System ------------------------------------------------------------ -->
+    <section class="view" id="view-system" aria-label="System">
+      <div class="cards" id="service-cards"></div>
+      <div class="two-col">
+        <div class="panel"><div class="panel-head"><h2>Index</h2></div><div class="kv" id="index-kv"></div></div>
+        <div class="panel"><div class="panel-head"><h2>Configuration</h2></div><div class="kv" id="config-kv"></div></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog class="dialog" id="source-dialog" aria-labelledby="source-title">
+  <form method="dialog" class="dialog-head">
+    <div><h3 id="source-title">Source</h3><div class="muted small" id="source-sub"></div></div>
+    <div class="dialog-actions"><a class="btn btn-sm" id="source-open" target="_blank" rel="noopener"><span data-icon="external"></span>Open original</a>
+    <button class="icon-btn" aria-label="Close"><span data-icon="close"></span></button></div>
+  </form>
+  <div class="dialog-body" id="source-body"></div>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="assertive"></div>
+</body>
+</html>

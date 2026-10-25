@@ -1,0 +1,12 @@
+# NVIDIA GPU overlay: runs the LLM on the GPU (embeddings/reranking stay on CPU,
+# they are small enough). Requires the NVIDIA Container Toolkit on the host.
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

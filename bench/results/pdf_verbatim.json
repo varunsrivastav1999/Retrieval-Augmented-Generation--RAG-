@@ -1,0 +1,74 @@
+{
+  "metrics": {
+    "alarm_condition": {
+      "n": 24,
+      "exact_verbatim": 1.0,
+      "right_document": 1.0,
+      "in_evidence": 1.0
+    },
+    "alarm_remedy": {
+      "n": 72,
+      "exact_verbatim": 1.0,
+      "right_document": 1.0,
+      "in_evidence": 1.0
+    },
+    "docx_instruction": {
+      "n": 8,
+      "exact_verbatim": 1.0,
+      "right_document": 1.0,
+      "in_evidence": 1.0
+    },
+    "negative": {
+      "n": 4,
+      "refused": 0.75,
+      "flagged_closest_match": 0.25,
+      "answered_without_warning": 0.0
+    },
+    "parameter": {
+      "n": 24,
+      "exact_verbatim": 1.0,
+      "right_document": 1.0,
+      "in_evidence": 1.0
+    },
+    "part_number": {
+      "n": 24,
+      "exact_verbatim": 1.0,
+      "right_document": 1.0,
+      "in_evidence": 1.0
+    },
+    "procedure_full": {
+      "n": 24,
+      "exact_verbatim": 1.0,
+      "right_document": 0.875,
+      "in_evidence": 1.0,
+      "all_steps_in_order": 1.0
+    },
+    "procedure_step": {
+      "n": 24,
+      "exact_verbatim": 1.0,
+      "right_document": 1.0,
+      "in_evidence": 0.958
+    },
+    "scanned_ocr": {
+      "n": 6,
+      "exact_verbatim": 1.0,
+      "right_document": 1.0,
+      "in_evidence": 1.0
+    },
+    "ALL (answerable)": {
+      "n": 206,
+      "exact_verbatim": 1.0,
+      "right_document": 0.985,
+      "in_evidence": 0.995,
+      "false_refusal": 0.0,
+      "flagged_closest_match": 0.0
+    }
+  },
+  "latency_ms": {
+    "p50": 70.1,
+    "p95": 115.5,
+    "p99": 165.7,
+    "mean": 76.5
+  },
+  "failures": []
+}

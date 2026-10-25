@@ -1,0 +1,44 @@
+# vLLM overlay (GPU servers): OpenAI-compatible vLLM replaces Ollama for generation.
+#   docker compose -f docker-compose.yml -f docker-compose.vllm.yml up --build
+#
+# Offline note: vLLM loads weights from the `vllm_models` volume. Populate it once
+# while online (the first start downloads VLLM_MODEL), or copy a Hugging Face cache
+# into the volume; afterwards set VLLM_OFFLINE=1.
+# The Ollama service keeps running (unused) so the base file stays unchanged.
+services:
+  vllm:
+    image: vllm/vllm-openai:v0.6.6
+    restart: unless-stopped
+    command: >
+      --model ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      --served-model-name ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      --max-model-len 8192 --gpu-memory-utilization 0.85
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${VLLM_OFFLINE:-0}
+    volumes:
+      - vllm_models:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/models', timeout=4)"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  api:
+    environment:
+      RAG_LLM_BACKEND: openai
+      OPENAI_BASE_URL: http://vllm:8000/v1
+      RAG_LLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+    depends_on:
+      vllm: { condition: service_started }
+
+volumes:
+  vllm_models:

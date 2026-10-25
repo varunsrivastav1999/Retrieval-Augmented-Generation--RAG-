@@ -1,0 +1,237 @@
+{
+  "n_chunks": 3243,
+  "n_queries": 286,
+  "ingest_throughput": {
+    "BAAI/bge-small-en-v1.5": 90.2
+  },
+  "runs": {
+    "cand hybrid bge-small": {
+      "metrics": {
+        "alarm_code": {
+          "hit1": 1.0,
+          "hit5": 1.0,
+          "ans5": 0.267,
+          "mrr": 1.0
+        },
+        "alarm_context": {
+          "hit1": 0.1,
+          "hit5": 0.275,
+          "ans5": 0.0,
+          "mrr": 0.17
+        },
+        "history_wo": {
+          "hit1": 1.0,
+          "hit5": 1.0,
+          "ans5": 1.0,
+          "mrr": 1.0
+        },
+        "plc_address": {
+          "hit1": 0.267,
+          "hit5": 0.7,
+          "ans5": 0.667,
+          "mrr": 0.462
+        },
+        "pm_procedure": {
+          "hit1": 1.0,
+          "hit5": 1.0,
+          "ans5": 0.0,
+          "mrr": 1.0
+        },
+        "process_semantic": {
+          "hit1": 0.0,
+          "hit5": 0.0,
+          "ans5": 0.0,
+          "mrr": 0.0
+        },
+        "root_cause": {
+          "hit1": 1.0,
+          "hit5": 1.0,
+          "ans5": 1.0,
+          "mrr": 1.0
+        },
+        "tag_limit": {
+          "hit1": 1.0,
+          "hit5": 1.0,
+          "ans5": 1.0,
+          "mrr": 1.0
+        },
+        "ALL": {
+          "hit1": 0.755,
+          "hit5": 0.827,
+          "ans5": 0.597,
+          "mrr": 0.787
+        }
+      },
+      "latency_ms": {
+        "embed_ms": {
+          "p50": 13.9,
+          "p95": 81.9
+        },
+        "fuse_ms": {
+          "p50": 3.4,
+          "p95": 62.4
+        },
+        "rerank_ms": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "total_ms": {
+          "p50": 19.0,
+          "p95": 86.2
+        }
+      }
+    },
+    "cand hybrid bge-small + MiniLM-L6": {
+      "metrics": {
+        "alarm_code": {
+          "hit1": 0.983,
+          "hit5": 1.0,
+          "ans5": 0.017,
+          "mrr": 0.992
+        },
+        "alarm_context": {
+          "hit1": 0.0,
+          "hit5": 0.0,
+          "ans5": 0.0,
+          "mrr": 0.0
+        },
+        "history_wo": {
+          "hit1": 0.25,
+          "hit5": 0.8,
+          "ans5": 0.8,
+          "mrr": 0.427
+        },
+        "plc_address": {
+          "hit1": 0.0,
+          "hit5": 0.3,
+          "ans5": 0.3,
+          "mrr": 0.144
+        },
+        "pm_procedure": {
+          "hit1": 1.0,
+          "hit5": 1.0,
+          "ans5": 0.0,
+          "mrr": 1.0
+        },
+        "process_semantic": {
+          "hit1": 0.0,
+          "hit5": 0.0,
+          "ans5": 0.0,
+          "mrr": 0.0
+        },
+        "root_cause": {
+          "hit1": 1.0,
+          "hit5": 1.0,
+          "ans5": 1.0,
+          "mrr": 1.0
+        },
+        "tag_limit": {
+          "hit1": 0.16,
+          "hit5": 0.58,
+          "ans5": 0.58,
+          "mrr": 0.361
+        },
+        "ALL": {
+          "hit1": 0.45,
+          "hit5": 0.64,
+          "ans5": 0.399,
+          "mrr": 0.529
+        }
+      },
+      "latency_ms": {
+        "embed_ms": {
+          "p50": 6.8,
+          "p95": 11.3
+        },
+        "fuse_ms": {
+          "p50": 5.5,
+          "p95": 18.6
+        },
+        "rerank_ms": {
+          "p50": 1191.9,
+          "p95": 1254.1
+        },
+        "total_ms": {
+          "p50": 1205.4,
+          "p95": 1275.8
+        }
+      }
+    },
+    "cand hybrid bge-small + bge-reranker-base": {
+      "metrics": {
+        "alarm_code": {
+          "hit1": 1.0,
+          "hit5": 1.0,
+          "ans5": 0.6,
+          "mrr": 1.0
+        },
+        "alarm_context": {
+          "hit1": 0.025,
+          "hit5": 0.05,
+          "ans5": 0.05,
+          "mrr": 0.037
+        },
+        "history_wo": {
+          "hit1": 0.325,
+          "hit5": 0.6,
+          "ans5": 0.6,
+          "mrr": 0.449
+        },
+        "plc_address": {
+          "hit1": 0.033,
+          "hit5": 0.433,
+          "ans5": 0.433,
+          "mrr": 0.206
+        },
+        "pm_procedure": {
+          "hit1": 0.625,
+          "hit5": 1.0,
+          "ans5": 0.0,
+          "mrr": 0.812
+        },
+        "process_semantic": {
+          "hit1": 0.0,
+          "hit5": 0.0,
+          "ans5": 0.0,
+          "mrr": 0.0
+        },
+        "root_cause": {
+          "hit1": 1.0,
+          "hit5": 1.0,
+          "ans5": 1.0,
+          "mrr": 1.0
+        },
+        "tag_limit": {
+          "hit1": 0.12,
+          "hit5": 0.6,
+          "ans5": 0.6,
+          "mrr": 0.337
+        },
+        "ALL": {
+          "hit1": 0.453,
+          "hit5": 0.637,
+          "ans5": 0.522,
+          "mrr": 0.536
+        }
+      },
+      "latency_ms": {
+        "embed_ms": {
+          "p50": 6.9,
+          "p95": 10.0
+        },
+        "fuse_ms": {
+          "p50": 5.4,
+          "p95": 16.1
+        },
+        "rerank_ms": {
+          "p50": 7467.9,
+          "p95": 7921.6
+        },
+        "total_ms": {
+          "p50": 7482.4,
+          "p95": 7935.4
+        }
+      }
+    }
+  }
+}

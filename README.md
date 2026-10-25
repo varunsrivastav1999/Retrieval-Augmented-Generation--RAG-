@@ -1,226 +1,157 @@
 <div align="center">
-  <h1>Enterprise Level RAG — NVIDIA Blueprint Architecture</h1>
+  <h1>Industrial Maintenance RAG</h1>
   <p><strong>Developed &amp; Owned by: Varun Srivastav</strong></p>
-  <p><strong>Zero-Hallucination · Verbatim Extraction · Sub-10ms Extractive Mode · 100% Offline · Air-Gapped</strong></p>
-
-  <p>
-    <img src="https://img.shields.io/badge/Architecture-NVIDIA_RAG_Blueprint-76b900" alt="NVIDIA Blueprint" />
-    <img src="https://img.shields.io/badge/LLM-qwen2.5:14b_(8.5GB_VRAM)-FF6B35" alt="qwen2.5:14b" />
-    <img src="https://img.shields.io/badge/Embedding-BAAI/bge--large--en--v1.5_(1024d)-8A2BE2" alt="bge-large" />
-    <img src="https://img.shields.io/badge/Reranker-BAAI/bge--reranker--v2--m3-6A0DAD" alt="bge-reranker-v2-m3" />
-    <img src="https://img.shields.io/badge/Vision-llama3.2--vision:11b-orange" alt="Llama 3.2 Vision" />
-    <img src="https://img.shields.io/badge/VectorDB-Qdrant-FE4155?logo=qdrant" alt="Qdrant" />
-    <img src="https://img.shields.io/badge/MetaDB-PostgreSQL-336791?logo=postgresql" alt="PostgreSQL" />
-    <img src="https://img.shields.io/badge/GPU-16GB_VRAM_Optimized-brightgreen" alt="16GB VRAM" />
-    <img src="https://img.shields.io/badge/Security-100%25_Offline_Air--Gapped-success" alt="Air-Gapped" />
-  </p>
+  <p>Offline question answering over robot-painting maintenance knowledge — manuals, alarm lists, PLC/SCADA tag lists and maintenance history — with the evidence for every answer.</p>
 </div>
 
 ---
 
-A **production-grade, 17-layer RAG engine** built for industrial-scale document understanding. Aligned with the **NVIDIA RAG Blueprint**: agentic plan-and-execute retrieval, NeMo-style parent-child chunking, hybrid search, ColBERT reranking, MMR diversity, FLARE active retrieval, and a 5-layer zero-hallucination system — **100% offline**, no API keys.
+## What it does
 
-Optimized for a **16GB VRAM** GPU. Active VRAM: **~11GB** (LLM + embedding + reranker), ~5GB headroom.
+* **Word-for-word answers.** The answer is the exact text from the manual — the alarm row, the "Condition:" line, the torque step, the complete numbered procedure — with document, section and page, plus **Open page N** (the original PDF opens at that page) and **Copy**. Measured: 206/206 questions answered word for word on a PDF/DOCX test library.
+* **Optional AI summary.** A local LLM can add a short cited summary below the exact text; it is labelled as a summary and checked sentence by sentence, code by code and number by number against the sources.
+* **Exact codes win.** Alarm codes (`SRVO-050`, `PNT1-128`), tags (`OVN2_Z3_TEMP_PV`), PLC addresses (`DB120.DBD24`) and work orders are matched exactly, never "close enough". Unknown codes are reported as unknown instead of answered.
+* **Fast on CPU.** Documented evidence comes back in well under a second on a 4-core PC; the local LLM then streams a written answer.
+* **Says "not in the documents"** instead of guessing, or "closest match — please check" naming the words it could not find (e.g. a machine that is not in any manual).
+* **Fully offline.** No cloud APIs, no telemetry, no runtime downloads. All models are baked into the images.
+* **Built for large libraries:** int8-quantized vector index (~0.4 GB RAM per 1M passages), streamed and resumable indexing (a restart continues where it stopped).
 
----
-
-## ⚡ Model Stack — 16GB VRAM
-
-| Component | Model | VRAM | Notes |
-|-----------|-------|------|-------|
-| **LLM** | `qwen2.5:14b` Q4\_K\_M | **~8.5 GB** | Always loaded. Superior verbatim instruction following |
-| **Embedding** | `BAAI/bge-large-en-v1.5` | **~1.3 GB** | 1024-dim · +41% MTEB vs bge-small · Always loaded |
-| **Reranker** | `BAAI/bge-reranker-v2-m3` | **~1.2 GB** | SOTA cross-encoder · Always loaded |
-| **Vision** | `llama3.2-vision:11b` | **~8.0 GB** | On-demand · LLM unloads first (KEEP\_ALIVE=5m) |
-| **Subtotal (no vision)** | | **~11.0 GB** | 5 GB headroom |
-| **Peak with vision** | | **~10.5 GB** | LLM unloaded, bge-large + reranker + vision active |
-
-> **KV Cache**: `OLLAMA\_KV\_CACHE\_TYPE=q8\_0` saves ~40% KV VRAM → enables 64K context on 16GB.
-
-### VRAM Tiering Guide
-
-| GPU VRAM | LLM | Context | Embedding |
-|---|---|---|---|
-| 8 GB | `llama3.1:8b` | 32 768 | `bge-small-en-v1.5` (384d) |
-| 12 GB | `gemma3:12b` | 49 152 | `bge-large-en-v1.5` (1024d) |
-| **16 GB** | **`qwen2.5:14b`** | **65 536** | **`bge-large-en-v1.5` (1024d)** ← This |
-| 24 GB | `qwen2.5:32b-q4_K_M` | 131 072 | `bge-large-en-v1.5` (1024d) |
-| 48 GB | `llama3.3:70b-q4_K_M` | 131 072 | `bge-large-en-v1.5` (1024d) |
-
----
-
-## 🌟 Key Features
-
-- **👁️ Llama 3.2 Vision Extractor**: Detects multi-column catalogues, wiring diagrams, nested tables → structured Markdown.
-- **🧠 qwen2.5:14b LLM**: 14B params, 128K native context. Much better verbatim rule-following than 8B models — directly improves hallucination score.
-- **📚 NVIDIA Blueprint Generation**:
-  - **CRITICAL CONSTRAINT Prompt**: Zero-hallucination block placed first, visually prominent, before all other directives.
-  - **Verbatim Procedures**: Explicitly forbidden from rephrasing steps, part names, or software names.
-  - **Inline Citations**: Every claim attributed with `[Source: doc.pdf, Page 4, Section: X]`.
-  - **Chain-of-Thought (CoT)**: Multi-hop decomposition before emitting final answer.
-- **🛡️ Layer 10b — Low-Confidence Remediation**: Post-generation verifier detects `confidence < 0.4` → silent re-generate with copy-paste-only extractive prompt. Closes the dead-end verification gap.
-- **🔍 Zero-Token Exact Catalogue Lookup**: SQL `ILIKE` bypasses LLM + vector search for part/model numbers.
-- **📦 NeMo-Style Parent-Child Chunking**: Child chunks in Qdrant; LLM receives full parent block.
-- **v6.0 Complete Topic Retrieval**: Context optimizer seamlessly retrieves and orders entire document sections and chapters without truncating or exceeding LLM context windows.
-- **v6.0 Query Classifier**: 9-tier classification mapping (FACT, TOPIC, CHAPTER, PROCEDURE, TROUBLESHOOT, etc.) to distinct retrieval strategies.
-- **🏎️ Auto Mode**: Simple facts → verbatim text in 6–15ms; complex analysis → full LLM pipeline; broad topics → full section retrieval.
-- **🔒 100% Offline & Air-Gapped**: No API keys, no internet during inference.
-
----
-
-## 🏗️ Architecture
-
-```mermaid
-graph TD
-    User([User Query]) --> Auto{Auto Mode}
-    Auto -- Simple Fact --> Ext[Extractive Path 6-15ms]
-    Auto -- Complex Analysis --> QIntel[Layer 11: Query Intelligence]
-    Ext --> Verbatim[Verbatim Text + Citation]
-
-    QIntel --> Router[Layer 10: 4-Tier Semantic Router]
-    Router -- Agentic --> AgenticRAG[(Layer 5: Agentic Pipeline)]
-    AgenticRAG --> ContextAssemble[Layer 9: Context Assembly]
-    Router -- SQL --> ExtMeta[Extract Metadata Filters]
-    ExtMeta --> Hybrid[Layer 6: Hybrid Search]
-    Router -- Vector --> Hybrid
-
-    Hybrid --> Qdrant[(Qdrant Vector DB)]
-    Qdrant --> Reranker[Layer 7: bge-reranker-v2-m3 top-8]
-    Reranker --> MMR[Layer 8: MMR Diversity]
-    MMR --> ContextAssemble
-
-    ContextAssemble --> Grounding{Layer 12: Pre-Gen Grounding Guard}
-    Grounding -- Pass --> LLM[qwen2.5:14b PRECISE Mode]
-    Grounding -- Fail --> HALT[NOT_FOUND_RESPONSE]
-
-    LLM --> FLARE{FLARE Mid-Gen Monitor}
-    FLARE -- Low Confidence --> TargetedRet[Targeted Re-Retrieval]
-    TargetedRet --> LLM
-    FLARE -- All Grounded --> Verify[Layer 10: Answer Verification]
-
-    Verify -- score >= 0.4 --> Cache[Layer 14: Semantic Cache Redis]
-    Verify -- score < 0.4 --> Remediate[Layer 10b: Extractive Remediation]
-    Remediate --> Cache
-```
-
----
-
-## 🛡️ Zero-Hallucination System (5 Layers)
-
-| Layer | Name | What it does |
-|-------|------|-------------|
-| **9** | Pre-Gen Grounding Guard | Blocks generation if chunk semantic score < threshold |
-| **10** | Post-Gen Verifier | LLM-judged faithfulness score (0.0–1.0) |
-| **10b** | Low-Confidence Remediation | Re-generates with copy-paste-only extractive prompt if score < 0.4 |
-| **Prompt** | CRITICAL CONSTRAINT Block | Prominent box forbidding synonyms, paraphrasing, step reordering |
-| **15** | FLARE Active RAG | Mid-generation re-retrieval when ungrounded sentence detected |
-
----
-
-## 🛠️ Processing Layers
-
-### Phase 1: Ingestion
-1. **Universal Parser**: 30+ formats via IBM Docling.
-2. **Vision Extraction**: Dense tables → `llama3.2-vision:11b` → Markdown. LLM unloads first.
-3. **NeMo Parent-Child Chunking**: Small children indexed; large parent returned to LLM.
-4. **Embedding**: `bge-large-en-v1.5` 1024d → Qdrant with halfvec compression.
-5. **Agentic Plan-and-Execute**: LangGraph decomposes complex queries into parallel sub-tasks.
-
-### Phase 2: Retrieval & Intelligence
-6. **Hybrid Search**: ① SQL ILIKE (part numbers) → ② Dense Vector (Qdrant HNSW) → ③ BM25 Postgres → RRF fusion.
-7. **Reranking**: `bge-reranker-v2-m3` cross-encoder, top-8 chunks (raised from 5).
-8. **MMR**: Diversity pruning.
-9. **Citation-Aware Context Assembly**: `[Source: file, Page X, Section: Y]` prepended to each chunk text for LLM anchoring. Chunk compression limit 3500 chars (raised from 2500).
-10. **4-Tier Semantic Router & v6.0 Query Classifier**: Extractive / Vector / SQL / Agentic routing mapped to 9 distinct query types (Procedure, Troubleshoot, Topic, etc.).
-11. **Query Intelligence**: Multi-query expansion, Self-Query filter extraction, Industrial-aware HyDE.
-11b. **v6.0 Context Optimizer**: Semantic deduplication, section-based chunk clustering, and rigorous token budgeting for entire chapter retrievals.
-
-### Phase 3: Generation & Anti-Hallucination
-12. **Grounding Guard**: Pre-gen block.
-13. **Extractive Fast-Path**: <15ms verbatim extraction.
-14. **Semantic Query Cache**: Redis cosine-similarity.
-15. **FLARE Active RAG**: Mid-generation re-retrieval.
-16. **Answer Verification + Layer 10b**: Faithfulness scoring + extractive remediation.
-17. **Real-Time Streaming**: SSE token streaming.
-
----
-
-## ⚡ Performance
-
-| Mode | Latency | Use case |
-|------|---------|----------|
-| **Cache hit** | **<1ms** | Repeated queries |
-| **Exact lookup** | **<5ms** | Model / Catalogue numbers |
-| **Extractive auto** | **6–15ms** | Simple facts |
-| **Full LLM analysis** | **1–5s** | Analysis / multi-hop questions |
-
----
-
-## 💻 GPU Support
-
-| Hardware | Detection | Notes |
-|----------|-----------|-------|
-| **NVIDIA CUDA** (Linux) | Auto | Requires `nvidia-container-toolkit` in Docker |
-| **Apple MPS** (macOS native) | Auto | CPU fallback in Docker — run natively for MPS |
-| **CPU** | Default | Always works |
-
-Set `RAG\_MODEL\_DEVICE=cuda` or `mps` to override. Leave blank for auto-detection.
-
----
-
-## 🛠️ Production Stack
-
-| Service | Container | Resources | Purpose |
-|---------|-----------|-----------|---------|
-| **rag_api** | `itips_rag_prod` | 4 vCPU · 16GB RAM | FastAPI 17-layer microservice |
-| **qdrant** | `qdrant/qdrant` | 4 vCPU · 4GB RAM | Vector indexing |
-| **redis** | `redis:7-alpine` | 1 vCPU · 2GB RAM | Semantic cache |
-| **ollama** | `ollama/ollama` | GPU passthrough · 32GB RAM | `qwen2.5:14b` + `llama3.2-vision` |
-| **postgres** | `postgres:15-alpine` | 2 vCPU · 4GB RAM | Metadata + BM25 + exact match |
-| **models** | `itips_rag_prod` | One-shot init | Pulls Ollama models on first boot |
-
----
-
-## 🚀 Quick Start
+## Quick start
 
 ```bash
-# 1. Set secrets (one-time)
-REDIS_PW=P9aeyV+u0ekHXSriHoDVrLRR0kesYbkk1c06AlvKCyk=
-sed -i '' "s/mysecurepassword//g" .envs/.production/.redis
-sed -i '' "s/mysecurepassword//g" .envs/.production/.rag
-
-# 2. Set 16GB VRAM model stack in production env
-cat >> .envs/.production/.rag << EOF
-OLLAMA_MODEL=qwen2.5:14b
-OLLAMA_CONTEXT_LENGTH=65536
-RAG_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
-RAG_EMBEDDING_DIM=1024
-RAG_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
-EOF
-
-# 3. Build & start
-chmod +x start.sh && ./start.sh production up
-
-# 4. Re-ingest all documents (REQUIRED after embedding model upgrade)
-# bge-small (384d) → bge-large (1024d) requires full re-index
-curl -X POST http://localhost:1000/api/v1/ingest   -H "Content-Type: application/json"   -d '{"force_reindex": true}'
-
-# 5. Query
-curl -s -X POST http://localhost:1000/api/v1/query   -H "Content-Type: application/json"   -d '{"query": "What is DC sensor", "auto": true}'
+docker compose up --build
 ```
 
-> ⚠️ **Re-ingestion required** after upgrading from  (384d) to  (1024d). Different vector dimensions are incompatible.
+Open **http://localhost:1000**. The first build needs internet (Python packages, ~200 MB of retrieval models and the ~2 GB LLM). After that the stack runs with no network at all.
 
----
+Add documents by dragging them into the **Documents** page, or copy them into the `media` volume:
 
-## 🔐 Security
+```bash
+docker compose cp ./my-manuals worker:/media/manuals
+```
 
-- **100% air-gapped**: All models cached locally. Zero external API calls during inference.
-- **Non-root user** in Docker container.
-- **Secrets externalized** to .
+The worker indexes new, changed and deleted files automatically (every 60 s). The first folder level becomes the *collection* (e.g. `manuals`, `alarm_lists`, `work_orders`) that you can filter on.
 
----
+### Air-gapped sites
 
-## 📄 License
+On a machine with internet:
 
-MIT — See [LICENSE](./LICENSE) for details.
+```bash
+scripts/offline-bundle.sh        # Windows: scripts\offline-bundle.ps1
+```
+
+Copy the repository folder and `industrial-rag-images.tar.gz` to the site, then:
+
+```bash
+docker load -i industrial-rag-images.tar.gz
+docker compose up -d
+```
+
+### Linux, macOS, Windows
+
+The stack is plain Docker Compose with multi-architecture images (x86-64 and ARM64), so it runs the same on Linux, macOS (Docker Desktop) and Windows (Docker Desktop / WSL2). On Windows use the `.ps1` script variants. GPU acceleration for the LLM is optional (`docker-compose.gpu.yml`, NVIDIA on Linux/WSL2).
+
+## Architecture
+
+```
+            ┌──────────── browser UI (static, same origin) ────────────┐
+            │                                                           │
+   ┌────────▼─────────┐  hybrid search (1 request)   ┌──────────────────┐
+   │ api  (FastAPI)   │ ───────────────────────────▶ │ qdrant           │ dense int8 + BM25 sparse
+   │ ONNX: embed,     │ ◀─────────────────────────── │ vector index     │ + identifier payload index
+   │ BM25, rerank     │       chunk text, sections    └──────────────────┘
+   │ pipeline, verify │ ───────────────────────────▶ ┌──────────────────┐
+   │                  │                               │ postgres         │ documents, chunks, jobs,
+   │                  │ ── answer cache ──▶ redis     │                  │ conversations, audit log
+   │                  │ ── generation ────▶ ollama    └────────▲─────────┘
+   └──────────────────┘   (qwen2.5:3b, CPU)                    │
+                                                    ┌──────────┴───────┐
+   /media (volume) ───────── watched / uploads ───▶ │ worker           │ parse → chunk → embed → store
+                                                    │ pdfplumber, OCR  │ (separate process: never slows queries)
+                                                    └──────────────────┘
+```
+
+**Query path** (`app/rag/pipeline.py`) — no hidden LLM calls before the answer:
+
+1. Rule-based intent (alarm, troubleshoot, procedure, parameter, history, …) — < 1 ms.
+2. Exact answer cache (Redis), invalidated whenever the index changes.
+3. One batched Qdrant request: dense vector + BM25 sparse + exact-identifier filter.
+4. Weighted reciprocal-rank fusion → chunk text from Postgres → cross-encoder rerank, with a bonus for chunks containing the exact codes asked about.
+5. For procedures/alarms: the whole section is reassembled in order (complete steps, not fragments).
+6. "Not in documents" decision (unknown code, or nothing relevant enough).
+7. The **exact answer** (verbatim lines/rows/steps with page) is returned immediately; with "Exact + AI summary" the LLM then writes a cited summary from that evidence only.
+8. Deterministic verification: unsupported sentences, codes and numbers not present in the sources are flagged in the UI.
+
+**Relationships / root cause.** Every chunk stores the identifiers it mentions. Codes that are documented together (alarm "related alarms", work orders, tag lists) form a lightweight relationship graph shown as "Related" chips, with the number of historical records — without running a separate graph database.
+
+## Choosing the LLM
+
+The LLM only writes the final answer, so retrieval quality does not depend on it.
+
+| Hardware | `RAG_LLM_MODEL` | Notes |
+|---|---|---|
+| 4 cores / 8 GB, CPU only | `qwen2.5:3b` (default) | Evidence < 1 s, written answer streams after |
+| Very small PCs | `qwen2.5:1.5b` | Faster, less fluent |
+| 16 GB RAM or a GPU | `qwen2.5:7b` | Best written answers |
+| No LLM wanted | any + mode "Evidence only" | Sub-second, purely extractive |
+
+Change it in `.env`, then `docker compose build ollama && docker compose up -d`.
+
+## Configuration
+
+All settings have defaults; put overrides in `.env` (see `.env.example`). Most useful:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RAG_PORT` | `1000` | Web/API port on the host |
+| `RAG_API_KEY` | *(empty)* | Require `X-API-Key` on all API calls (UI asks once) |
+| `POSTGRES_PASSWORD` | `change-me-rag` | Database password — change it |
+| `RAG_LLM_MODEL` | `qwen2.5:3b` | Local LLM baked into the ollama image |
+| `RAG_TOP_K` | `6` | Evidence passages per answer |
+| `RAG_MIN_RELEVANCE` | `-4.0` | Reranker score below which the answer is "not in documents" |
+| `RAG_AUTO_SCAN_SECONDS` | `60` | Media folder scan interval (0 = off) |
+| `WITH_DOCLING` | `false` | Heavier layout-aware PDF parser in the worker image |
+| `API_MEMORY` … `OLLAMA_MEMORY` | see `.env.example` | Container memory limits |
+
+## API
+
+Interactive docs: `http://localhost:1000/api/docs`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/query` | Ask (`mode`: `auto`/`evidence`/`answer`, `stream`: SSE events `retrieval`, `token`, `done`) |
+| `POST` | `/api/v1/search` | Retrieval only (for integrations) |
+| `GET` | `/api/v1/related?identifier=SRVO-050` | Co-documented codes and history count |
+| `POST` | `/api/v1/upload` | Upload a file (multipart, optional `collection`) |
+| `GET` | `/api/v1/documents` · `/collections` · `/chunks/{id}` | Browse the index |
+| `POST`/`DELETE` | `/api/v1/documents/{id}/reindex` · `/api/v1/documents/{id}` | Manage documents |
+| `GET` | `/api/v1/ingest/jobs` · `POST /api/v1/ingest/scan` | Ingestion queue |
+| `GET/POST/PATCH/DELETE` | `/api/v1/conversations…` | Conversation history |
+| `GET` | `/api/v1/status` · `/health/ready` · `/health/live` · `/metrics` | Status, health, Prometheus metrics |
+
+## Supported files
+
+PDF (text + OCR for scanned pages), DOCX, PPTX, HTML, TXT/MD/LOG/JSON/XML/YAML, PLC/source code (`.st`, `.scl`, …), images (OCR), e-mail (`.eml`), subtitles, CSV/TSV/XLSX (streamed row by row — alarm logs, work-order exports, tag lists), ZIP/TAR (extracted and indexed). Legacy binary `.doc/.xls/.ppt` must be saved as the modern format first.
+
+## Operations
+
+* **Status:** the *System* page, `GET /api/v1/status`, or `/metrics` (Prometheus).
+* **Logs:** `docker compose logs -f api worker` (JSON lines).
+* **Backup / restore:** `scripts/backup.sh` → `backups/<timestamp>/`; `scripts/restore.sh backups/<timestamp>`.
+* **Failure behaviour:** Redis down → no caching; LLM down or busy for more than `RAG_LLM_QUEUE_WAIT_SECONDS` (20 s) → evidence-only answer with a notice; Postgres/Qdrant down → readiness fails and queries return 503 until they are back (connections recover automatically, no restart needed). An interrupted ingestion (worker/database restart) is re-queued and **resumes after the last committed batch** instead of starting over.
+* **Indexing never starves questions:** the worker runs at low CPU priority (`nice`) and is capped at `WORKER_CPUS` (default 2). For a one-off bulk load, start it with more: `WORKER_CPUS=8 docker compose up -d worker`.
+* **Changing the embedding model** requires re-indexing: set a new `RAG_QDRANT_COLLECTION` and the new model's build args, rebuild, then *Rescan*.
+
+## Benchmarks
+
+See [`bench/RESULTS.md`](bench/RESULTS.md) for the measured comparison between the previous implementation and this one (accuracy, word-for-word PDF answers, latency, ingestion speed, concurrency, offline and failure tests). Reproduce with:
+
+```bash
+python bench/corpus.py --out bench/data
+python bench/e2e_bench.py --url http://localhost:1000 --upload --llm-sample 10 --concurrency 1,4,8
+python bench/pdf_corpus.py --out bench/data_pdf && python bench/pdf_bench.py --upload   # word-for-word PDF test
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

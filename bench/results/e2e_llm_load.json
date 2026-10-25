@@ -1,0 +1,290 @@
+{
+  "url": "http://localhost:1000",
+  "status": {
+    "status": "ok",
+    "services": {
+      "api": {
+        "status": "ok"
+      },
+      "database": {
+        "status": "ok"
+      },
+      "vector_store": {
+        "status": "ok"
+      },
+      "cache": {
+        "status": "ok"
+      },
+      "llm": {
+        "status": "ok",
+        "model": "qwen2.5:3b",
+        "backend": "ollama"
+      },
+      "models": {
+        "embedding_model": "BAAI/bge-small-en-v1.5",
+        "embedding_dim": 384,
+        "sparse_model": "Qdrant/bm25",
+        "reranker_model": "Xenova/ms-marco-MiniLM-L-6-v2",
+        "full_rerank": false,
+        "loaded": true,
+        "error": null
+      }
+    },
+    "index": {
+      "documents": {
+        "indexed": 10
+      },
+      "chunks": 10124,
+      "vectors": 10124,
+      "queue": {}
+    },
+    "config": {
+      "llm_model": "qwen2.5:3b",
+      "top_k": 6,
+      "rerank": "top-3 relevance gate",
+      "auth": false
+    },
+    "elapsed_ms": 3.7
+  },
+  "llm": {
+    "n": 12,
+    "evidence_ms": {
+      "n": 12,
+      "p50": 72.6,
+      "p95": 89.1,
+      "p99": 121.4,
+      "mean": 73.6
+    },
+    "first_token_ms": {
+      "n": 12,
+      "p50": 18160.2,
+      "p95": 21237.9,
+      "p99": 23324.5,
+      "mean": 16575.8
+    },
+    "total_ms": {
+      "n": 12,
+      "p50": 27721.1,
+      "p95": 39868.6,
+      "p99": 46212.9,
+      "mean": 26677.8
+    },
+    "confidence": {
+      "medium": 1,
+      "high": 9,
+      "low": 2
+    },
+    "llm_used": 12,
+    "expect_in_answer_rate": 0.75,
+    "rows": [
+      {
+        "category": "alarm_code",
+        "evidence_ms": 61.80020800093189,
+        "first_token_ms": 19268.531458001235,
+        "total_ms": 27812.54195800284,
+        "mode_used": "llm",
+        "status": "answered",
+        "confidence": "medium",
+        "expect_in_answer": true,
+        "answer_in_answer": true
+      },
+      {
+        "category": "alarm_code",
+        "evidence_ms": 75.20137500250712,
+        "first_token_ms": 18264.14100000693,
+        "total_ms": 27721.125291995122,
+        "mode_used": "llm",
+        "status": "answered",
+        "confidence": "high",
+        "expect_in_answer": true,
+        "answer_in_answer": true
+      },
+      {
+        "category": "alarm_code",
+        "evidence_ms": 121.37795900343917,
+        "first_token_ms": 16471.64570899622,
+        "total_ms": 33334.80137499282,
+        "mode_used": "llm",
+        "status": "answered",
+        "confidence": "high",
+        "expect_in_answer": true,
+        "answer_in_answer": true
+      },
+      {
+        "category": "alarm_context",
+        "evidence_ms": 89.09837499959394,
+        "first_token_ms": 23324.47449999745,
+        "total_ms": 26972.649999996065,
+        "mode_used": "llm",
+        "status": "answered",
+        "confidence": "high",
+        "expect_in_answer": false,
+        "answer_in_answer": true
+      },
+      {
+        "category": "alarm_context",
+        "evidence_ms": 72.56845799565781,
+        "first_token_ms": 21237.872083002003,
+        "total_ms": 46212.87666600256,
+        "mode_used": "llm",
+        "status": "answered",
+        "confidence": "low",
+        "expect_in_answer": true,
+        "answer_in_answer": false
+      },
+      {
+        "category": "root_cause",
+        "evidence_ms": 86.20475001225714,
+        "first_token_ms": 18160.162333006156,
+        "total_ms": 39073.88266600901,
+        "mode_used": "llm",
+        "status": "answered",
+        "confidence": "high",
+        "expect_in_answer": true,
+        "answer_in_answer": true
+      },
+      {
+        "category": "root_cause",
+        "evidence_ms": 66.11833300848957,
+        "first_token_ms": 18611.68508300034,
+        "total_ms": 39868.561250012135,
+        "mode_used": "llm",
+        "status": "answered",
+        "confidence": "high",
+        "expect_in_answer": true,
+        "answer_in_answer": false
+      },
+      {
+        "category": "tag_limit",
+        "evidence_ms": 58.387249999213964,
+        "first_token_ms": 11037.401875000796,
+        "total_ms": 12623.732624997501,
+        "mode_used": "llm",
+        "status": "answered",
+        "confidence": "low",
+        "expect_in_answer": true,
+        "answer_in_answer": true
+      },
+      {
+        "category": "tag_limit",
+        "evidence_ms": 57.33170799794607,
+        "first_token_ms": 10577.282207988901,
+        "total_ms": 12321.410707998439,
+        "mode_used": "llm",
+        "status": "answered",
+        "confidence": "high",
+        "expect_in_answer": true,
+        "answer_in_answer": true
+      },
+      {
+        "category": "plc_address",
+        "evidence_ms": 60.73333400127012,
+        "first_token_ms": 10567.152834002627,
+        "total_ms": 11981.823542009806,
+        "mode_used": "llm",
+        "status": "answered",
+        "confidence": "high",
+        "expect_in_answer": true,
+        "answer_in_answer": true
+      },
+      {
+        "category": "pm_procedure",
+        "evidence_ms": 82.28254200366791,
+        "first_token_ms": 17311.15191700519,
+        "total_ms": 21506.340749998344,
+        "mode_used": "llm",
+        "status": "answered",
+        "confidence": "high",
+        "expect_in_answer": false,
+        "answer_in_answer": true
+      },
+      {
+        "category": "history_wo",
+        "evidence_ms": 51.75625000265427,
+        "first_token_ms": 14078.257750006742,
+        "total_ms": 20703.643665998243,
+        "mode_used": "llm",
+        "status": "answered",
+        "confidence": "high",
+        "expect_in_answer": false,
+        "answer_in_answer": true
+      }
+    ]
+  },
+  "concurrency": {
+    "1": {
+      "requests": 40,
+      "errors": 0,
+      "throughput_rps": 12.14,
+      "latency_ms": {
+        "n": 40,
+        "p50": 69.8,
+        "p95": 118.1,
+        "p99": 195.4,
+        "mean": 77.1
+      }
+    },
+    "4": {
+      "requests": 40,
+      "errors": 0,
+      "throughput_rps": 16.28,
+      "latency_ms": {
+        "n": 40,
+        "p50": 225.1,
+        "p95": 348.4,
+        "p99": 380.3,
+        "mean": 239.1
+      }
+    },
+    "8": {
+      "requests": 80,
+      "errors": 0,
+      "throughput_rps": 19.77,
+      "latency_ms": {
+        "n": 80,
+        "p50": 390.2,
+        "p95": 523.2,
+        "p99": 540.8,
+        "mean": 389.1
+      }
+    },
+    "16": {
+      "requests": 160,
+      "errors": 0,
+      "throughput_rps": 21.12,
+      "latency_ms": {
+        "n": 160,
+        "p50": 745.4,
+        "p95": 1005.7,
+        "p99": 1074.2,
+        "mean": 736.7
+      }
+    }
+  },
+  "docker_stats": {
+    "industrial-rag-worker-1": {
+      "mem": "317.7MiB / 2GiB",
+      "cpu": "0.00%"
+    },
+    "industrial-rag-api-1": {
+      "mem": "555.5MiB / 1.5GiB",
+      "cpu": "9.63%"
+    },
+    "industrial-rag-postgres-1": {
+      "mem": "62.09MiB / 1GiB",
+      "cpu": "0.96%"
+    },
+    "industrial-rag-redis-1": {
+      "mem": "9.957MiB / 320MiB",
+      "cpu": "0.71%"
+    },
+    "industrial-rag-qdrant-1": {
+      "mem": "254.4MiB / 2GiB",
+      "cpu": "0.85%"
+    },
+    "industrial-rag-ollama-1": {
+      "mem": "2.2GiB / 4GiB",
+      "cpu": "0.00%"
+    }
+  }
+}
