@@ -90,7 +90,7 @@ def evidence_markdown(sources: Sequence[Source], limit: int = 3) -> str:
 # ---------------------------------------------------------------------------
 # Exact (verbatim) answers — no LLM
 # ---------------------------------------------------------------------------
-_UNIT_START = re.compile(r"^\s*(\d{1,2}[.)]\s|[-•*]\s|[A-Z][A-Za-z /-]{1,30}:\s|WARNING|CAUTION|NOTE|DANGER)")
+_UNIT_START = re.compile(r"^\s*(\d{1,2}[.)]\s|[-•*]\s|[A-Z][A-Za-z /-]{1,30}:(\s|$)|WARNING|CAUTION|NOTE|DANGER)")
 _STEP = re.compile(r"^\s*\d{1,2}[.)]\s")
 # Query wording -> (label/content pattern, weight) of the lines that answer it.
 _CUES = [
@@ -160,6 +160,15 @@ def exact_answer(question: str, intent: Intent, sources: Sequence[Source], query
         return score
 
     pool = list(sources[:max_sources])
+    # "What does alarm X mean?" -> the whole documented entry for X, verbatim (description,
+    # causes, corrective steps, related alarms), when a section is dedicated to that code.
+    wants_overview = not cue_sets or re.search(r"\b(mean|meaning|explain|describe|tell me about|what is (the )?alarm)\b", question, re.I)
+    if ids and wants_overview and not wants_single and not step_no and not wants_procedure:
+        for src in pool[:2]:
+            # ignore the machine model / file-name codes ("P-720" in p-720_maintenance_manual.pdf)
+            own = {i for i in ids if i not in re.sub(r"[_.]+", " ", src.document).upper()}
+            if src.section and any(i in src.section.upper() for i in own) and len(src.text) <= 2000:
+                return [_quote(src, "\n".join(_units(src.text)))]
     if wants_procedure:
         best_src, best = None, -1.0
         for rank, src in enumerate(pool):
@@ -220,31 +229,28 @@ def exact_markdown(quotes: Sequence[dict]) -> str:
     return "\n\n".join(parts)
 
 
-SYSTEM_PROMPT = (
-    "You are a maintenance assistant for an industrial robot painting plant (robots, PLCs, SCADA, "
-    "sensors, painting process). Answer ONLY with information from the numbered SOURCES.\n"
-    "Rules:\n"
-    "1. After every factual sentence cite its source like [1] or [2][3].\n"
-    "2. Copy alarm codes, tag names, addresses, values, units and procedure steps exactly as written.\n"
-    "3. Never invent codes, part numbers, values or steps. Never use outside knowledge for facts.\n"
-    "4. If the SOURCES do not answer the question, reply with exactly: NOT_FOUND\n"
-    "5. If you add a suggestion that is not stated in the sources, put it under the heading "
-    "'Inferred (not documented)' and keep it short.\n"
-    "6. Be concise. Use short paragraphs, numbered steps or bullet lists."
+SUMMARY_SYSTEM_PROMPT = (
+    "You explain maintenance documentation to technicians in a robot painting plant. "
+    "Use ONLY the EXACT TEXT below. Answer the question in 2-4 short, plain sentences and cite [n]. "
+    "Keep codes, values, units, part numbers and step wording exactly as written. "
+    "Never add steps, values, causes or parts that are not in the text. "
+    "If the text does not answer the question, reply exactly: NOT_FOUND"
 )
 
 
-def build_prompt(question: str, intent: Intent, sources: Sequence[Source]) -> str:
-    blocks = []
-    for s in sources:
-        where = s.document + (f" | {s.section}" if s.section else "") + (f" | page {s.page}" if s.page else "")
-        blocks.append(f"[{s.n}] ({where})\n{s.text.strip()}")
-    return (
-        "SOURCES:\n" + "\n\n".join(blocks) +
-        f"\n\nQUESTION: {question}\n"
-        f"ANSWER GUIDANCE: {intent.guidance}\n"
-        "Answer with citations:"
-    )
+def build_summary_prompt(question: str, quotes: Sequence[dict], sources: Sequence[Source], max_chars: int = 1500) -> str:
+    """Small prompt (the exact quotes only) so a CPU-only LLM starts answering in a few seconds."""
+    blocks, used = [], 0
+    items = [(q["n"], q["document"], q.get("section"), q.get("page"), q["text"]) for q in quotes] or \
+            [(s.n, s.document, s.section, s.page, s.text) for s in sources[:2]]
+    for n, doc, section, page, text in items:
+        body = text.strip()[: max(200, max_chars - used)]
+        used += len(body)
+        where = doc + (f" | {section}" if section else "") + (f" | page {page}" if page else "")
+        blocks.append(f"[{n}] ({where})\n{body}")
+        if used >= max_chars:
+            break
+    return "EXACT TEXT:\n" + "\n\n".join(blocks) + f"\n\nQUESTION: {question}\nShort answer with citations:"
 
 
 # ---------------------------------------------------------------------------

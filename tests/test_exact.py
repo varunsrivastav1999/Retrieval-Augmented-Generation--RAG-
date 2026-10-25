@@ -63,3 +63,27 @@ def test_two_part_question_gets_a_quote_for_each_part():
     joined = "\n".join(x["text"] for x in out)
     assert "Remedy: Replace the air turbine" in joined and "Condition: No valid telegram" in joined
     assert len(out) == 2
+
+
+def test_what_does_alarm_mean_returns_the_whole_entry_verbatim():
+    entry = ("Severity: Stop.\nDescription: Fluid was detected in the leak sensor housing.\n\nPossible causes:\n- worn valve seal\n"
+             "Corrective action procedure:\n1. Isolate fluid supply.\n2. Replace the valve seal kit.\n"
+             "Related alarms: SRVO-822. Treat SRVO-822 as the probable root cause.")
+    s = src(entry, section="1. Alarm PNT1-748 - Dump valve leakage detected")
+    q = "What does alarm PNT1-748 mean?"
+    out = exact_answer(q, detect_intent(q), [s], ["PNT1-748"])
+    assert len(out) == 1
+    text = out[0]["text"]
+    for line in ["Description: Fluid was detected in the leak sensor housing.", "Possible causes:", "- worn valve seal",
+                 "1. Isolate fluid supply.", "Related alarms: SRVO-822. Treat SRVO-822 as the probable root cause."]:
+        assert line in text.splitlines()
+
+
+def test_machine_model_in_a_heading_does_not_trigger_whole_entry():
+    bulletin = src("Alarm CCV-103: Pressure regulator communication timeout.\nReplace the filter element every 250 operating hours.",
+                   section="SERVICE BULLETIN SB-P-500-01")
+    proc = Source(n=2, chunk_id=2, document_id="d", document="p-500_maintenance_manual.pdf", collection="c", page=5,
+                  section="3.1 Replacing the bell cup", content_type="text", text=PROC, snippet="", score=1.0, matched_ids=[])
+    q = "P-500: procedure for replacing the bell cup"
+    out = exact_answer(q, detect_intent(q), [bulletin, proc], ["P-500"])
+    assert "4. Tighten the M5 screws crosswise to 8 Nm." in out[0]["text"]

@@ -46,17 +46,18 @@ def _is_openai() -> bool:
     return s.llm_backend in {"openai", "vllm", "openai-compatible"} and bool(s.openai_base_url)
 
 
-def stream_chat(system: str, prompt: str, wait_seconds: Optional[float] = None) -> Iterator[str]:
+def stream_chat(system: str, prompt: str, wait_seconds: Optional[float] = None,
+                max_tokens: Optional[int] = None) -> Iterator[str]:
     """Yield answer tokens. Raises LLMBusy if the generation slot is not freed in time."""
     if not _sem.acquire(timeout=get_settings().llm_queue_wait if wait_seconds is None else wait_seconds):
         raise LLMBusy("LLM is busy with other requests")
     try:
-        yield from (_stream_openai(system, prompt) if _is_openai() else _stream_ollama(system, prompt))
+        yield from (_stream_openai(system, prompt, max_tokens) if _is_openai() else _stream_ollama(system, prompt, max_tokens))
     finally:
         _sem.release()
 
 
-def _stream_ollama(system: str, prompt: str) -> Iterator[str]:
+def _stream_ollama(system: str, prompt: str, max_tokens: Optional[int] = None) -> Iterator[str]:
     s = get_settings()
     body = {
         "model": s.llm_model,
@@ -64,7 +65,7 @@ def _stream_ollama(system: str, prompt: str) -> Iterator[str]:
         "keep_alive": s.llm_keep_alive,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
         "options": {"temperature": 0, "top_k": 1, "top_p": 1, "seed": s.llm_seed,
-                    "num_ctx": s.llm_num_ctx, "num_predict": s.llm_max_tokens},
+                    "num_ctx": s.llm_num_ctx, "num_predict": max_tokens or s.llm_max_tokens},
     }
     try:
         with _client().stream("POST", f"{s.ollama_url}/api/chat", json=body) as resp:
@@ -86,11 +87,11 @@ def _stream_ollama(system: str, prompt: str) -> Iterator[str]:
         raise LLMUnavailable(f"Ollama unreachable: {exc}") from exc
 
 
-def _stream_openai(system: str, prompt: str) -> Iterator[str]:
+def _stream_openai(system: str, prompt: str, max_tokens: Optional[int] = None) -> Iterator[str]:
     s = get_settings()
     body = {
         "model": s.llm_model, "stream": True, "temperature": 0, "seed": s.llm_seed,
-        "max_tokens": s.llm_max_tokens,
+        "max_tokens": max_tokens or s.llm_max_tokens,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
     }
     headers = {"Authorization": f"Bearer {s.openai_api_key}"}

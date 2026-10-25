@@ -23,7 +23,7 @@ from app.config import get_settings
 from app.db import Conversation, Message, QueryLog, SessionLocal, utcnow
 from app.metrics import CACHE_HITS, LLM_ERRORS, LOW_CONFIDENCE, QUERIES, QUERY_SECONDS, STAGE_SECONDS
 from app.rag import cache, llm, relations, search
-from app.rag.answer import (NOT_FOUND, NOT_FOUND_TEXT, SYSTEM_PROMPT, build_prompt, build_sources,
+from app.rag.answer import (NOT_FOUND, NOT_FOUND_TEXT, SUMMARY_SYSTEM_PROMPT, build_sources, build_summary_prompt,
                             evidence_markdown, exact_answer, exact_markdown, uncovered_terms, verify_answer)
 from app.rag.identifiers import extract_identifiers, normalize_identifier
 from app.rag.intent import INTENTS, detect_intent, is_greeting
@@ -156,9 +156,10 @@ def run(opts: QueryOptions) -> Iterator[dict]:
 
     shown = status in {"answered", "partial"}
     related = None
-    if retrieval.query_ids and intent.name in {"alarm", "troubleshoot", "history"} and shown:
+    if retrieval.query_ids and shown:
         try:
-            related = relations.related_identifiers(opts.tenant_id, retrieval.query_ids)
+            related = relations.related_identifiers(
+                opts.tenant_id, retrieval.query_ids, exclude_chunks=[h.id for h in hits[:1]])
         except Exception as exc:
             log.warning("relations lookup failed: %s", exc)
     evidence = evidence_markdown(sources) if shown else ""
@@ -192,10 +193,10 @@ def run(opts: QueryOptions) -> Iterator[dict]:
             tokens: List[str] = []
             passthrough = False
             try:
-                prompt = build_prompt(query, intent, sources)
+                prompt = build_summary_prompt(query, quotes, sources)
                 if missing_note:
                     prompt += f"\nNOTE: {missing_note} State this explicitly in the answer."
-                for tok in llm.stream_chat(SYSTEM_PROMPT, prompt):
+                for tok in llm.stream_chat(SUMMARY_SYSTEM_PROMPT, prompt, max_tokens=s.llm_summary_tokens):
                     tokens.append(tok)
                     if passthrough:
                         yield {"type": "token", "text": tok}
@@ -206,7 +207,11 @@ def run(opts: QueryOptions) -> Iterator[dict]:
                         passthrough = True
                         yield {"type": "token", "text": "".join(tokens)}
                 generated = "".join(tokens).strip()
-                if generated.startswith(NOT_FOUND):
+                if generated.startswith(NOT_FOUND) and quotes:
+                    # The exact document text stands; the AI simply had nothing to add.
+                    answer = exact or evidence
+                    notice = "The AI did not add a summary; the exact document text is shown."
+                elif generated.startswith(NOT_FOUND):
                     status, answer = "not_found", NOT_FOUND_TEXT
                 else:
                     answer, mode_used = generated, "llm"

@@ -9,7 +9,8 @@
 ## What it does
 
 * **Word-for-word answers.** The answer is the exact text from the manual — the alarm row, the "Condition:" line, the torque step, the complete numbered procedure — with document, section and page, plus **Open page N** (the original PDF opens at that page) and **Copy**. Measured: 206/206 questions answered word for word on a PDF/DOCX test library.
-* **Optional AI summary.** A local LLM can add a short cited summary below the exact text; it is labelled as a summary and checked sentence by sentence, code by code and number by number against the sources.
+* **Optional AI summary ("Exact + AI summary").** The exact text still appears in ~0.1 s; a local LLM then adds a 2–4 sentence cited summary written from the exact quotes only (first word ~2.5–3 s, done ~5–7 s on CPU). It is labelled as a summary and checked sentence by sentence, code by code and number by number; it can never replace the exact answer.
+* **Related.** Codes documented together with the one you asked about, with their documented names (e.g. a related alarm and its message, or the alarms recorded on a robot), plus "Also documented in" links to every other manual section, tag row or work order that mentions it.
 * **Exact codes win.** Alarm codes (`SRVO-050`, `PNT1-128`), tags (`OVN2_Z3_TEMP_PV`), PLC addresses (`DB120.DBD24`) and work orders are matched exactly, never "close enough". Unknown codes are reported as unknown instead of answered.
 * **Fast on CPU.** Documented evidence comes back in well under a second on a 4-core PC; the local LLM then streams a written answer.
 * **Says "not in the documents"** instead of guessing, or "closest match — please check" naming the words it could not find (e.g. a machine that is not in any manual).

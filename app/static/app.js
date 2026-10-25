@@ -33,6 +33,7 @@
     close: P("M6 6l12 12M18 6L6 18"), copy: '<rect x="8" y="8" width="12" height="12" rx="2"/>' + P("M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"),
     check: P("M5 12l5 5 9-10"), warn: P("M12 4l9 16H3z") + P("M12 10v4M12 17h.01"), chev: P("M9 6l6 6-6 6"),
     clock: '<circle cx="12" cy="12" r="9"/>' + P("M12 7v5l3 2"), doc: P("M7 3h7l5 5v13H7z") + P("M14 3v5h5"),
+    link: P("M10 14l4-4") + P("M8 16a4 4 0 0 1 0-5.7l2-2M16 8a4 4 0 0 1 0 5.7l-2 2"),
   };
   // Icons are constant markup defined above (never user data), so innerHTML is safe here.
   const icon = (name) => `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ""}</svg>`;
@@ -272,13 +273,41 @@
     view.related.textContent = "";
     let any = false;
     if (missing && missing.length) { view.related.append(el("span", "badge warn", `Not in any document: ${missing.join(", ")}`)); any = true; }
-    if (related && related.related && related.related.length) {
-      view.related.append(el("span", null, `Documented together with ${related.identifiers.join(", ")}${related.records ? ` (${fmtNum(related.records)} history records)` : ""}:`));
-      for (const r of related.related.slice(0, 10)) {
-        const c = el("button", "chip-id", r.identifier); c.type = "button"; c.title = `Mentioned together ${r.mentions}×`;
-        c.addEventListener("click", () => { $("#query").value = `What does ${r.identifier} mean and how is it related to ${related.identifiers[0]}?`; autoGrow(); $("#query").focus(); });
-        view.related.append(c);
+    const codes = (related && related.related) || [];
+    if (codes.length) {
+      const group = el("div", "rel-group");
+      group.append(withIcon(el("div", "rel-title"), "link", `Related codes — documented together with ${related.identifiers.join(", ")}`));
+      const chips = el("div", "rel-chips");
+      for (const r of codes.slice(0, 8)) {
+        const c = el("button", "rel-chip"); c.type = "button";
+        c.append(el("span", "rel-code", r.identifier));
+        if (r.label) c.append(el("span", "rel-label", r.label));
+        c.title = `Ask about ${r.identifier}`;
+        c.addEventListener("click", () => ask(`What does ${r.identifier} mean and what is the remedy?`));
+        chips.append(c);
       }
+      group.append(chips);
+      view.related.append(group);
+      any = true;
+    }
+    const locs = (related && related.locations) || [];
+    if (locs.length) {
+      const group = el("div", "rel-group");
+      group.append(withIcon(el("div", "rel-title"), "doc", `Also documented in${related.records ? ` · ${fmtNum(related.records)} history records` : ""}`));
+      const list = el("div", "rel-locs");
+      for (const l of locs) {
+        const row = el("div", "rel-loc");
+        const text = el("div", "rel-loc-text");
+        text.append(el("span", "rel-loc-doc", l.document), el("span", "rel-loc-where", whereText(l)), el("span", "rel-loc-snippet", l.snippet));
+        row.append(docBadge(l.document), text);
+        const btn = el("button", "btn btn-sm", "View"); btn.type = "button";
+        btn.addEventListener("click", () => openContext({ chunk_id: l.chunk_id, document: l.document, document_id: l.document_id,
+          page: l.page, section: l.section, content_type: l.content_type, matched_ids: related.identifiers }));
+        row.append(btn);
+        list.append(row);
+      }
+      group.append(list);
+      view.related.append(group);
       any = true;
     }
     view.related.hidden = !any;

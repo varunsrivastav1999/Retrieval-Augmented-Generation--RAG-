@@ -8,6 +8,7 @@
 | Full procedures returned with every step in documented order | 100% (24/24) |
 | Out-of-scope questions answered without a warning | 0% (refused or flagged "closest match") |
 | Exact-answer latency (CPU only) | p50 70 ms · p95 129 ms |
+| "Exact + AI summary": AI first word / finished (CPU, qwen2.5:3b) | median 2.5–3.2 s / 5.4–6.9 s (was 9.2 s / 17.5 s) |
 | Retrieval accuracy vs. old system (286-question maintenance set, answer in top 5) | **100%** vs 31.7% |
 | 16 concurrent users | p95 ~1 s, 0 errors |
 | Fully offline (no internet route at all) | all services OK, exact + AI answers work |
@@ -145,7 +146,11 @@ How it got there (each step measured): the first run with the original-style par
 outside table regions, reading tables cell by cell, stripping running headers/footers, OCR of scanned inserts
 and a line-level exact-answer extractor raised it to 60%, then 88%, 98% and 100%.
 
-AI summaries (qwen2.5:3b, CPU) on 8 sampled questions contained the exact sentence in only 2/8 (the model
+AI summary speed: the summary is now written from the exact quotes only (≤1,500 chars, ≤160 tokens):
+median time to first word 9.2 s → 2.5–3.2 s, finished 17.5 s → 5.4–6.9 s on 5 sampled questions (CPU only).
+If the AI replies "not found" while an exact answer exists, the exact answer is kept.
+
+AI summaries (qwen2.5:3b, CPU, earlier long-prompt version) on 8 sampled questions contained the exact sentence in only 2/8 (the model
 paraphrases); this is why the UI always shows the exact document text first and labels the AI text as a
 summary, with sentence/code/number verification.
 

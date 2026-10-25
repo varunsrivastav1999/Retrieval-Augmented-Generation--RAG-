@@ -188,9 +188,20 @@ svg.i { width: 1.05em; height: 1.05em; flex: none; vertical-align: -0.16em; }
 .cite { display: inline-block; min-width: 1.5em; padding: 0 5px; margin: 0 1px; border-radius: 6px; background: var(--brand-soft); color: var(--brand); font-size: .75rem; font-weight: 700; cursor: pointer; border: 0; line-height: 1.6; }
 .verify { display: grid; gap: 4px; font-size: .84rem; }
 .verify ul { margin: 2px 0 0; padding-left: 18px; color: var(--muted); }
-.related { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: .84rem; color: var(--muted); }
-.chip-id { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 3px 10px; cursor: pointer; font-family: var(--mono); font-size: .78rem; }
-.chip-id:hover { border-color: var(--brand); color: var(--brand); }
+.related { display: grid; gap: 12px; font-size: .86rem; }
+.rel-group { display: grid; gap: 7px; }
+.rel-title { display: flex; align-items: center; gap: 7px; font-size: .74rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.rel-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.rel-chip { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border); background: var(--surface); border-radius: 10px; padding: 6px 10px; cursor: pointer; text-align: left; max-width: 100%; }
+.rel-chip:hover { border-color: var(--brand); background: var(--brand-soft); }
+.rel-code { font-family: var(--mono); font-weight: 700; font-size: .8rem; color: var(--brand); white-space: nowrap; }
+.rel-label { color: var(--text); font-size: .84rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.rel-locs { display: grid; gap: 6px; }
+.rel-loc { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 7px 10px; background: var(--surface); }
+.rel-loc-text { display: grid; min-width: 0; flex: 1; }
+.rel-loc-doc { font-weight: 600; font-size: .85rem; overflow-wrap: anywhere; }
+.rel-loc-where { color: var(--muted); font-size: .78rem; }
+.rel-loc-snippet { color: var(--muted); font-size: .8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .typing::after { content: "▍"; animation: blink 1s steps(2) infinite; color: var(--brand); }
 @keyframes blink { 50% { opacity: 0; } }
 .skeleton { height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2)); background-size: 200% 100%; animation: shimmer 1.2s infinite; }

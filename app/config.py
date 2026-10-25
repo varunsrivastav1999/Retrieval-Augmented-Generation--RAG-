@@ -116,6 +116,8 @@ class Settings:
     llm_model: str = field(default_factory=lambda: _str("RAG_LLM_MODEL", "qwen2.5:3b", "OLLAMA_MODEL"))
     llm_num_ctx: int = field(default_factory=lambda: _int("RAG_LLM_NUM_CTX", 4096))
     llm_max_tokens: int = field(default_factory=lambda: _int("RAG_LLM_MAX_TOKENS", 300))
+    # The AI summary works from the exact quotes only and stays short, so it starts in a few seconds on CPU.
+    llm_summary_tokens: int = field(default_factory=lambda: _int("RAG_LLM_SUMMARY_TOKENS", 160))
     llm_timeout: int = field(default_factory=lambda: _int("RAG_LLM_TIMEOUT", 180))
     llm_keep_alive: str = field(default_factory=lambda: _str("RAG_LLM_KEEP_ALIVE", "24h"))
     llm_concurrency: int = field(default_factory=lambda: _int("RAG_LLM_CONCURRENCY", 1))
